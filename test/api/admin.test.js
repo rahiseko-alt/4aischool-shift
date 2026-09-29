@@ -260,6 +260,15 @@ test('印刷: 学生の名前などに含まれる < > & はエスケープさ�
   assert.ok(r.html.includes('&lt;script&gt;'));
 });
 
+test('印刷: & と " もエスケープされる', () => {
+  const w = world();
+  ok(w.api('api_adminUpsertStudent', w.admin, { ...require('../helpers/api').studentRecord(), name: 'A&B "Q"' }));
+  const r = ok(w.api('api_adminPrintHtml', w.admin, { studentIds: ['251001'], yearMonths: ['2026-10'] }));
+  assert.equal(r.html.includes('A&B'), false);
+  assert.equal(r.html.includes('"Q"'), false);
+  assert.ok(r.html.includes('A&amp;B'));
+});
+
 // ---- 保存期限 ----
 
 test('保存期限超過データの削除: 24か月より前の月だけを消し、件数を返して監査ログに残す', () => {

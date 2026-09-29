@@ -8,6 +8,28 @@
 
 ---
 
+## 2026-09-29 実装役向けの指示書とテスト210件を作成
+
+**決めたこと**
+
+- 実装役（Gemini）には `GEMINI.md` → `docs/impl/INSTRUCTIONS.md` の順に読ませる。仕様の写しは `docs/impl/SPEC.md`
+- テスト210件（計算93件・窓口・3言語辞書・暴走止め）を Claude が作成。手元の見本実装で全件通過、誤りを仕込む確認も約40通り全部検出（見本は置き場所に入れていない）
+- テストや指示書の書き換えは `test/LOCKED.sha256` の指紋照合（`npm run check-locked` と自動チェック）で検出する
+- 独立の点検で見つかった段階順の矛盾・実績の受付順・改ざん防止の穴などは修正済み
+
+**次にやること**
+
+- 下書きの変更 rahiseko-alt/4aischool-shift#1 を main に取り込む（利用者の判断）
+- 取り込み後、Gemini に最初の指示文を貼って作業させる（文面は会話で渡した。要点: main から gemini/impl を作る → GEMINI.md と INSTRUCTIONS.md を読む → 第0章を復唱 → 段階1〜7）
+- Gemini の成果を Claude が点検する（`npm test`・`npm run check-locked`・`git diff` で test/ と docs/ が変わっていないか）
+- `CONTEXT.md` や `docs/impl/` を今後直したら、`test/LOCKED.sha256` と `.github/workflows/test.yml` の指紋を作り直す
+
+**未解決の問題**
+
+- パスワードの10,000回反復が GAS で何秒かかるか未計測
+- ネパール語・ベトナム語の訳を確認する話者が未定
+- 画面は自動テストが無く、実機確認に頼る
+
 ## 2026-09-29 実装仕様を課題票#2として登録
 
 **決めたこと**
@@ -99,27 +121,4 @@
 
 - 今回も指示書を足しただけで、実地確認はしていない。`docs/adr/`が今も0件なので、
   「食い違いを検知して伝える」動作は一度も実際には動いていない
-
-## 2026-09-21 ADRが検査されない欠陥を修正
-
-**決めたこと**
-
-- `/code-review` は `docs/adr/` を一切見ておらず、Standards担当のサブエージェントは
-  事前に貼り付けた文書しか見えない隔離構成だった。ADRを書いても検査経路が無く、
-  意味の無い記録になっていた
-- `/code-review` 本体（vendored、編集禁止）は直さず、`docs/agents/domain.md` に橋渡し手順を追記し、
-  `docs/agents/flow-map.md`（毎回自動読込）にも同じ趣旨のルールを追記して塞いだ
-
-**次にやること**
-
-- `/grill-with-docs` で「何を作るか」を決める（前回から持ち越し。まだ未着手）
-- 決まったら `/to-spec` → `/to-tickets` → `/implement` と進む
-- `README.md` の冒頭をこのプロジェクトの説明に書き換える
-- 実際に `docs/adr/` にADRができた後、一度 `/code-review` を回して、
-  今回の修正どおりADRがStandards軸に渡っているか確認する（まだ未検証）
-
-**未解決の問題**
-
-- 今回の修正は指示書（domain.md / flow-map.md）を足しただけで、
-  `/code-review` を実際に走らせて動作確認はしていない
 

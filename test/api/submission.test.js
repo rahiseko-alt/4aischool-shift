@@ -133,6 +133,23 @@ test('ロックが取れないときは BUSY を返し、何も書き込まな�
   assert.equal(ok(w.api('api_getMonth', w.st.token, YM)).status, '未入力');
 });
 
+test('確定・実績の保存でも、ロックが取れなければ BUSY', () => {
+  const w = world();
+  w.env.setLockBusy(true);
+  assert.equal(w.api('api_confirm', w.st.token, YM, {}, 0).error, 'BUSY');
+  w.env.setLockBusy(false);
+  ok(w.api('api_confirm', w.st.token, YM, {}, 0));
+  w.at('2026-11-02 10:00');
+  const m = ok(w.api('api_getMonth', w.st.token, YM));
+  w.env.setLockBusy(true);
+  assert.equal(w.api('api_saveActual', w.st.token, YM, {}, m.version).error, 'BUSY');
+  w.env.setLockBusy(false);
+  const saved = ok(w.api('api_saveActual', w.st.token, YM, {}, m.version));
+  w.env.setLockBusy(true);
+  assert.equal(w.api('api_confirmActual', w.st.token, YM, saved.version).error, 'BUSY');
+  w.env.setLockBusy(false);
+});
+
 test('保存が終わったらロックを解放している', () => {
   const w = world();
   ok(w.api('api_saveDraft', w.st.token, YM, { '1': [sh(w.wp, '09:00', '12:00')] }, 0));

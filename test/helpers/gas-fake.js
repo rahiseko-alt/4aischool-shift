@@ -127,6 +127,7 @@ function createGasEnv(options) {
     lockBusy: false,
     lockHeld: false,
     nextId: 1,
+    hmacCalls: 0,
   };
 
   const RealDate = Date;
@@ -182,6 +183,7 @@ function createGasEnv(options) {
     Charset: { UTF_8: 'UTF_8' },
     getUuid() { return crypto.randomUUID(); },
     computeHmacSha256Signature(value, key) {
+      state.hmacCalls++;
       return toSignedBytes(crypto.createHmac('sha256', toBuffer(key)).update(toBuffer(value)).digest());
     },
     computeDigest(algorithm, value) {
@@ -215,6 +217,7 @@ function createGasEnv(options) {
     },
     setLockBusy(b) { state.lockBusy = !!b; },
     get lockHeld() { return state.lockHeld; },
+    get hmacCalls() { return state.hmacCalls; },
     logs: state.logs,
     properties: state.properties,
     spreadsheets: state.spreadsheets,

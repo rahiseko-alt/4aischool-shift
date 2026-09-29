@@ -181,3 +181,48 @@ test('窓口は例外を投げず、想定外の引数には BAD_REQUEST を返�
   assert.equal(ctx.api('api_getMonth', st.token, '2026-13').error, 'BAD_REQUEST');
   assert.equal(ctx.api('api_login', undefined, undefined).ok, false);
 });
+
+test('パスワードは秘密鍵（PASSWORD_PEPPER）を使ってハッシュしている: 秘密鍵が変わると正しいパスワードでも入れない', () => {
+  const ctx = boot();
+  const st = addStudent(ctx);
+  const pepper = ctx.env.properties.get('PASSWORD_PEPPER');
+  ctx.env.properties.set('PASSWORD_PEPPER', 'x'.repeat(64));
+  assert.equal(ctx.api('api_login', st.loginId, st.password).error, 'LOGIN_FAILED');
+  ctx.env.properties.set('PASSWORD_PEPPER', pepper);
+  ok(ctx.api('api_login', st.loginId, st.password));
+});
+
+test('パスワードの照合では HMAC-SHA256 を10,000回以上反復する', () => {
+  const ctx = boot();
+  const st = addStudent(ctx);
+  const before = ctx.env.hmacCalls;
+  ok(ctx.api('api_login', st.loginId, st.password));
+  assert.ok(ctx.env.hmacCalls - before >= 10000, 'ログイン1回の HMAC 回数: ' + (ctx.env.hmacCalls - before));
+});
+
+test('パスワード・トークンを base64・16進・SHA-256 1回にしただけの値も、スプレッドシートに残らない', () => {
+  const crypto = require('node:crypto');
+  const ctx = boot();
+  const st = addStudent(ctx);
+  const cells = allCells(ctx).join('\n');
+  for (const secret of [st.password, st.token]) {
+    const b = Buffer.from(secret, 'utf8');
+    const sha = crypto.createHash('sha256').update(b).digest();
+    const variants = [b.toString('base64'), b.toString('hex')];
+    if (secret === st.password) {
+      // トークンの SHA-256 は保存してよい（指示書 6.3）。パスワードの SHA-256 1回は不可。
+      variants.push(sha.toString('hex'), sha.toString('base64'), sha.toString('base64').replace(/\+/g, '-').replace(/\//g, '_'));
+    }
+    for (const v of variants) assert.equal(cells.includes(v), false, '弱い形で保存されている: ' + v.slice(0, 6) + '…');
+  }
+});
+
+test('ロック中に試した回数はロックを延ばさない（ロックから15分と1分後には入れる）', () => {
+  const ctx = boot();
+  const st = addStudent(ctx);
+  for (let i = 0; i < 5; i++) ctx.api('api_login', st.loginId, 'wrong-password');
+  ctx.env.clock.advanceMinutes(10);
+  for (let i = 0; i < 5; i++) ctx.api('api_login', st.loginId, 'wrong-password');
+  ctx.env.clock.advanceMinutes(6);
+  ok(ctx.api('api_login', st.loginId, st.password));
+});
