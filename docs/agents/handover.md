@@ -19,8 +19,8 @@
 
 **次にやること**
 
-- 下書きの変更 rahiseko-alt/4aischool-shift#1 を main に取り込む（利用者の判断）
-- 取り込み後、Gemini に最初の指示文を貼って作業させる（文面は会話で渡した。要点: main から gemini/impl を作る → GEMINI.md と INSTRUCTIONS.md を読む → 第0章を復唱 → 段階1〜7）
+- （済）rahiseko-alt/4aischool-shift#1 は 2026-09-29 に main へ取り込んだ
+- Gemini に最初の指示文を貼って作業させる（文面は会話で渡した。要点: main から gemini/impl を作る → GEMINI.md と INSTRUCTIONS.md を読む → 第0章を復唱 → 段階1〜7）
 - Gemini の成果を Claude が点検する（`npm test`・`npm run check-locked`・`git diff` で test/ と docs/ が変わっていないか）
 - `CONTEXT.md` や `docs/impl/` を今後直したら、`test/LOCKED.sha256` と `.github/workflows/test.yml` の指紋を作り直す
 
