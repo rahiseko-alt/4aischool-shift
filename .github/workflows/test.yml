@@ -1,0 +1,23 @@
+name: test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: 変更禁止のファイルが渡した時のままか
+        run: sh scripts/check-locked.sh
+      - name: テスト（src/ ができてから実行する）
+        run: |
+          if [ -d src ]; then
+            npm test
+          else
+            echo "src/ がまだ無いため、テストは実行しない（実装前）"
+          fi

@@ -1,0 +1,10 @@
+{
+  "name": "4aischool-shift",
+  "private": true,
+  "description": "外国人留学生アルバイト予定・実績申告と法令チェック（Google Apps Script）",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "test": "node --test \"test/**/*.test.js\"",
+    "check-locked": "sh scripts/check-locked.sh"
+  }
+}
