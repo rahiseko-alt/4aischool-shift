@@ -1,0 +1,431 @@
+# 実装指示書（実装役向け）
+
+この文書は、外国人留学生アルバイト申告アプリを実装する担当者（AI を含む）への指示である。
+**この文書が最優先**。次に `docs/impl/SPEC.md`（実装仕様）、次に `docs/source/decisions-2026-09-29.md`、最後に `docs/source/spec-v1.1.md`（原文）。
+`docs/source/mockup-v1.webp`（画面見本）は色と配置の参考にだけ使う。**見本の文字・数字・項目・曜日は信用しない**（第9章）。
+
+---
+
+## 第0章 絶対に守ること（違反したら作業は不合格）
+
+1. **テストを変えない。** `test/` の中の既存のファイル（`test/helpers/` を含む）を、変更・削除・名前変更・移動しない。`test.skip`・`test.todo`・`only` を足さない。テストを通すために期待値を書き換えない。
+   - テストを増やしたいときは `test/extra/` に新しいファイルを作る。既存のテストと矛盾するテストは書かない。
+2. **この文書と `docs/` を変えない。** 例外は第11章の `docs/impl/REPORT.md` と `docs/impl/BLOCKERS.md` だけ。
+3. **触ってよいのは `src/`・`test/extra/`・`package.json`（scripts の追加だけ）・`docs/impl/REPORT.md`・`docs/impl/BLOCKERS.md` だけ。** それ以外のファイル（`.github/`・`.claude/`・`AGENTS.md`・`CONTEXT.md`・`README.md`・`GEMINI.md`・`scripts/` など）は開いて読んでよいが、書き換えない。
+4. **npm のパッケージを入れない。** `npm install` を実行しない。`node_modules/` と `package-lock.json` を作らない。使うのは Node.js 22 の標準機能だけ。
+5. **頼まれていない機能を足さない。** 仕様に無い画面・ボタン・設定・関数・ファイルを作らない。「ついでに良くする」をしない。
+6. **第10章の順序を守る。** 前の段階のテストが全部通るまで、次の段階のコードを書かない。
+7. **詰まったら止まる。** 同じテストが3回直しても通らないときは、テストを疑って書き換えるのではなく、`docs/impl/BLOCKERS.md` に書いて作業を止める（第11章）。
+8. **「全部通った」と書く前に、必ず `npm test` と `npm run check-locked` を実際に実行し、その出力（`# pass`・`# fail` の行と `OK` の行）をそのまま `docs/impl/REPORT.md` に貼る。** 実行していない結果を書かない。
+
+---
+
+## 第1章 作るもの
+
+Google Apps Script（GAS）の Web アプリ。Google スプレッドシートを保存先にする。
+学生が翌月のアルバイト予定を入力して確定し、月末に実績を確認する。法令の検算（28時間・長期休業8時間・18歳未満・最低賃金など）はサーバが行う。管理者は管理ボードで全体を見る。
+
+詳しい要件は `docs/impl/SPEC.md`。用語は `CONTEXT.md`。
+
+---
+
+## 第2章 作業環境
+
+- Node.js 22 以上。確認: `node --version`
+- テストの実行: `npm test`（中身は `node --test "test/**/*.test.js"`）
+- 変更禁止のファイルが渡した時のままかの確認: `npm run check-locked`（`OK` と出ること）。自動チェック（GitHub Actions）も同じ確認と、`npm` を通さない `node --test` でのテストを行う
+- 一部だけ実行: `node --test test/core/shift-calc.test.js`
+- テストは `src/` の `.js` ファイルを**すべて、名前の順に**1つの共有の場所へ読み込む（GAS と同じ）。読み込み方は `test/helpers/load.js` を読めば分かる。
+- GAS の機能は、テスト中は `test/helpers/gas-fake.js` の偽物に置き換わる。**偽物にある機能だけを使う**（第4章）。偽物に無い機能を使うとテストが落ちる。そのときに偽物を書き換えてはいけない。
+
+---
+
+## 第3章 ファイル構成（これ以外のファイルを src/ に作らない）
+
+```
+src/
+  appsscript.json   GAS の設定（下記の内容で固定）
+  Code.js           doGet（画面を返すだけ）
+  Core.js           計算の心臓部 evaluateMonth と、その内部関数（名前は core_ で始め _ で終える）
+  Util.js           日付・文字列・乱数などの小道具
+  Db.js             スプレッドシートの読み書き・設定値・監査ログ
+  Auth.js           ログイン・パスワード・セッション・setupInitial
+  Student.js        学生の窓口（api_getMonth など）
+  Admin.js          管理者の窓口（api_admin* のうち印刷以外）
+  Print.js          api_adminPrintHtml
+  I18n.js           3言語の辞書 I18N
+  Backup.js         backupMonthly・installTriggers（DriveApp と ScriptApp はここでだけ使う）
+  index.html        画面の骨組み
+  client_css.html   画面の CSS
+  client_js.html    画面の JavaScript
+```
+
+`appsscript.json` はこの内容にする:
+
+```json
+{
+  "timeZone": "Asia/Tokyo",
+  "runtimeVersion": "V8",
+  "exceptionLogging": "STACKDRIVER",
+  "webapp": { "executeAs": "USER_DEPLOYING", "access": "ANYONE_ANONYMOUS" }
+}
+```
+
+### コードの書き方
+
+- `import`・`export`・`require` は使わない。どのファイルもトップレベルには「関数の宣言」と「定数の宣言」だけを書く。**トップレベルで他のファイルの関数を呼ばない**（読み込み順で壊れるため）。
+- **ブラウザから呼んでよい関数（公開関数）は第6章の一覧だけ。** それ以外のトップレベル関数は、名前の末尾を必ず `_` にする（例: `db_read_`）。GAS は名前が `_` で終わる関数をブラウザから呼べなくする。テスト `test/rules.test.js` が一覧外の公開関数を検出する。
+- 日付は `"YYYY-MM-DD"`、日時は `"YYYY-MM-DD HH:MM"`（日本時間、分まで）、年月は `"YYYY-MM"` の**文字列**で扱う。
+- 現在の日本時間は `new Date()` の時刻に 9 時間を足し、`getUTC*` で取り出して作る。日本に夏時間は無い。`Utilities.formatDate` は使わない。
+- スプレッドシートには**文字列だけ**を書く（数値・真偽値も `String()` してから書く）。読むときは必ず `Number()`・`=== 'true'` などで変換する。テストの偽物は、書いた値をすべて文字列として返す。
+- `Date` オブジェクトや配列・オブジェクトをそのままセルに書かない（偽物がエラーにする）。JSON は `JSON.stringify` した文字列で書く。
+
+---
+
+## 第4章 使ってよい GAS の機能（これ以外は使わない）
+
+| 機能 | 使ってよいもの |
+| --- | --- |
+| SpreadsheetApp | `create(name)`、`openById(id)`、`flush()` |
+| Spreadsheet | `getId()`、`getSheetByName(name)`、`insertSheet(name)`、`getSheets()` |
+| Sheet | `getRange(row, col, numRows, numCols)`（A1 表記は不可）、`getDataRange()`、`getLastRow()`、`getLastColumn()`、`appendRow(values)`、`deleteRow(row)`、`deleteRows(row, n)`、`setFrozenRows(n)`、`getMaxRows()`、`getMaxColumns()` |
+| Range | `getValues()`、`setValues(values)`、`getValue()`、`setValue(v)`、`setNumberFormat(fmt)` |
+| LockService | `getScriptLock()` → `tryLock(ms)`、`releaseLock()`、`hasLock()` |
+| PropertiesService | `getScriptProperties()` → `getProperty`、`setProperty`、`deleteProperty`、`getProperties` |
+| Utilities | `getUuid()`、`computeHmacSha256Signature(value, key)`、`computeDigest(Utilities.DigestAlgorithm.SHA_256, value)`、`base64Encode`、`base64EncodeWebSafe`、`sleep` |
+| Logger | `log(format, ...values)`（`%s` の置き換えだけ） |
+| HtmlService | `createTemplateFromFile(name)`、`createHtmlOutputFromFile(name)`、`.evaluate()`、`.setTitle()`、`.addMetaTag()`、`.getContent()`（**Code.js の doGet と、画面の部品の読み込みの中でだけ**） |
+| DriveApp・ScriptApp | **Backup.js の中でだけ**（第8章） |
+
+- 乱数は `Utilities.getUuid()` から作る。`Math.random` は使わない。
+- 使ってはいけないもの（テストが検出する）: `localStorage`・`sessionStorage`・`indexedDB`・`document.cookie`・`Utilities.formatDate`・`Session`・`UrlFetchApp`・`MailApp`・`GmailApp`・`CacheService`・`eval`・`new Function`・外部の JavaScript・CSS・Web フォントの読み込み・PDF 生成。
+
+---
+
+## 第5章 計算の心臓部 `evaluateMonth`（Core.js）
+
+入力と出力の形、判定規則は `docs/impl/SPEC.md` の「モジュール1: 計算の心臓部」に**すべて**書いてある。ここでは、書き漏れやすい点だけを挙げる。
+
+- 画面・スプレッドシート・現在時刻・乱数に触れない。`new Date()`（引数なし）・`Date.now()`・`Math.random`・GAS の機能を Core.js に書かない（テストが検出する）。日付の計算は `new Date(Date.UTC(年, 月-1, 日))` を使う。
+- `shifts` のキーは `"1"`〜`"31"` の文字列。`result.shifts` は入力と同じキーと同じ並び順（配列の添字 = `shiftIndex`）で返す。入力エラーのシフトは計算しない。
+- `result.daily` は**対象月の全日**のキーを持つ（働かない日は 0）。前月・翌月の日は入れない。
+- `codes` の各要素は `{ code, severity, date?, shiftIndex? }`。シフトに関するものは `date` と `shiftIndex`、日に関するものは `date`、7日間に関するものは `date` に**その7日間の初日**を入れる。`NO_PERMIT`・`PREV_MONTH_DRAFT`・`ACTUAL_OVER` は `date` なし。
+- 休憩の位置: `休憩開始 = 開始 + floor(((拘束 − 休憩) ÷ 2) ÷ 15) × 15`。`breakStart`・`breakEnd` は `"HH:MM"`（24時を過ぎたら 00:00 から数え直す）。休憩が0分なら両方 `null`。
+- 深夜帯は、開始日の 0:00〜5:00 と 22:00〜翌5:00。早朝手当の時間帯は、開始日と翌日の両方に当てはめる。どちらも休憩と重なる分は数えない。
+- 給与は整数演算: `Math.floor(時給 * 実働 / 60) + Math.floor(時給 * 深夜 / 240) + Math.floor(早朝手当 * 早朝分 / 60)`。`0.25` や `/60*1.25` のように小数を経由しない。
+- 7日間の窓は「対象月の初日の6日前」から「対象月の末日」までの各日を初日として作る。
+- 18歳未満の7日40時間は、7日間のうち1日でも18歳未満の日を含む窓に当てはめる。どの日も成人の窓で 2,400 分を超えたら `LABOR_HOURS`。
+- 7日間の検算は、**違反した窓ごとに1つ**コードを出す（最初の1つだけで止めない）。`date` はその窓の初日。
+- `maxRolling7Minutes` は、28時間の検算をしない窓（7日すべてが長期休業日）も含めた、すべての窓の合計の最大値。
+- 時刻は `/^([01]\d|2[0-3]):(00|15|30|45)$/` に合うものだけ（`"9:00"`・`"24:00"`・`"09:10"` は `INVALID_TIME`）。
+- 勤務先IDが `workplaces` に無いシフト（空・存在しない・他の学生のもの）は `MISSING`。
+- 在籍状態が `退学` で退学日が空、`卒業` で卒業日が空なら、すべてのシフトが `NOT_ENROLLED`。
+- `workPermission` が false、または true でも `permissionExpires` が空なら（シフトが1件以上あるとき）`NO_PERMIT`。`PERMIT_EXPIRED` は `workPermission` が true で期限があるときだけ見る。
+- 最低賃金の行が同じ日に複数当てはまるときは、`effectiveFrom` が最も新しい行を使う。
+- テスト: `test/core/*.test.js`（93件）。
+
+---
+
+## 第6章 サーバの窓口（公開関数の一覧と契約）
+
+### 6.1 共通の約束
+
+- 返り値は必ず `{ ok: true, data: ... }` か `{ ok: false, error: 'コード', details?: ... }`。**例外を外に投げない。** 想定外の例外は `{ ok: false, error: 'INTERNAL' }` にする。
+- エラーコード: `AUTH_REQUIRED`・`FORBIDDEN`・`PASSWORD_CHANGE_REQUIRED`・`LOGIN_LOCKED`・`LOGIN_FAILED`・`DEADLINE_PASSED`・`NOT_OPEN`・`VERSION_CONFLICT`・`VALIDATION_FAILED`・`BUSY`・`NOT_FOUND`・`BAD_REQUEST`・`INTERNAL`。
+- 第1引数はセッショントークン（`api_login` を除く）。**最初に**トークンを確かめる。無効なら `AUTH_REQUIRED`。
+- 次に役割を確かめる。学生の窓口を管理者が呼んだら、また管理者の窓口を学生が呼んだら `FORBIDDEN`。**引数の検証より先に行う**（でたらめな引数でも、役割違いなら `FORBIDDEN`）。
+- パスワード変更が必要な利用者は、`api_changePassword`・`api_logout` 以外のすべてで `PASSWORD_CHANGE_REQUIRED`。
+- 学生の窓口は学籍番号を引数に取らない。対象の学生は必ずセッションから決める。
+- 書き込みはスクリプトロックの中で行う: `tryLock(5000)` が false なら `BUSY` を返して何も書かない。ロックは `try { ... } finally { releaseLock() }` で必ず解放する。ロックの中では、対象の行を読み直してから書く。
+- 検算（evaluateMonth）はロックの外で行う。
+- 成功した書き込みごとに、監査ログ（第7章）に1行追記する。失敗したときは追記しない（`LOGIN_FAIL` を除く）。
+
+### 6.2 確かめる順番（保存系の窓口）
+
+`api_saveDraft`・`api_confirm`・`api_saveActual`・`api_confirmActual` は、この順で確かめ、最初に当てはまったエラーを返す:
+
+1. トークン → `AUTH_REQUIRED`／`PASSWORD_CHANGE_REQUIRED`／`FORBIDDEN`
+2. 引数の形（年月・シフトの形・version が0以上の整数か） → `BAD_REQUEST`
+3. その月が学校確定済み → `FORBIDDEN`
+4. 受付期間。予定と実績で**別々に**見る:
+   - 予定（`api_saveDraft`・`api_confirm`）: 締切表に行が無い → `NOT_OPEN`、予定の締切（`deadlineAt`）後で修正許可も無い → `DEADLINE_PASSED`
+   - 実績（`api_saveActual`・`api_confirmActual`）: 締切表に行が無い → `NOT_OPEN`、対象月の翌月1日 00:00 より前 → `NOT_OPEN`、実績確認期限後で修正許可も無い → `DEADLINE_PASSED`。**予定の締切は見ない**（予定の締切を過ぎていても実績は保存できる）
+5. 検算の結果 → `VALIDATION_FAILED`
+6. ロック → `BUSY`
+7. version → `VERSION_CONFLICT`
+8. 書き込み・監査ログ
+
+**シフトの形（BAD_REQUEST になるもの）**: オブジェクトでない／配列である／キーが `"1"`〜その月の日数の整数表記でない（`"0"`・`"01"`・`"32"` は不可）／値が配列でない／配列の要素がオブジェクトでない／1日に11件以上。
+保存する前に、各シフトを `{ workplace, start, end }` の3項目だけに整え、空の日は消す。
+
+### 6.3 認証
+
+| 関数 | 引数 | 成功時の data | 主なエラー |
+| --- | --- | --- | --- |
+| `api_login` | `loginId, password` | `{ token, role: 'student'\|'admin', mustChangePassword, studentId: string\|null }` | `LOGIN_FAILED`（IDが無い・パスワード違いを区別しない）、`LOGIN_LOCKED`（`details.lockedUntil`） |
+| `api_logout` | `token` | `null` | `AUTH_REQUIRED` |
+| `api_changePassword` | `token, currentPassword, newPassword` | `null` | `LOGIN_FAILED`（現在のパスワード違い）、`BAD_REQUEST`（新しいパスワードが10文字未満、または現在と同じ） |
+
+- 5回続けて失敗したら、その時点から15分ロック。ロック中は正しいパスワードでも `LOGIN_LOCKED`。ロック時刻を過ぎたら入れる。成功したら失敗回数を0に戻す。**ロック中の試行はパスワードを照合せず、失敗回数にも数えず、ロックを延ばさない。**
+- トークン: 128ビット以上のランダム値（`Utilities.getUuid()` を2つ使うなど）。**SESSIONS シートにはトークンの SHA-256 だけを保存する**（平文を保存しない）。有効期限はログイン時刻＋設定の分数（既定120分）。
+- パスワード: ユーザーごとのランダムな salt（32文字以上）と、Script Properties の `PASSWORD_PEPPER` を鍵にした HMAC-SHA256 を、ユーザーごとに保存した回数（既定10,000回）反復する。
+  例: `h = HMAC(pepper, salt + ':' + password)`、以後 `h = HMAC(pepper, base64(h) + salt)` を繰り返す。比較は1文字ずつ全部比べる（途中で抜けない）。
+- ログインID: 8文字。使う文字は `ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789`（0・O・1・I・l を除く）。重複しないこと。
+- 初期パスワード: 12文字以上のランダム。初回ログインで変更を強制する（`mustChangePassword: true`）。
+
+### 6.4 学生の窓口
+
+| 関数 | 引数 | 成功時の data |
+| --- | --- | --- |
+| `api_getMonth` | `token, yearMonth` | 下記 |
+| `api_saveDraft` | `token, yearMonth, shifts, expectedVersion` | `{ version, status: '下書き', evaluation }` |
+| `api_confirm` | `token, yearMonth, shifts, expectedVersion` | `{ version, status: '確定済', evaluation }` |
+| `api_saveActual` | `token, yearMonth, shifts, expectedVersion` | `{ version, actualStatus: '未確認', evaluation }`（evaluation は実績モード） |
+| `api_confirmActual` | `token, yearMonth, expectedVersion` | `{ version, actualStatus: '予定どおり'\|'修正あり' }` |
+| `api_getHistory` | `token` | `[{ yearMonth, status, actualStatus }]`（自分の月だけ、新しい順） |
+| `api_listWorkplaces` | `token` | `[{ workplaceId, name, prefecture, jobDescription, baseHourlyWage, earlyStart, earlyEnd, earlyPremium, verificationStatus }]` |
+| `api_saveWorkplace` | `token, workplace` | `{ workplaceId }` |
+
+`api_getMonth` の data:
+
+```
+{
+  yearMonth, status: '未入力'|'下書き'|'確定済'|'学校確定',
+  closed: boolean,             // 締切を過ぎ、有効な修正許可が無い
+  deadlineAt: 'YYYY-MM-DD HH:MM'|null, unlockUntil: 'YYYY-MM-DD HH:MM'|null,
+  version: number,             // 行が無ければ 0
+  shifts: {...},               // 保存した予定（行が無ければ {}）
+  evaluation: {...},           // 予定を evaluateMonth(mode 'plan') で計算した結果
+  holidays: ['YYYY-MM-DD', ...], // その月の長期休業日
+  actual: { status: '未確認'|'予定どおり'|'修正あり', shifts: {...}|null, evaluation: {...}|null,
+            open: boolean, deadlineAt: 'YYYY-MM-DD HH:MM'|null }
+}
+```
+
+- `api_confirm`: ブロック（severity が block）のコードが1つでもあれば `VALIDATION_FAILED`（`details: { inputErrors: [], codes: [...] }`）で**何も保存しない**。`codes` の要素は evaluateMonth の `codes` と同じ**オブジェクト** `{ code, severity, date?, shiftIndex? }` のうち severity が block のもの（文字列の配列ではない）。注意（warn）だけなら確定する。シフト0件でも確定できる（勤務なし）。
+- 入力エラーがあれば、下書きでも実績でも `VALIDATION_FAILED`（`details: { inputErrors: [...], codes: [] }`）で保存しない。
+- 確定済みの月を下書き保存したら、状態は下書きに戻る。
+- `expectedVersion` は、`api_getMonth` で読んだ `version`（行が無ければ 0）。行の version と違えば `VERSION_CONFLICT`。保存に成功するたびに version を1増やす。予定と実績は同じ行・同じ version を使う。
+- 締切: 学生のクラスと年月で締切表（DEADLINES）を引く。行が無ければ `NOT_OPEN`。現在の日時（分まで）が `deadlineAt` より**後**なら締切済み（`deadlineAt` の分ちょうどはまだ受け付ける）。ただし、その行の修正許可 `unlock_until` があり、現在がそれ以前（同じ分を含む）なら受け付ける。
+- 実績の受付期間: 対象月の翌月1日 00:00 から、実績確認期限まで。実績確認期限は締切表の `actualDeadlineAt`、空なら「翌月の（設定 `actualConfirmDefaultDay`）日 23:59」。修正許可は実績にも効く。
+- `api_confirmActual`: 実績を一度も保存していなければ `BAD_REQUEST`。予定が確定済みで、実績と予定が同じ（日ごとに、開始・終了・勤務先の組が並び順を問わず一致）なら「予定どおり」、それ以外は「修正あり」。
+- 前月データの取得元（evaluateMonth の `prevMonthSource` と `prevMonthDaily`）:
+  1. 前月の末日が入学日より前 → `not_applicable`
+  2. 前月が学校確定 → `not_applicable`
+  3. 前月の実績が「予定どおり」か「修正あり」 → 実績の日ごとの実働（`actual`）
+  4. 前月の予定が確定済み → 予定の日ごとの実働（`confirmed`）
+  5. それ以外 → `none`（`{}`）
+- 翌月データ（`nextMonthDaily`）は、翌月の行に 3 か 4 が当てはまればその日ごとの実働、無ければ `{}`。
+- 勤務先: 新規は必ず `確認中`。既存（自分のもの）を編集したら `確認中` に戻す。クライアントが送った `verificationStatus` は無視する。他の学生の勤務先IDなら `NOT_FOUND`。`禁止` の勤務先は編集できない（`FORBIDDEN`）。
+  検証（`BAD_REQUEST`）: 名前・仕事内容が空でない／都道府県が47都道府県名のどれか（「愛知県」「東京都」「大阪府」「北海道」のように正式名）／時給が1以上の整数／早朝手当の3項目はすべて null かすべて指定／早朝の開始・終了は15分単位で開始＜終了／早朝手当は0以上の整数。
+
+### 6.5 管理者の窓口
+
+| 関数 | 引数 | 成功時の data |
+| --- | --- | --- |
+| `api_adminUpsertStudent` | `token, student` | 新規: `{ studentId, created: true, loginId, initialPassword }`、更新: `{ studentId, created: false }` |
+| `api_adminResetPassword` | `token, studentId` | `{ initialPassword }`（失敗回数・ロックも解除し、変更を強制） |
+| `api_adminUnlockLogin` | `token, studentId` | `null` |
+| `api_adminCreateAdmin` | `token` | `{ loginId, initialPassword }` |
+| `api_adminStudentDetail` | `token, studentId` | `{ student, workplaces: [... + verifiedBy, verifiedAt], months: [{ yearMonth, status, actualStatus }] }` |
+| `api_adminVerifyWorkplace` | `token, workplaceId, 'OK'\|'禁止'` | `null`（確認者 = 管理者のログインID、確認日時を記録） |
+| `api_adminGrantUnlock` | `token, studentId, yearMonth, until` | `null`（行が無ければ未入力の行を作る。version は変えない） |
+| `api_adminSchoolConfirm` | `token, studentId, yearMonth` | `null` |
+| `api_adminBoard` | `token, yearMonth, { className?, status?, query? }` | 下記 |
+| `api_adminQuarterCheck` | `token, { className: string\|null, endYearMonth }` | `{ months: [3か月、古い順], rows: [{ studentId, name, className, months: [{ yearMonth, displayStatus, actualStatus, actualTotalMinutes: number\|null, actualOver }] }] }` |
+| `api_adminSetDeadline` | `token, { yearMonth, className, deadlineAt, actualDeadlineAt\|null }` | `null`（年月＋クラスで上書き） |
+| `api_adminSetHoliday` | `token, { holidayId?, name, startDate, endDate, schoolYear }` | `{ holidayId }`（開始＞終了は `BAD_REQUEST`） |
+| `api_adminDeleteHoliday` | `token, holidayId` | `null` |
+| `api_adminListHolidays` | `token` | `[{ holidayId, name, startDate, endDate, schoolYear }]` |
+| `api_adminSetMinimumWage` | `token, { prefecture, amount, effectiveFrom, effectiveTo\|null }` | `null`（都道府県＋発効日で上書き） |
+| `api_adminListMinimumWages` | `token` | `[{ prefecture, amount, effectiveFrom, effectiveTo }]`（amount は数値） |
+| `api_adminGetSettings` | `token` | `{ schoolName, retentionMonths, timezone, sessionTtlMinutes, workplaceSlaDays, allowLeaveOfAbsence, actualConfirmDefaultDay }` |
+| `api_adminSetSettings` | `token, 一部の項目` | `null` |
+| `api_adminPrintHtml` | `token, { studentIds, yearMonths }` | `{ html }` |
+| `api_adminPurgeExpired` | `token` | `{ deletedRows }` |
+
+- `student` の形: `{ studentId, name, className, birthDate, language: 'ja'|'ne'|'vi', enrollmentDate, graduationDate|null, withdrawalDate|null, status: '在籍'|'休学'|'卒業'|'退学', workPermission: boolean, permissionExpires|null, permissionCheckedAt|null }`。学籍番号・氏名・クラスが空、日付の形が違う、言語・在籍状態が一覧外なら `BAD_REQUEST`。既存の学籍番号なら更新し、ログインIDは変えない。
+- 学校確定: 学生の在籍状態が 退学・休学・卒業 のどれかで、その月が未入力（行が無い、または状態が未入力）のときだけ。それ以外は `FORBIDDEN`。状態を `学校確定` にし、version を1増やす。
+- 設定の既定値: `retentionMonths` 24、`sessionTtlMinutes` 120、`workplaceSlaDays` 3、`allowLeaveOfAbsence` false、`actualConfirmDefaultDay` 10、`timezone` 'Asia/Tokyo'、`schoolName` ''。
+- 最低賃金の一覧は空で出荷する。**実在の金額をコードや初期データに書かない**（金額は稼働前に学校が入力する）。
+
+`api_adminBoard` の data:
+
+```
+{
+  counts: { students, confirmed, draft, notSubmitted, error, outOfScope },
+  workplacesPending, workplacesOverdue, actualUnconfirmed,
+  rows: [{ studentId, name, className, displayStatus: '確定済'|'下書き'|'未提出'|'対象外',
+           errorCodes: [...], actualStatus, actualOver: boolean, updatedAt: 'YYYY-MM-DD HH:MM'|null }]
+}
+```
+
+- 対象の学生: 入学日がその月の末日以前で、退学日・卒業日（早いほう、無ければ無期限）がその月の初日以後の学生。加えて、その月の行を持つ学生。
+- `counts` はクラスの絞り込みだけを反映する。`rows` は、クラス・状態（`displayStatus` と一致）・検索（学籍番号の前方一致、または氏名の部分一致）をすべて反映する。`rows` は学籍番号の昇順。
+- 表示状態: 確定済→確定済、学校確定→対象外、下書き→下書き、行が無い・未入力→未提出。
+- `errorCodes`: 最後に保存したときの block のコードの**文字列**の配列（例 `['OVER_28H']`、重複なし）。`error` は `errorCodes` が空でない行の数。
+- `actualOver`: 最後に保存した実績に `ACTUAL_OVER` があれば true。
+- `actualUnconfirmed`: 現在が対象月の翌月1日 00:00 以後のときだけ、**ボードの対象の学生（クラスの絞り込み後）**のうち、表示状態が対象外でなく、実績が未確認（スプレッドシートに行が無い学生も未確認）の人数。それより前は 0。
+- 締切を過ぎても、下書きの月の表示状態は `下書き` のまま（未提出にしない）。
+- `workplacesPending`: 全学生の `確認中` の勤務先の数。`workplacesOverdue`: そのうち、登録日の**翌日から今日まで**の営業日（月〜金で、長期休業日でない日）の数が `workplaceSlaDays` を**超えた**もの。
+
+`api_adminPrintHtml`:
+
+- `studentIds` は1〜50件、`yearMonths` は1〜24件。外れたら `BAD_REQUEST`。
+- 学生×月ごとに `<section class="student-page">…</section>` を1つ出す（`class` の値は `student-page` だけにする）。
+- `<style>` に `@page { size: A4 landscape; }` と `.student-page { break-after: page; }` を**この形のまま**入れる（`@page` の中に余白などを足さない。足したい指定は別の規則に書く）。
+- 予定と実績を並べ、実績の超過日は網掛けにする。学校確定の月は「対象外」と表示する。
+- 学生の氏名など、保存されている文字は**必ず** `& < > " '` をエスケープする。
+
+`api_adminPurgeExpired`: 現在の年月から保存期間（月数）を引いた年月より前の月次申告の行を消す（例: 2026-10 で24か月 → 2024-09 以前を消し、2024-10 は残す）。
+
+### 6.6 そのほかの公開関数
+
+| 関数 | 役割 |
+| --- | --- |
+| `doGet()` | `index.html` を返す。`setTitle` とスマートフォン用の viewport を付ける |
+| `setupInitial()` | 初期設定（下記）。2回目以降は何もせず `Logger.log('ALREADY_SET_UP')` |
+| `backupMonthly()` | 第8章 |
+| `installTriggers()` | 第8章 |
+| `evaluateMonth(input)` | 第5章 |
+
+`setupInitial()` が行うこと:
+
+1. `SpreadsheetApp.create('ShiftDB')` と `SpreadsheetApp.create('AuditLog')` を作り、第7章のシートと見出し行を作る。
+2. Script Properties に `SHIFT_DB_ID`・`AUDIT_LOG_ID`・`PASSWORD_PEPPER`（32文字以上のランダム）・`SETUP_DONE`（'true'）を置く。
+3. 管理者を1人作り、`Logger.log('INITIAL_ADMIN loginId=%s password=%s', ログインID, 初期パスワード)` を**1行だけ**出す（これ以外の形にしない。テストがこの行を読む）。
+4. DriveApp は使わない（バックアップ用フォルダは第8章）。
+
+---
+
+## 第7章 シート
+
+ShiftDB の各シートの1行目は見出し（列名）にする。列の並びは次を推奨する（テストは AUDIT_LOG 以外の列の並びに依存しない）。
+
+| シート | 列 |
+| --- | --- |
+| STUDENTS | student_id, login_id, name, class, birth_date, language, enrollment_date, graduation_date, withdrawal_date, status, work_permission, permission_expires, permission_checked_at, created_at, updated_at |
+| USERS | login_id, role, student_id, password_salt, password_hash, hash_iterations, force_password_change, failed_login_count, locked_until, created_at |
+| WORKPLACES | workplace_id, student_id, name, prefecture, job_description, base_hourly_wage, early_start, early_end, early_premium, verification_status, verified_by, verified_at, created_at, active |
+| MONTHLY_SUBMISSIONS | submission_id, student_id, year_month, status, shift_json, actual_json, actual_status, total_minutes, max_rolling7_minutes, estimated_salary, validation_codes, actual_total_minutes, actual_max_rolling7_minutes, actual_codes, version, confirmed_at, updated_at, unlock_until |
+| SCHOOL_HOLIDAYS | holiday_id, name, start_date, end_date, school_year |
+| DEADLINES | year_month, class, deadline_at, actual_deadline_at |
+| MINIMUM_WAGES | prefecture, amount, effective_from, effective_to |
+| SETTINGS | key, value |
+| SESSIONS | token_hash, login_id, role, expires_at, created_at |
+
+AuditLog スプレッドシートの `AUDIT_LOG` シートは、**この列・この順で固定**（テストが読む）:
+
+`timestamp, user_id, role, action, student_id, year_month, version, details`
+
+- `timestamp` は `"YYYY-MM-DD HH:MM"`、`user_id` は操作した人のログインID、`role` は `student`／`admin`。
+- `action` は次のどれか: `SAVE_DRAFT`・`CONFIRM`・`ACTUAL_SAVE`・`ACTUAL_CONFIRM`・`LOGIN_OK`・`LOGIN_FAIL`・`PASSWORD_CHANGE`・`PASSWORD_RESET`・`LOGIN_UNLOCK`・`ADMIN_UNLOCK`・`SCHOOL_CONFIRM`・`WORKPLACE_VERIFY`・`QUARTER_CHECK`・`MASTER_UPDATE`・`PURGE`。
+- 保存・確定・学校確定の行には、書き込み後の `version` を入れる。
+- パスワード・トークン・秘密鍵を、どのシートにもログにも書かない（テストが全セルを検査する）。
+
+---
+
+## 第8章 バックアップ（Backup.js）
+
+- `backupMonthly()`: Script Properties の `BACKUP_FOLDER_ID` のフォルダへ、ShiftDB と AuditLog を `ShiftDB_YYYY-MM`・`AuditLog_YYYY-MM` の名前で複製する。同じ年月の複製が済んでいれば何もしない（Script Properties の `LAST_BACKUP_YM` で判定）。
+- `installTriggers()`: 既存の `backupMonthly` のトリガーを消してから、毎月1日 3時台に `backupMonthly` を呼ぶトリガーを1つ作る。
+- `BACKUP_FOLDER_ID` は、管理者が Drive にフォルダを作って手で設定する（第12章の手順書に書く）。
+- この2つは自動テストしない。
+
+---
+
+## 第9章 画面
+
+### 9.1 共通
+
+- `index.html` 1枚。ログイン後、役割に応じて学生画面か管理画面を表示する。画面の切り替えは同じページの中で行う（ページを読み直さない）。
+- トークンは JavaScript の変数にだけ持つ。ページを読み直したら再ログイン。
+- サーバの呼び出しはすべて `google.script.run` の1つの小さな関数を通す。失敗（`withFailureHandler`、または `error: 'BUSY'`）のときは 2秒・4秒・8秒待って最大3回やり直し、それでも駄目なら「混雑中。1分後に再試行」を表示する。
+- エラーは辞書の固定語だけで表示する。説明のポップアップは出さない。
+- 画面上の計算は表示用。確定できるかはサーバの返事で決める。
+- 画面に「法律上問題ありません」などの文言を出さない。確定できたときの表示は「確定済み」だけ。
+- `I18N` は `index.html` に `<?!= JSON.stringify(I18N) ?>` などで埋め込む。
+
+### 9.2 学生画面
+
+- 言語切替（日本語｜नेपाली｜Tiếng Việt）を上部に置く。訳が無い語は日本語で表示する。
+- 上部に対象月・学籍番号・氏名・提出期限（`deadlineAt`）。
+- 勤務先の一覧（名前・都道府県・仕事内容・時給・確認状態）と「勤務先を追加」。確認中なら「勤務先要確認」。
+- 31日分を日ごとのカードで縦に並べる（幅 768px 以上では表）。**曜日は日付から計算する**（見本の曜日は1日ずれていて誤り）。
+- 1日に複数行。行ごとに勤務先（選択）・開始・終了（`<input type="time" step="900">`）。休憩・実働・深夜・予定給与は表示だけ。
+- 長期休業日（`holidays`）の日は、カード・行全体を赤枠にし「長期休暇」とだけ表示する。
+- ボタンは「途中保存」と「確定」。締切済み（`closed`）なら入力欄とボタンを無効にし「締切済み」とだけ表示する（サーバでも拒否される）。
+- 実績確認（`actual.open` のとき）: 日ごとに「予定どおり」「修正」を選ぶ。「予定どおり」は予定のシフトを写す。最後に保存と確認。
+- 提出履歴の一覧。
+
+### 9.3 管理画面（日本語だけ）
+
+- 対象月・クラス・状態・検索、件数（学生数・確定済・下書き・未提出・エラー・対象外）、勤務先の確認待ち（うち期限超え）、実績未確認。
+- 学生一覧（学籍番号・氏名・クラス・状態・エラー・実績・更新日・印刷）。実績超過の学生は赤。
+- 学生詳細（学生情報の編集、勤務先の確認、修正許可、学校確定、パスワード再発行、ロック解除、2年間一括印刷）。
+- 四半期確認、締切の設定、長期休業の設定、最低賃金の設定、学校設定、学生の追加、保存期限超過データの削除、クラス一括印刷（50名ずつ）、表示中を一括印刷。
+- 印刷は `api_adminPrintHtml` の HTML を新しいウィンドウに書いて `print()` を呼ぶ。
+
+### 9.4 画面見本（mockup-v1.webp）について
+
+色（紺と金）、角丸のカード、ボタンの配置は参考にしてよい。次の点は**見本が誤り**なので真似しない:
+曜日（2026/10/1 は木曜）、学籍番号でのログイン、PDF ボタン、1日1行・勤務先が上部に1つだけ、200名一括印刷、言語切替が無いこと、実績確認と勤務先確認の表示が無いこと、長期休業でない日（10/5）の赤枠、見本内の氏名・金額などの具体的な値。
+
+---
+
+## 第10章 作業の順序と関門
+
+各段階の最後に `npm test` を実行し、**その段階のテストが全部通ったら**コミットしてから次に進む。前の段階のテストが後から落ちたら、次に進まずに直す。
+
+| 段階 | 作るもの | 通すテスト | コミットの見出し |
+| --- | --- | --- | --- |
+| 1 | `appsscript.json`、`Core.js`（evaluateMonth） | `node --test "test/core/*.test.js"` | `段階1: 計算の心臓部` |
+| 2 | `Util.js`・`Db.js`・`Auth.js`（setupInitial・ログイン・ログアウト・パスワード変更）、`api_adminUpsertStudent`・`api_adminResetPassword`・`api_adminUnlockLogin`・`api_getMonth`（読むだけ）、**第6章の公開関数すべての「入口」**（下記） | `node --test test/api/auth.test.js` | `段階2: 認証` |
+| 3 | 学生の窓口の残り（保存・確定・実績・勤務先・履歴）、管理者の `api_adminSetDeadline`・`api_adminSetMinimumWage`・`api_adminListMinimumWages`・`api_adminGetSettings`・`api_adminSetSettings`・`api_adminVerifyWorkplace`・`api_adminGrantUnlock`・`api_adminSchoolConfirm` | `node --test test/api/submission.test.js test/api/actual.test.js test/api/permissions.test.js` | `段階3: 学生の窓口` |
+| 4 | 管理者の窓口の残り（ボード・学生詳細・四半期確認・長期休業・管理者の追加・保存期限）、`Print.js` | `node --test test/api/admin.test.js` | `段階4: 管理者の窓口` |
+| 5 | `I18n.js`、`Code.js`、`Backup.js` | `npm test`（全部） | `段階5: 辞書と公開関数` |
+| 6 | `index.html`・`client_css.html`・`client_js.html` | `npm test`（全部。画面を足しても落ちないこと） | `段階6: 画面` |
+| 7 | `docs/impl/REPORT.md`（第11章と第12章） | `npm test` と `npm run check-locked` | `段階7: 完了報告` |
+
+**「入口」とは（段階2）**: 第6章の公開関数を、段階2の時点ですべて名前どおりに作っておく。まだ中身を作らない関数は、最初にトークンと役割の確認（6.1）だけを行い、通ったら `{ ok: false, error: 'INTERNAL' }` を返す仮の形にする。後の段階で、その仮の1行を本当の処理に置き換える。仮の形のまま段階7に進まない（`INTERNAL` を返す仮の窓口が残っていたら未完成）。
+
+- 段階1〜5で画面のファイルを作らない。段階6で `src/*.js` の窓口の振る舞いを変えない（変える必要があれば BLOCKERS.md に書いて止まる）。
+- `test/rules.test.js` と `test/i18n.test.js` は段階5で全部通ればよい（それまでは落ちていてよい）。
+
+---
+
+## 第11章 詰まったとき・終わったとき
+
+### 詰まったとき（BLOCKERS.md）
+
+次のどれかに当てはまったら、それ以上コードを書かずに `docs/impl/BLOCKERS.md` に書いて止まる。
+
+- 同じテストが、3回直しても通らない。
+- テストと仕様が矛盾していると思う。
+- この文書に書いていないことを決めないと進めない。
+- 使ってよい GAS の機能（第4章）だけでは実現できない。
+
+書く内容: どのテストか（ファイル名とテスト名）／実行した命令とその出力の最後の30行／自分が何を試したか／何が矛盾していると思うか。**テストや docs を直して解決しない。**
+
+### 終わったとき（REPORT.md）
+
+`docs/impl/REPORT.md` に次を書く。
+
+1. `npm test` を実行した日時と、その出力の最後の8行（`# tests`・`# pass`・`# fail` などの行）をそのまま貼る。`npm run check-locked` の出力も貼る。
+2. `git diff --stat <作業開始時のコミット> -- test/ docs/ .github/ scripts/ GEMINI.md AGENTS.md CONTEXT.md` の出力をそのまま貼る（`test/extra/` と `docs/impl/REPORT.md`・`docs/impl/BLOCKERS.md` 以外に変更が無いこと）。
+3. 作ったファイルの一覧。
+4. 自動テストでは確かめていないこと（画面・バックアップ）と、第12章の手順書の場所。
+
+---
+
+## 第12章 段階7で書く手順書
+
+`docs/impl/REPORT.md` の末尾に、次の手順を日本語で書く（学校の担当者が読む）。
+
+1. 学校が管理する Google アカウントで Apps Script のプロジェクトを作り、`src/` の中身を置く。
+2. エディタで `setupInitial` を実行し、実行ログの `INITIAL_ADMIN` の行から管理者のログインIDと初期パスワードを控える。
+3. Drive にバックアップ用フォルダを作り、そのIDを Script Properties の `BACKUP_FOLDER_ID` に入れて、`installTriggers` を実行する。
+4. 「ウェブアプリとしてデプロイ」（次のユーザーとして実行: 自分、アクセス: 全員）。
+5. 管理画面で、最低賃金（厚生労働省の最新の一覧から）・長期休業・締切・学生を登録する。
+6. 実機確認（iOS Safari と Android Chrome）: ログイン → パスワード変更 → 勤務先の追加 → 31日分の入力 → 22:00〜02:00 の入力 → 途中保存 → 確定 → 3言語の切替、の順に確かめる項目の一覧。
+7. 締切前の負荷確認: 30人程度が同時に保存したときに「混雑中」以外のエラーが出ないか確かめる手順。
