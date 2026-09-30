@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>外国人留学生アルバイト申告システム</title>
+  <?!= include_('client_css') ?>
+</head>
+<body>
+<div id="app">
+  <!-- ログイン画面 -->
+  <div id="login-screen">
+    <div class="login-lang-bar">
+      <div class="lang-switch">
+        <button data-lang="ja" class="active">日本語</button>
+        <button data-lang="ne">नेपाली</button>
+        <button data-lang="vi">Tiếng Việt</button>
+      </div>
+    </div>
+    <div class="login-card">
+      <div class="login-brand">
+        <div class="login-emblem">4AI</div>
+        <h1 id="app-title">アルバイト申告</h1>
+        <p class="login-subtitle">留学生アルバイト予定・実績管理システム</p>
+      </div>
+      <div class="field">
+        <label id="lbl-loginId" data-i18n="label.loginId">ログインID</label>
+        <input type="text" id="inp-loginId" autocomplete="username" placeholder="学籍番号 または ログインID">
+      </div>
+      <div class="field">
+        <label id="lbl-password" data-i18n="label.password">パスワード</label>
+        <input type="password" id="inp-password" autocomplete="current-password" placeholder="パスワードを入力">
+      </div>
+      <p id="login-error" class="error-msg" hidden></p>
+      <button id="btn-login" class="btn-primary" style="width: 100%; margin-top: 0.5rem;" data-i18n="button.login">ログイン</button>
+    </div>
+  </div>
+
+  <!-- 初回パスワード変更画面 -->
+  <div id="change-password-screen" hidden>
+    <div class="login-card">
+      <div class="login-brand">
+        <div class="login-emblem">🔐</div>
+        <h2 id="lbl-change-password-title" style="font-size: 1.2rem; color: var(--navy); margin-bottom: 0.25rem;">パスワードの変更</h2>
+        <p class="login-subtitle">初期パスワードを変更して利用を開始してください</p>
+      </div>
+      <div class="field">
+        <label id="lbl-cur-password">現在のパスワード</label>
+        <input type="password" id="inp-cur-password" placeholder="現在のパスワード">
+      </div>
+      <div class="field">
+        <label id="lbl-new-password">新しいパスワード</label>
+        <input type="password" id="inp-new-password" placeholder="新しいパスワード（8文字以上）">
+      </div>
+      <p id="change-password-error" class="error-msg" hidden></p>
+      <button id="btn-change-password" class="btn-primary" style="width: 100%; margin-top: 0.5rem;" data-i18n="button.changePassword">変更してログイン</button>
+    </div>
+  </div>
+
+  <!-- 学生画面 -->
+  <div id="student-screen" hidden>
+    <header class="top-bar">
+      <div class="brand-section">
+        <div class="brand-logo-mark">AI</div>
+        <span class="brand-name">アルバイト申告</span>
+      </div>
+      <div class="lang-switch">
+        <button data-lang="ja" class="active">日本語</button>
+        <button data-lang="ne">नेपाली</button>
+        <button data-lang="vi">Tiếng Việt</button>
+      </div>
+      <div class="user-info">
+        <span id="st-name" class="user-badge"></span>
+        <button id="btn-logout-st" class="btn-outline btn-sm" style="color: #ffffff; border-color: rgba(255,255,255,0.4);" data-i18n="button.logout">ログアウト</button>
+      </div>
+    </header>
+
+    <main class="student-content">
+      <!-- 月ナビゲーション・締切表示 -->
+      <div class="month-hero">
+        <div class="month-nav">
+          <button id="btn-prev-month" aria-label="前月">&lt;</button>
+          <span id="st-year-month" class="month-nav-title"></span>
+          <button id="btn-next-month" aria-label="翌月">&gt;</button>
+        </div>
+        <div class="month-meta">
+          <div id="st-deadline-info" class="deadline-pill"></div>
+        </div>
+      </div>
+      <div id="st-closed-notice" class="warn-bar" hidden></div>
+
+      <!-- 勤務先セクション -->
+      <section id="workplaces-section" class="card">
+        <div class="workplace-header">
+          <h2 id="lbl-workplace" class="card-title" data-i18n="label.workplace" style="margin-bottom:0; border-bottom:none;">勤務先</h2>
+          <button id="btn-add-workplace" class="btn-gold btn-sm" data-i18n="button.addWorkplace">＋ 勤務先を追加</button>
+        </div>
+        <div id="workplace-list" class="wp-grid"></div>
+        <div id="workplace-form" class="card" hidden style="background: #f8fafc; border: 1.5px solid var(--border);">
+          <h3 style="margin-bottom: 0.75rem; font-size: 1rem; color: var(--navy);">勤務先の登録</h3>
+          <div class="field">
+            <label data-i18n="label.name">名前（事業所名）</label>
+            <input type="text" id="wp-name" placeholder="例: セブンイレブン 〇〇店">
+          </div>
+          <div class="field">
+            <label data-i18n="label.prefecture">都道府県</label>
+            <input type="text" id="wp-pref" placeholder="例: 東京都">
+          </div>
+          <div class="field">
+            <label data-i18n="label.jobDescription">仕事内容</label>
+            <input type="text" id="wp-job" placeholder="例: レジ・品出し">
+          </div>
+          <div class="field">
+            <label data-i18n="label.baseHourlyWage">時給（円）</label>
+            <input type="number" id="wp-wage" min="1" placeholder="例: 1150">
+          </div>
+          <div class="field">
+            <label>早朝割増手当（任意）</label>
+            <div style="display:flex; gap:0.5rem; align-items:center;">
+              <input type="time" id="wp-early-start" step="900" placeholder="開始">
+              <span class="shift-row-sep">〜</span>
+              <input type="time" id="wp-early-end" step="900" placeholder="終了">
+              <input type="number" id="wp-early-premium" min="0" placeholder="手当/時（円）">
+            </div>
+          </div>
+          <p id="wp-error" class="error-msg" hidden></p>
+          <div style="display:flex; gap:0.5rem; margin-top:0.75rem;">
+            <button id="btn-save-workplace" class="btn-primary">登録・保存</button>
+            <button id="btn-cancel-workplace" class="btn-outline">キャンセル</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- シフト予定申告セクション -->
+      <section id="shifts-section">
+        <div class="card">
+          <h2 class="card-title">シフト予定申告</h2>
+          <div id="shifts-table" class="shifts-grid"></div>
+          <p id="shift-error" class="error-msg" hidden></p>
+        </div>
+        <div id="shift-actions" class="actions-card">
+          <span style="font-weight:600; color:var(--text-sub); font-size:0.9rem;">入力が完了したら必ず「確定」を行ってください</span>
+          <div class="actions-buttons">
+            <button id="btn-save-draft" class="btn-secondary" data-i18n="button.saveDraft">途中保存</button>
+            <button id="btn-confirm-shift" class="btn-gold" data-i18n="button.confirm">確定</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- 実績確認セクション -->
+      <section id="actual-section" class="card" hidden>
+        <h2 class="card-title">実績確認</h2>
+        <p style="font-size:0.88rem; color:var(--text-sub); margin-bottom:1rem;">前月の実際の勤務実績を確認し、必要に応じて修正してください。「予定どおり」を押すと予定シフトが自動入力されます。</p>
+        <div id="actual-table" class="shifts-grid"></div>
+        <p id="actual-error" class="error-msg" hidden></p>
+        <div style="display:flex; gap:0.6rem; justify-content:flex-end; margin-top:1rem;">
+          <button id="btn-save-actual" class="btn-secondary" data-i18n="button.saveActual">実績を保存</button>
+          <button id="btn-confirm-actual" class="btn-gold" data-i18n="button.confirmActual">実績を確定</button>
+        </div>
+      </section>
+
+      <!-- 提出履歴セクション -->
+      <section id="history-section" class="card">
+        <h2 id="lbl-history" class="card-title" data-i18n="label.history">提出履歴</h2>
+        <div id="history-list"></div>
+      </section>
+    </main>
+  </div>
+
+  <!-- 管理者画面 -->
+  <div id="admin-screen" hidden>
+    <div class="admin-layout">
+      <!-- サイドバー -->
+      <aside class="admin-sidebar">
+        <div class="admin-sidebar-header">
+          <div class="admin-sidebar-brand">
+            <div class="brand-logo-mark">AI</div>
+            <span>留学生管理ポータル</span>
+          </div>
+        </div>
+        <nav class="admin-sidebar-nav">
+          <div class="admin-nav-item active" data-target="admin-section-board">📊 ダッシュボード</div>
+          <div class="admin-nav-item" data-target="admin-section-masters">⚙️ マスタ設定</div>
+          <div class="admin-nav-item" data-target="admin-section-print">🖨️ 一括印刷</div>
+        </nav>
+        <div class="admin-sidebar-footer">
+          <button id="btn-logout-admin" class="btn-outline btn-sm" style="color:#ffffff; border-color:rgba(255,255,255,0.3); width:100%;">ログアウト</button>
+        </div>
+      </aside>
+
+      <!-- メインエリア -->
+      <div class="admin-main">
+        <header class="admin-topbar">
+          <div class="month-nav">
+            <button id="btn-admin-prev-month" aria-label="前月">&lt;</button>
+            <span id="admin-year-month" class="month-nav-title" style="color:var(--navy);"></span>
+            <button id="btn-admin-next-month" aria-label="翌月">&gt;</button>
+          </div>
+          <div>
+            <span class="user-badge" style="color:var(--navy); background:var(--navy-subtle); border-color:#d4e2f2;">管理者モード</span>
+          </div>
+        </header>
+
+        <main class="admin-content">
+          <!-- 統計・ボードセクション -->
+          <div id="admin-section-board">
+            <div id="admin-counts"></div>
+
+            <div class="filter-bar">
+              <input type="text" id="admin-class-filter" placeholder="クラス検索 (例: 1A)">
+              <select id="admin-status-filter">
+                <option value="">全状態</option>
+                <option value="確定済">確定済</option>
+                <option value="下書き">下書き</option>
+                <option value="未提出">未提出</option>
+                <option value="対象外">対象外</option>
+              </select>
+              <input type="text" id="admin-query" placeholder="学籍番号 または 氏名">
+              <button id="btn-admin-search" class="btn-primary">検索</button>
+            </div>
+
+            <div class="table-responsive card" style="padding:0; margin-bottom:1.5rem;">
+              <div id="admin-board"></div>
+            </div>
+          </div>
+
+          <!-- 各種マスタ設定セクション -->
+          <div id="admin-section-masters" class="card">
+            <h2 class="card-title">マスタ設定・管理機能</h2>
+            <div class="master-grid">
+              <button id="btn-open-student-form">👤 学生を追加・更新</button>
+              <button id="btn-open-deadline">📅 締切設定</button>
+              <button id="btn-open-holiday">🏖️ 長期休業設定</button>
+              <button id="btn-open-wage">💴 最低賃金設定</button>
+              <button id="btn-open-settings">🏫 学校基本設定</button>
+              <button id="btn-create-admin">🔑 管理者を追加</button>
+              <button id="btn-purge-expired" class="btn-danger" style="color:#ffffff;">🗑️ 保存期限超過データを削除</button>
+            </div>
+          </div>
+
+          <!-- 一括印刷セクション -->
+          <div id="admin-section-print" class="card">
+            <h2 class="card-title">一括印刷出力</h2>
+            <p style="font-size:0.88rem; color:var(--text-sub); margin-bottom:1rem;">指定した条件の学生シフト表を50名単位でブラウザの印刷用画面に展開します。</p>
+            <div style="display:flex; gap:0.75rem; flex-wrap:wrap;">
+              <button id="btn-print-all-class" class="btn-primary">🖨️ クラス一括印刷 (50名ごと)</button>
+              <button id="btn-print-board" class="btn-gold">🖨️ 表示中を一括印刷</button>
+            </div>
+          </div>
+        </main>
+      </div>
+    </div>
+
+    <!-- 管理者詳細ダイアログ -->
+    <div id="admin-dialog-overlay" hidden>
+      <div class="admin-dialog">
+        <div class="dialog-header">
+          <h3 style="color:var(--navy); font-size:1.15rem;">学生詳細・操作</h3>
+          <button id="btn-dialog-close" class="btn-outline btn-sm">✕ 閉じる</button>
+        </div>
+        <div id="admin-dialog-body"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- グローバルスピナー -->
+  <div id="global-spinner" hidden>
+    <div class="spinner-card">
+      <div class="spinner-ring"></div>
+      <span>処理中…</span>
+    </div>
+  </div>
+</div>
+
+<?!= include_('client_js') ?>
+</body>
+</html>
