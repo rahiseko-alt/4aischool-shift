@@ -1,0 +1,338 @@
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: sans-serif;
+  background: #f5f5f5;
+  color: #222;
+  min-height: 100vh;
+}
+
+/* ---- トップバー ---- */
+.top-bar {
+  background: #1a3a5c;
+  color: #fff;
+  padding: 0.5rem 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.admin-bar { background: #2c5a1e; }
+
+.lang-switch { display: flex; gap: 0.5rem; }
+.lang-switch button {
+  background: transparent;
+  border: 1px solid rgba(255,255,255,0.6);
+  color: #fff;
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+.lang-switch button:hover { background: rgba(255,255,255,0.2); }
+
+/* ---- コンテンツ ---- */
+.content {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 1rem;
+}
+
+/* ---- カード ---- */
+.card {
+  background: #fff;
+  border-radius: 8px;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.12);
+  padding: 1rem;
+  margin-bottom: 1rem;
+}
+
+/* ---- ログイン ---- */
+#login-screen {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 1rem;
+}
+
+#app-title {
+  font-size: 1.5rem;
+  color: #1a3a5c;
+  margin-bottom: 1.5rem;
+}
+
+.login-card { width: 100%; max-width: 360px; }
+
+/* ---- フォーム ---- */
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-bottom: 0.75rem;
+}
+
+.field label { font-size: 0.85rem; color: #555; }
+
+input[type="text"],
+input[type="password"],
+input[type="number"],
+input[type="time"],
+select,
+textarea {
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  padding: 0.4rem 0.6rem;
+  font-size: 1rem;
+  width: 100%;
+}
+
+input:disabled, select:disabled { background: #f0f0f0; cursor: not-allowed; }
+
+/* ---- ボタン ---- */
+button {
+  border: none;
+  border-radius: 4px;
+  padding: 0.4rem 0.9rem;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+
+.btn-primary {
+  background: #1a3a5c;
+  color: #fff;
+  width: 100%;
+  padding: 0.6rem;
+  font-size: 1rem;
+  margin-top: 0.5rem;
+}
+.btn-primary:hover { background: #244a75; }
+
+#btn-add-workplace,
+#btn-save-draft,
+#btn-confirm-shift,
+#btn-save-actual,
+#btn-confirm-actual,
+#btn-logout-st,
+#btn-logout-admin,
+.btn-admin-detail,
+.btn-admin-print {
+  background: #c9a227;
+  color: #fff;
+  margin-right: 0.4rem;
+  margin-top: 0.4rem;
+}
+#btn-logout-st:hover,
+#btn-logout-admin:hover { background: #a07f1c; }
+
+.btn-add-row { background: #e8e8e8; font-size: 0.8rem; margin-top: 0.3rem; }
+.btn-del-row { background: #f0d0d0; font-size: 0.8rem; margin-top: 0.3rem; }
+
+/* ---- エラー ---- */
+.error-msg {
+  color: #c0392b;
+  font-size: 0.85rem;
+  margin-top: 0.4rem;
+  padding: 0.3rem 0.5rem;
+  background: #fde8e8;
+  border-radius: 4px;
+}
+
+.warn-bar {
+  background: #fff3cd;
+  border: 1px solid #ffc107;
+  border-radius: 4px;
+  padding: 0.4rem 0.8rem;
+  margin-bottom: 0.75rem;
+  color: #856404;
+}
+
+.info-bar {
+  font-size: 0.85rem;
+  color: #555;
+  margin-bottom: 0.5rem;
+}
+
+/* ---- 月ナビ ---- */
+.month-nav {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+  font-size: 1.1rem;
+  font-weight: bold;
+}
+.month-nav button {
+  background: #e8e8e8;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  font-size: 1rem;
+}
+
+/* ---- シフト日カード ---- */
+.day-card {
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  padding: 0.5rem;
+  margin-bottom: 0.5rem;
+  background: #fff;
+}
+
+.holiday-day {
+  border-color: #c0392b;
+  background: #fef5f5;
+}
+
+.day-header {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+  margin-bottom: 0.25rem;
+}
+
+.day-num { font-weight: bold; font-size: 1.1rem; }
+.day-dow { color: #888; font-size: 0.85rem; }
+
+.holiday-label {
+  color: #c0392b;
+  font-size: 0.9rem;
+  font-weight: bold;
+}
+
+.shift-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 0.3rem;
+  align-items: center;
+}
+
+.shift-row select { flex: 2; min-width: 100px; }
+.shift-row input[type="time"] { flex: 1; min-width: 80px; }
+
+/* ---- 勤務先 ---- */
+.wp-item {
+  padding: 0.5rem 0.75rem;
+  margin-bottom: 0.5rem;
+  font-size: 0.9rem;
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.wp-name { font-weight: bold; }
+
+/* ---- 履歴 ---- */
+.history-item {
+  padding: 0.3rem 0;
+  border-bottom: 1px solid #eee;
+  font-size: 0.9rem;
+}
+
+/* ---- 管理フィルター ---- */
+.filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+.filter-bar input, .filter-bar select { flex: 1; min-width: 120px; width: auto; }
+
+/* ---- カウント ---- */
+.counts-bar {
+  background: #fff;
+  border-radius: 6px;
+  padding: 0.5rem 0.75rem;
+  margin-bottom: 0.75rem;
+  font-size: 0.85rem;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+/* ---- 管理テーブル ---- */
+.admin-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+  background: #fff;
+}
+.admin-table th {
+  background: #1a3a5c;
+  color: #fff;
+  padding: 0.4rem 0.5rem;
+  text-align: left;
+}
+.admin-table td {
+  padding: 0.35rem 0.5rem;
+  border-bottom: 1px solid #eee;
+}
+.admin-table tr:hover td { background: #f8f8f8; }
+.actual-over td { background: #fde8e8 !important; }
+
+/* ---- 設定セクション ---- */
+.settings-section {
+  margin-top: 1rem;
+}
+.settings-section summary {
+  cursor: pointer;
+  font-weight: bold;
+  padding: 0.4rem;
+}
+.setting-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding: 0.5rem;
+}
+.setting-group button { background: #e8e8e8; }
+.setting-group button:hover { background: #d0d0d0; }
+
+/* ---- ダイアログ ---- */
+#admin-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+.admin-dialog {
+  max-width: 720px;
+  width: 95%;
+  max-height: 85vh;
+  overflow-y: auto;
+}
+.month-list { margin: 0.75rem 0; }
+.month-list > div { padding: 0.3rem 0; border-bottom: 1px solid #eee; font-size: 0.9rem; }
+
+/* ---- スピナー ---- */
+#global-spinner {
+  position: fixed;
+  inset: 0;
+  background: rgba(255,255,255,0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+}
+.spinner-inner {
+  background: #1a3a5c;
+  color: #fff;
+  padding: 1rem 2rem;
+  border-radius: 8px;
+  font-size: 1rem;
+}
+
+/* ---- レスポンシブ ---- */
+@media (min-width: 768px) {
+  #shifts-table {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 0.5rem;
+  }
+}
+</style>

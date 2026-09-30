@@ -1,0 +1,790 @@
+<script>
+(function () {
+  'use strict';
+
+  // ---- 国際化 ----
+  const I18N_DATA = <?!= JSON.stringify(I18N) ?>;
+  let currentLang = 'ja';
+
+  function t(key) {
+    return (I18N_DATA[currentLang] && I18N_DATA[currentLang][key]) ||
+           (I18N_DATA['ja'] && I18N_DATA['ja'][key]) || key;
+  }
+
+  function applyLang() {
+    document.querySelectorAll('[data-i18n]').forEach(function (el) {
+      el.textContent = t(el.getAttribute('data-i18n'));
+    });
+  }
+
+  document.querySelectorAll('.lang-switch button').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      currentLang = btn.getAttribute('data-lang');
+      applyLang();
+    });
+  });
+
+  // ---- サーバ呼び出し ----
+  function callServer(fn, args, retries) {
+    retries = retries === undefined ? 3 : retries;
+    return new Promise(function (resolve, reject) {
+      var delays = [2000, 4000, 8000];
+      function attempt(n) {
+        var runner = google.script.run
+          .withSuccessHandler(function (result) {
+            if (result && result.ok === false && result.error === 'BUSY' && n < retries) {
+              setTimeout(function () { attempt(n + 1); }, delays[n] || 8000);
+            } else {
+              resolve(result);
+            }
+          })
+          .withFailureHandler(function (err) {
+            if (n < retries) {
+              setTimeout(function () { attempt(n + 1); }, delays[n] || 8000);
+            } else {
+              reject(err);
+            }
+          });
+        runner[fn].apply(runner, args);
+      }
+      attempt(0);
+    });
+  }
+
+  // ---- 状態 ----
+  var state = {
+    token: null,
+    role: null,
+    studentId: null,
+    yearMonth: null,
+    monthData: null,
+    workplaces: []
+  };
+
+  // ---- ユーティリティ ----
+  function el(id) { return document.getElementById(id); }
+
+  function showScreen(name) {
+    ['login-screen', 'change-password-screen', 'student-screen', 'admin-screen'].forEach(function (s) {
+      el(s).hidden = s !== name;
+    });
+  }
+
+  function showError(elId, key) {
+    var e = el(elId);
+    e.textContent = t('error.' + key) || key;
+    e.hidden = false;
+  }
+
+  function hideError(elId) {
+    var e = el(elId);
+    if (e) e.hidden = true;
+  }
+
+  function showSpinner() { el('global-spinner').hidden = false; }
+  function hideSpinner() { el('global-spinner').hidden = true; }
+
+  function esc(s) {
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function currentJst() {
+    var now = new Date();
+    var jst = new Date(now.getTime() + 9 * 60 * 60 * 1000);
+    return jst.getUTCFullYear() + '-' +
+      String(jst.getUTCMonth() + 1).padStart(2, '0') + '-' +
+      String(jst.getUTCDate()).padStart(2, '0');
+  }
+
+  function todayYearMonth() {
+    var d = currentJst();
+    return d.slice(0, 7);
+  }
+
+  // ---- ログイン ----
+  el('btn-login').addEventListener('click', function () {
+    hideError('login-error');
+    var loginId = el('inp-loginId').value.trim();
+    var password = el('inp-password').value;
+    if (!loginId || !password) return;
+    showSpinner();
+    callServer('api_login', [loginId, password]).then(function (res) {
+      hideSpinner();
+      if (!res.ok) { showError('login-error', res.error); return; }
+      state.token = res.data.token;
+      state.role = res.data.role;
+      state.studentId = res.data.studentId;
+      if (res.data.mustChangePassword) {
+        showScreen('change-password-screen');
+      } else if (res.data.role === 'admin') {
+        state.yearMonth = todayYearMonth();
+        showScreen('admin-screen');
+        loadAdminBoard();
+      } else {
+        state.yearMonth = todayYearMonth();
+        showScreen('student-screen');
+        el('st-name').textContent = '';
+        loadStudentMonth();
+      }
+    }).catch(function () { hideSpinner(); showError('login-error', 'BUSY'); });
+  });
+
+  // ---- パスワード変更 ----
+  el('btn-change-password').addEventListener('click', function () {
+    hideError('change-password-error');
+    var cur = el('inp-cur-password').value;
+    var nw = el('inp-new-password').value;
+    showSpinner();
+    callServer('api_changePassword', [state.token, cur, nw]).then(function (res) {
+      hideSpinner();
+      if (!res.ok) { showError('change-password-error', res.error); return; }
+      if (state.role === 'admin') {
+        state.yearMonth = todayYearMonth();
+        showScreen('admin-screen');
+        loadAdminBoard();
+      } else {
+        state.yearMonth = todayYearMonth();
+        showScreen('student-screen');
+        loadStudentMonth();
+      }
+    }).catch(function () { hideSpinner(); showError('change-password-error', 'BUSY'); });
+  });
+
+  // ---- ログアウト ----
+  function doLogout() {
+    callServer('api_logout', [state.token]);
+    state.token = null; state.role = null; state.studentId = null;
+    showScreen('login-screen');
+  }
+  el('btn-logout-st').addEventListener('click', doLogout);
+  el('btn-logout-admin').addEventListener('click', doLogout);
+
+  // ---- 月ナビゲーション ----
+  function addMonth(ym, delta) {
+    var y = parseInt(ym.slice(0, 4), 10);
+    var m = parseInt(ym.slice(5, 7), 10) + delta;
+    if (m > 12) { y++; m -= 12; }
+    if (m < 1) { y--; m += 12; }
+    return y + '-' + String(m).padStart(2, '0');
+  }
+
+  el('btn-prev-month').addEventListener('click', function () {
+    state.yearMonth = addMonth(state.yearMonth, -1);
+    loadStudentMonth();
+  });
+  el('btn-next-month').addEventListener('click', function () {
+    state.yearMonth = addMonth(state.yearMonth, 1);
+    loadStudentMonth();
+  });
+
+  el('btn-admin-prev-month').addEventListener('click', function () {
+    state.yearMonth = addMonth(state.yearMonth, -1);
+    loadAdminBoard();
+  });
+  el('btn-admin-next-month').addEventListener('click', function () {
+    state.yearMonth = addMonth(state.yearMonth, 1);
+    loadAdminBoard();
+  });
+
+  // ---- 学生画面 ----
+  function loadStudentMonth() {
+    el('st-year-month').textContent = state.yearMonth;
+    showSpinner();
+    callServer('api_getMonth', [state.token, state.yearMonth]).then(function (res) {
+      hideSpinner();
+      if (!res.ok) { showError('shift-error', res.error); return; }
+      state.monthData = res.data;
+      renderShifts();
+      renderActual();
+    }).catch(function () { hideSpinner(); showError('shift-error', 'BUSY'); });
+
+    callServer('api_listWorkplaces', [state.token]).then(function (res) {
+      if (!res || !res.ok) return;
+      state.workplaces = res.data;
+      renderWorkplaces();
+    });
+
+    callServer('api_getHistory', [state.token]).then(function (res) {
+      if (!res || !res.ok) return;
+      renderHistory(res.data);
+    });
+  }
+
+  function getDayOfWeek(dateStr) {
+    var parts = dateStr.split('-');
+    var d = new Date(Date.UTC(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10)));
+    return ['日', '月', '火', '水', '木', '金', '土'][d.getUTCDay()];
+  }
+
+  function daysInMonth(ym) {
+    var y = parseInt(ym.slice(0, 4), 10);
+    var m = parseInt(ym.slice(5, 7), 10);
+    return new Date(Date.UTC(y, m, 0)).getUTCDate();
+  }
+
+  function renderShifts() {
+    var data = state.monthData;
+    if (!data) return;
+    var closed = data.closed;
+    var holidays = data.holidays || [];
+    var shifts = data.shifts || {};
+    var days = daysInMonth(data.yearMonth);
+    var html = '';
+    for (var d = 1; d <= days; d++) {
+      var dateStr = data.yearMonth + '-' + String(d).padStart(2, '0');
+      var isHoliday = holidays.indexOf(dateStr) >= 0;
+      var dow = getDayOfWeek(dateStr);
+      var dayShifts = shifts[String(d)] || [];
+      html += '<div class="day-card' + (isHoliday ? ' holiday-day' : '') + '" data-day="' + d + '">';
+      html += '<div class="day-header"><span class="day-num">' + d + '</span><span class="day-dow">' + dow + '</span></div>';
+      if (isHoliday) {
+        html += '<span class="holiday-label">' + t('label.holiday') + '</span>';
+      } else {
+        var rows = dayShifts.length > 0 ? dayShifts : [{}];
+        rows.forEach(function (sh, i) {
+          html += '<div class="shift-row" data-day="' + d + '" data-idx="' + i + '">';
+          html += '<select class="wp-select"' + (closed ? ' disabled' : '') + '>';
+          html += '<option value="">—</option>';
+          state.workplaces.forEach(function (wp) {
+            var sel = sh.workplace === wp.workplaceId ? ' selected' : '';
+            html += '<option value="' + esc(wp.workplaceId) + '"' + sel + '>' + esc(wp.name) + '</option>';
+          });
+          html += '</select>';
+          html += '<input type="time" class="sh-start" step="900" value="' + esc(sh.start || '') + '"' + (closed ? ' disabled' : '') + '>';
+          html += '<input type="time" class="sh-end" step="900" value="' + esc(sh.end || '') + '"' + (closed ? ' disabled' : '') + '>';
+          html += '</div>';
+        });
+        if (!closed) {
+          html += '<button class="btn-add-row" data-day="' + d + '">+ 行追加</button>';
+          if (dayShifts.length > 0) {
+            html += '<button class="btn-del-row" data-day="' + d + '">行削除</button>';
+          }
+        }
+      }
+      html += '</div>';
+    }
+    el('shifts-table').innerHTML = html;
+
+    if (closed) {
+      el('st-closed-notice').hidden = false;
+      el('st-closed-notice').textContent = t('label.closed');
+      el('btn-save-draft').disabled = true;
+      el('btn-confirm-shift').disabled = true;
+    } else {
+      el('st-closed-notice').hidden = true;
+      el('btn-save-draft').disabled = false;
+      el('btn-confirm-shift').disabled = false;
+    }
+
+    // 行追加・削除ボタン
+    el('shifts-table').addEventListener('click', function (ev) {
+      if (ev.target.classList.contains('btn-add-row')) {
+        var day = ev.target.getAttribute('data-day');
+        var card = ev.target.closest('.day-card');
+        var rows = card.querySelectorAll('.shift-row');
+        if (rows.length >= 10) return;
+        var idx = rows.length;
+        var div = document.createElement('div');
+        div.className = 'shift-row';
+        div.setAttribute('data-day', day);
+        div.setAttribute('data-idx', String(idx));
+        div.innerHTML = '<select class="wp-select"><option value="">—</option>' +
+          state.workplaces.map(function (wp) { return '<option value="' + esc(wp.workplaceId) + '">' + esc(wp.name) + '</option>'; }).join('') +
+          '</select><input type="time" class="sh-start" step="900"><input type="time" class="sh-end" step="900">';
+        ev.target.before(div);
+      }
+      if (ev.target.classList.contains('btn-del-row')) {
+        var card2 = ev.target.closest('.day-card');
+        var lastRow = card2.querySelector('.shift-row:last-of-type');
+        if (lastRow) lastRow.remove();
+      }
+    });
+  }
+
+  function collectShifts() {
+    var result = {};
+    var rows = el('shifts-table').querySelectorAll('.shift-row');
+    rows.forEach(function (row) {
+      var day = row.getAttribute('data-day');
+      var wp = row.querySelector('.wp-select').value;
+      var start = row.querySelector('.sh-start').value;
+      var end = row.querySelector('.sh-end').value;
+      if (!wp || !start || !end) return;
+      if (!result[day]) result[day] = [];
+      result[day].push({ workplace: wp, start: start, end: end });
+    });
+    return result;
+  }
+
+  el('btn-save-draft').addEventListener('click', function () {
+    hideError('shift-error');
+    var shifts = collectShifts();
+    var version = state.monthData ? state.monthData.version : 0;
+    showSpinner();
+    callServer('api_saveDraft', [state.token, state.yearMonth, shifts, version]).then(function (res) {
+      hideSpinner();
+      if (!res.ok) { showError('shift-error', res.error); return; }
+      state.monthData.version = res.data.version;
+      state.monthData.status = res.data.status;
+    }).catch(function () { hideSpinner(); showError('shift-error', 'BUSY'); });
+  });
+
+  el('btn-confirm-shift').addEventListener('click', function () {
+    hideError('shift-error');
+    var shifts = collectShifts();
+    var version = state.monthData ? state.monthData.version : 0;
+    showSpinner();
+    callServer('api_confirm', [state.token, state.yearMonth, shifts, version]).then(function (res) {
+      hideSpinner();
+      if (!res.ok) { showError('shift-error', res.error); return; }
+      state.monthData.version = res.data.version;
+      state.monthData.status = res.data.status;
+    }).catch(function () { hideSpinner(); showError('shift-error', 'BUSY'); });
+  });
+
+  function renderActual() {
+    var data = state.monthData;
+    if (!data || !data.actual || !data.actual.open) {
+      el('actual-section').hidden = true;
+      return;
+    }
+    el('actual-section').hidden = false;
+    var actual = data.actual;
+    var actualShifts = actual.shifts || {};
+    var planShifts = data.shifts || {};
+    var days = daysInMonth(data.yearMonth);
+    var html = '';
+    for (var d = 1; d <= days; d++) {
+      var ds = String(d);
+      var ps = planShifts[ds] || [];
+      var as = actualShifts[ds] || [];
+      html += '<div class="day-card" data-day="' + d + '">';
+      html += '<div class="day-header"><span class="day-num">' + d + '</span></div>';
+      html += '<div class="actual-row">';
+      html += '<span class="plan-shifts">予定: ' + (ps.map(function (s) { return s.start + '-' + s.end; }).join(', ') || '—') + '</span>';
+      html += '</div>';
+      var rows2 = as.length > 0 ? as : [{}];
+      rows2.forEach(function (sh, i) {
+        html += '<div class="shift-row" data-day="' + d + '" data-idx="' + i + '">';
+        html += '<select class="wp-select">';
+        html += '<option value="">—</option>';
+        state.workplaces.forEach(function (wp) {
+          var sel = sh.workplace === wp.workplaceId ? ' selected' : '';
+          html += '<option value="' + esc(wp.workplaceId) + '"' + sel + '>' + esc(wp.name) + '</option>';
+        });
+        html += '</select>';
+        html += '<input type="time" class="sh-start" step="900" value="' + esc(sh.start || '') + '">';
+        html += '<input type="time" class="sh-end" step="900" value="' + esc(sh.end || '') + '">';
+        html += '</div>';
+      });
+      html += '</div>';
+    }
+    el('actual-table').innerHTML = html;
+  }
+
+  el('btn-save-actual').addEventListener('click', function () {
+    hideError('actual-error');
+    var shifts = {};
+    el('actual-table').querySelectorAll('.shift-row').forEach(function (row) {
+      var day = row.getAttribute('data-day');
+      var wp = row.querySelector('.wp-select').value;
+      var start = row.querySelector('.sh-start').value;
+      var end = row.querySelector('.sh-end').value;
+      if (!wp || !start || !end) return;
+      if (!shifts[day]) shifts[day] = [];
+      shifts[day].push({ workplace: wp, start: start, end: end });
+    });
+    var version = state.monthData ? state.monthData.version : 0;
+    showSpinner();
+    callServer('api_saveActual', [state.token, state.yearMonth, shifts, version]).then(function (res) {
+      hideSpinner();
+      if (!res.ok) { showError('actual-error', res.error); return; }
+      state.monthData.version = res.data.version;
+    }).catch(function () { hideSpinner(); showError('actual-error', 'BUSY'); });
+  });
+
+  el('btn-confirm-actual').addEventListener('click', function () {
+    hideError('actual-error');
+    var version = state.monthData ? state.monthData.version : 0;
+    showSpinner();
+    callServer('api_confirmActual', [state.token, state.yearMonth, version]).then(function (res) {
+      hideSpinner();
+      if (!res.ok) { showError('actual-error', res.error); return; }
+      el('actual-section').hidden = true;
+    }).catch(function () { hideSpinner(); showError('actual-error', 'BUSY'); });
+  });
+
+  // ---- 勤務先 ----
+  function renderWorkplaces() {
+    var html = state.workplaces.map(function (wp) {
+      return '<div class="wp-item card">' +
+        '<span class="wp-name">' + esc(wp.name) + '</span>' +
+        ' ' + esc(wp.prefecture) +
+        ' ' + esc(wp.jobDescription) +
+        ' ' + wp.baseHourlyWage + '円' +
+        ' [' + esc(wp.verificationStatus) + ']' +
+        '</div>';
+    }).join('');
+    el('workplace-list').innerHTML = html;
+  }
+
+  el('btn-add-workplace').addEventListener('click', function () {
+    el('workplace-form').hidden = false;
+  });
+  el('btn-cancel-workplace').addEventListener('click', function () {
+    el('workplace-form').hidden = true;
+    hideError('wp-error');
+  });
+
+  el('btn-save-workplace').addEventListener('click', function () {
+    hideError('wp-error');
+    var earlyStart = el('wp-early-start').value || null;
+    var earlyEnd = el('wp-early-end').value || null;
+    var earlyPremium = el('wp-early-premium').value !== '' ? parseInt(el('wp-early-premium').value, 10) : null;
+    var wp = {
+      name: el('wp-name').value.trim(),
+      prefecture: el('wp-pref').value.trim(),
+      jobDescription: el('wp-job').value.trim(),
+      baseHourlyWage: parseInt(el('wp-wage').value, 10),
+      earlyStart: earlyStart,
+      earlyEnd: earlyEnd,
+      earlyPremium: earlyPremium
+    };
+    showSpinner();
+    callServer('api_saveWorkplace', [state.token, wp]).then(function (res) {
+      hideSpinner();
+      if (!res.ok) { showError('wp-error', res.error); return; }
+      el('workplace-form').hidden = true;
+      return callServer('api_listWorkplaces', [state.token]);
+    }).then(function (res) {
+      if (!res || !res.ok) return;
+      state.workplaces = res.data;
+      renderWorkplaces();
+    }).catch(function () { hideSpinner(); showError('wp-error', 'BUSY'); });
+  });
+
+  // ---- 履歴 ----
+  function renderHistory(rows) {
+    var html = rows.map(function (r) {
+      return '<div class="history-item">' + esc(r.yearMonth) + ' ' + esc(r.status) + ' ' + esc(r.actualStatus || '') + '</div>';
+    }).join('');
+    el('history-list').innerHTML = html || '—';
+  }
+
+  // ---- 管理画面 ----
+  function loadAdminBoard() {
+    el('admin-year-month').textContent = state.yearMonth;
+    var className = el('admin-class-filter').value.trim() || null;
+    var status = el('admin-status-filter').value || null;
+    var query = el('admin-query').value.trim() || null;
+    showSpinner();
+    callServer('api_adminBoard', [state.token, state.yearMonth, { className: className, status: status, query: query }]).then(function (res) {
+      hideSpinner();
+      if (!res.ok) return;
+      renderAdminBoard(res.data);
+    }).catch(function () { hideSpinner(); });
+  }
+
+  function renderAdminBoard(data) {
+    var c = data.counts;
+    el('admin-counts').innerHTML =
+      '学生:' + c.students + ' 確定:' + c.confirmed + ' 下書:' + c.draft +
+      ' 未提:' + c.notSubmitted + ' エラー:' + c.error + ' 対象外:' + c.outOfScope +
+      ' | 勤務先確認待:' + data.workplacesPending + '(' + data.workplacesOverdue + ')' +
+      ' 実績未確認:' + data.actualUnconfirmed;
+
+    var html = '<table class="admin-table"><thead><tr>' +
+      '<th>学籍番号</th><th>氏名</th><th>クラス</th><th>状態</th><th>エラー</th><th>実績</th><th>更新日</th><th>操作</th>' +
+      '</tr></thead><tbody>';
+    data.rows.forEach(function (row) {
+      var cls = row.actualOver ? ' class="actual-over"' : '';
+      html += '<tr' + cls + '>';
+      html += '<td>' + esc(row.studentId) + '</td>';
+      html += '<td>' + esc(row.name) + '</td>';
+      html += '<td>' + esc(row.className) + '</td>';
+      html += '<td>' + esc(row.displayStatus) + '</td>';
+      html += '<td>' + esc((row.errorCodes || []).join(' ')) + '</td>';
+      html += '<td>' + esc(row.actualStatus || '') + '</td>';
+      html += '<td>' + esc(row.updatedAt || '') + '</td>';
+      html += '<td><button class="btn-admin-detail" data-sid="' + esc(row.studentId) + '">詳細</button>';
+      html += '<button class="btn-admin-print" data-sid="' + esc(row.studentId) + '">印刷</button></td>';
+      html += '</tr>';
+    });
+    html += '</tbody></table>';
+    el('admin-board').innerHTML = html;
+
+    el('admin-board').addEventListener('click', function (ev) {
+      if (ev.target.classList.contains('btn-admin-detail')) {
+        openStudentDetail(ev.target.getAttribute('data-sid'));
+      }
+      if (ev.target.classList.contains('btn-admin-print')) {
+        printStudent(ev.target.getAttribute('data-sid'));
+      }
+    });
+  }
+
+  el('btn-admin-search').addEventListener('click', loadAdminBoard);
+
+  function openStudentDetail(studentId) {
+    showSpinner();
+    callServer('api_adminStudentDetail', [state.token, studentId]).then(function (res) {
+      hideSpinner();
+      if (!res.ok) return;
+      var d = res.data;
+      var html = '<h2>' + esc(d.student.name) + ' (' + esc(d.student.studentId) + ')</h2>';
+      html += '<p>クラス: ' + esc(d.student.className) + ' 状態: ' + esc(d.student.status) + '</p>';
+      html += '<div class="month-list">';
+      d.months.forEach(function (m) {
+        html += '<div>' + esc(m.yearMonth) + ' ' + esc(m.status) + ' ' + esc(m.actualStatus || '') +
+          ' <button class="btn-school-confirm" data-sid="' + esc(studentId) + '" data-ym="' + esc(m.yearMonth) + '">学校確定</button>' +
+          ' <button class="btn-grant-unlock" data-sid="' + esc(studentId) + '" data-ym="' + esc(m.yearMonth) + '">修正許可</button>' +
+          ' <button class="btn-print-month" data-sid="' + esc(studentId) + '" data-ym="' + esc(m.yearMonth) + '">印刷</button>' +
+          '</div>';
+      });
+      html += '</div>';
+      html += '<button id="btn-reset-password" data-sid="' + esc(studentId) + '">パスワード再発行</button>';
+      html += ' <button id="btn-unlock-login" data-sid="' + esc(studentId) + '">ロック解除</button>';
+      html += ' <button id="btn-print-all-2y" data-sid="' + esc(studentId) + '">2年間一括印刷</button>';
+      el('admin-dialog-body').innerHTML = html;
+      el('admin-dialog-overlay').hidden = false;
+
+      el('admin-dialog-body').addEventListener('click', function (ev) {
+        if (ev.target.classList.contains('btn-school-confirm')) {
+          var sid = ev.target.getAttribute('data-sid');
+          var ym = ev.target.getAttribute('data-ym');
+          callServer('api_adminSchoolConfirm', [state.token, sid, ym]).then(function (r) {
+            if (r.ok) openStudentDetail(sid);
+          });
+        }
+        if (ev.target.classList.contains('btn-grant-unlock')) {
+          var sid2 = ev.target.getAttribute('data-sid');
+          var ym2 = ev.target.getAttribute('data-ym');
+          var until = prompt('修正許可の期限（YYYY-MM-DD HH:MM）');
+          if (!until) return;
+          callServer('api_adminGrantUnlock', [state.token, sid2, ym2, until]);
+        }
+        if (ev.target.classList.contains('btn-print-month')) {
+          var sid3 = ev.target.getAttribute('data-sid');
+          var ym3 = ev.target.getAttribute('data-ym');
+          printStudentMonths(sid3, [ym3]);
+        }
+        if (ev.target.id === 'btn-reset-password') {
+          callServer('api_adminResetPassword', [state.token, ev.target.getAttribute('data-sid')]).then(function (r) {
+            if (r.ok) alert('新パスワード: ' + r.data.initialPassword);
+          });
+        }
+        if (ev.target.id === 'btn-unlock-login') {
+          callServer('api_adminUnlockLogin', [state.token, ev.target.getAttribute('data-sid')]);
+        }
+        if (ev.target.id === 'btn-print-all-2y') {
+          var sid4 = ev.target.getAttribute('data-sid');
+          var today = currentJst().slice(0, 7);
+          var months = [];
+          for (var i = 0; i < 24; i++) {
+            months.push(addMonth(today, -i));
+          }
+          printStudentMonths(sid4, months);
+        }
+      });
+    }).catch(function () { hideSpinner(); });
+  }
+
+  el('btn-dialog-close').addEventListener('click', function () {
+    el('admin-dialog-overlay').hidden = true;
+    el('admin-dialog-body').innerHTML = '';
+  });
+
+  function printStudent(studentId) {
+    var today = currentJst().slice(0, 7);
+    printStudentMonths(studentId, [today]);
+  }
+
+  function printStudentMonths(studentId, months) {
+    // 最大50件×24か月で分割
+    var studentIds = [studentId];
+    var chunks = [];
+    for (var i = 0; i < months.length; i += 24) {
+      chunks.push(months.slice(i, i + 24));
+    }
+    var promises = chunks.map(function (chunk) {
+      return callServer('api_adminPrintHtml', [state.token, { studentIds: studentIds, yearMonths: chunk }]);
+    });
+    Promise.all(promises).then(function (results) {
+      var html = results.map(function (r) { return r.ok ? r.data.html : ''; }).join('');
+      var w = window.open('', '_blank');
+      if (!w) return;
+      w.document.open();
+      w.document.write(html);
+      w.document.close();
+      w.print();
+    });
+  }
+
+  // ---- 管理者追加 ----
+  el('btn-create-admin').addEventListener('click', function () {
+    showSpinner();
+    callServer('api_adminCreateAdmin', [state.token]).then(function (res) {
+      hideSpinner();
+      if (!res.ok) return;
+      alert('新管理者 ID: ' + res.data.loginId + ' パスワード: ' + res.data.initialPassword);
+    }).catch(function () { hideSpinner(); });
+  });
+
+  // ---- 学生フォーム ----
+  el('btn-open-student-form').addEventListener('click', function () {
+    var studentId = prompt('学籍番号（新規は空欄）');
+    var name = prompt('氏名');
+    var className = prompt('クラス');
+    var birthDate = prompt('生年月日（YYYY-MM-DD）');
+    var language = prompt('言語（ja/ne/vi）');
+    var enrollmentDate = prompt('入学日（YYYY-MM-DD）');
+    var status = prompt('状態（在籍/休学/卒業/退学）');
+    if (!name || !className || !birthDate || !language || !enrollmentDate || !status) return;
+    var student = {
+      studentId: studentId || undefined,
+      name: name,
+      className: className,
+      birthDate: birthDate,
+      language: language,
+      enrollmentDate: enrollmentDate,
+      graduationDate: null,
+      withdrawalDate: null,
+      status: status,
+      workPermission: false,
+      permissionExpires: null,
+      permissionCheckedAt: null
+    };
+    showSpinner();
+    callServer('api_adminUpsertStudent', [state.token, student]).then(function (res) {
+      hideSpinner();
+      if (!res.ok) { alert('エラー: ' + res.error); return; }
+      if (res.data.created) {
+        alert('作成しました。ID: ' + res.data.loginId + ' パスワード: ' + res.data.initialPassword);
+      } else {
+        alert('更新しました。');
+      }
+    }).catch(function () { hideSpinner(); });
+  });
+
+  // ---- 締切設定 ----
+  el('btn-open-deadline').addEventListener('click', function () {
+    var ym = prompt('年月（YYYY-MM）', state.yearMonth);
+    var cls = prompt('クラス');
+    var deadlineAt = prompt('予定締切（YYYY-MM-DD HH:MM）');
+    var actualDeadlineAt = prompt('実績締切（YYYY-MM-DD HH:MM、省略可）') || null;
+    if (!ym || !cls || !deadlineAt) return;
+    showSpinner();
+    callServer('api_adminSetDeadline', [state.token, { yearMonth: ym, className: cls, deadlineAt: deadlineAt, actualDeadlineAt: actualDeadlineAt }]).then(function (res) {
+      hideSpinner();
+      if (!res.ok) alert('エラー: ' + res.error);
+    }).catch(function () { hideSpinner(); });
+  });
+
+  // ---- 長期休業設定 ----
+  el('btn-open-holiday').addEventListener('click', function () {
+    showSpinner();
+    callServer('api_adminListHolidays', [state.token]).then(function (res) {
+      hideSpinner();
+      if (!res.ok) return;
+      var list = res.data.map(function (h) {
+        return h.holidayId + ': ' + h.name + ' ' + h.startDate + '〜' + h.endDate;
+      }).join('\n');
+      var name = prompt('名前（リスト:' + list + '）');
+      if (!name) return;
+      var startDate = prompt('開始日（YYYY-MM-DD）');
+      var endDate = prompt('終了日（YYYY-MM-DD）');
+      var schoolYear = prompt('年度（例: 2025）');
+      if (!startDate || !endDate || !schoolYear) return;
+      return callServer('api_adminSetHoliday', [state.token, { name: name, startDate: startDate, endDate: endDate, schoolYear: schoolYear }]);
+    }).then(function (res) {
+      if (res && !res.ok) alert('エラー: ' + res.error);
+    }).catch(function () {});
+  });
+
+  // ---- 最低賃金設定 ----
+  el('btn-open-wage').addEventListener('click', function () {
+    var pref = prompt('都道府県名（例: 東京都）');
+    var amount = parseInt(prompt('金額（円）'), 10);
+    var effectiveFrom = prompt('発効日（YYYY-MM-DD）');
+    if (!pref || !amount || !effectiveFrom) return;
+    showSpinner();
+    callServer('api_adminSetMinimumWage', [state.token, { prefecture: pref, amount: amount, effectiveFrom: effectiveFrom, effectiveTo: null }]).then(function (res) {
+      hideSpinner();
+      if (!res.ok) alert('エラー: ' + res.error);
+    }).catch(function () { hideSpinner(); });
+  });
+
+  // ---- 学校設定 ----
+  el('btn-open-settings').addEventListener('click', function () {
+    showSpinner();
+    callServer('api_adminGetSettings', [state.token]).then(function (res) {
+      hideSpinner();
+      if (!res.ok) return;
+      var d = res.data;
+      var schoolName = prompt('学校名', d.schoolName);
+      if (schoolName === null) return;
+      return callServer('api_adminSetSettings', [state.token, { schoolName: schoolName }]);
+    }).then(function (res) {
+      if (res && !res.ok) alert('エラー: ' + res.error);
+    }).catch(function () {});
+  });
+
+  // ---- 保存期限超過データ削除 ----
+  el('btn-purge-expired').addEventListener('click', function () {
+    if (!confirm('保存期限を超えたデータを削除します。よろしいですか？')) return;
+    showSpinner();
+    callServer('api_adminPurgeExpired', [state.token]).then(function (res) {
+      hideSpinner();
+      if (!res.ok) { alert('エラー: ' + res.error); return; }
+      alert(res.data.deletedRows + ' 件削除しました。');
+    }).catch(function () { hideSpinner(); });
+  });
+
+  // ---- クラス一括印刷 ----
+  el('btn-print-all-class').addEventListener('click', function () {
+    var cls = el('admin-class-filter').value.trim();
+    var ym = state.yearMonth;
+    showSpinner();
+    callServer('api_adminBoard', [state.token, ym, { className: cls || null }]).then(function (res) {
+      hideSpinner();
+      if (!res.ok) return;
+      var rows = res.data.rows.filter(function (r) { return r.displayStatus !== '対象外'; });
+      var sids = rows.map(function (r) { return r.studentId; });
+      printBatch(sids, [ym]);
+    }).catch(function () { hideSpinner(); });
+  });
+
+  // ---- 表示中一括印刷 ----
+  el('btn-print-board').addEventListener('click', function () {
+    var sids = Array.from(el('admin-board').querySelectorAll('.btn-admin-print')).map(function (btn) {
+      return btn.getAttribute('data-sid');
+    });
+    printBatch(sids, [state.yearMonth]);
+  });
+
+  function printBatch(sids, months) {
+    var chunks = [];
+    for (var i = 0; i < sids.length; i += 50) {
+      chunks.push(sids.slice(i, i + 50));
+    }
+    var promises = chunks.map(function (chunk) {
+      return callServer('api_adminPrintHtml', [state.token, { studentIds: chunk, yearMonths: months }]);
+    });
+    Promise.all(promises).then(function (results) {
+      var html = results.map(function (r) { return r.ok ? r.data.html : ''; }).join('');
+      var w = window.open('', '_blank');
+      if (!w) return;
+      w.document.open();
+      w.document.write(html);
+      w.document.close();
+      w.print();
+    });
+  }
+
+})();
+</script>
