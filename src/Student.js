@@ -497,7 +497,7 @@ function student_saveSubmission_(token, yearMonth, shifts, expectedVersion, acti
       var newVersion = currentVersion + 1;
       var newStatus = (actionType === 'confirm') ? '確定済' : '下書き';
       var shiftJson = JSON.stringify(cleanedShifts);
-      var valCodesJson = JSON.stringify(evalResult.codes.map(function(c) { return c.code; }));
+      var valCodesJson = JSON.stringify(evalResult.codes.filter(function(c) { return c.severity === 'block'; }).map(function(c) { return c.code; }));
 
       if (freshSub) {
         freshSub.status = newStatus;

@@ -9,6 +9,20 @@ function api_adminUpsertStudent(token, student) {
     if (!student.studentId || !student.name || !student.className) {
       return { ok: false, error: 'BAD_REQUEST' };
     }
+    var DATE_REGEX = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
+    if (student.birthDate && !DATE_REGEX.test(student.birthDate)) {
+      return { ok: false, error: 'BAD_REQUEST' };
+    }
+    if (student.enrollmentDate && !DATE_REGEX.test(student.enrollmentDate)) {
+      return { ok: false, error: 'BAD_REQUEST' };
+    }
+    if (student.graduationDate && !DATE_REGEX.test(student.graduationDate)) {
+      return { ok: false, error: 'BAD_REQUEST' };
+    }
+    if (student.withdrawalDate && !DATE_REGEX.test(student.withdrawalDate)) {
+      return { ok: false, error: 'BAD_REQUEST' };
+    }
+
     var validLangs = ['ja', 'ne', 'vi'];
     if (student.language && validLangs.indexOf(student.language) === -1) {
       return { ok: false, error: 'BAD_REQUEST' };
@@ -316,7 +330,6 @@ function api_adminSchoolConfirm(token, studentId, yearMonth) {
       }
       if (!student) return { ok: false, error: 'NOT_FOUND' };
 
-      // 在籍状態が 退学・休学・卒業 のどれか
       var allowedStatuses = ['退学', '休学', '卒業'];
       if (allowedStatuses.indexOf(student.status) === -1) {
         return { ok: false, error: 'FORBIDDEN' };
@@ -331,7 +344,6 @@ function api_adminSchoolConfirm(token, studentId, yearMonth) {
         }
       }
 
-      // 未入力（行が無い、または状態が未入力）のときだけ
       if (sub && sub.status !== '未入力') {
         return { ok: false, error: 'FORBIDDEN' };
       }
@@ -552,51 +564,614 @@ function api_adminSetSettings(token, params) {
   }
 }
 
-// 段階3以降のスタブ
 function api_adminCreateAdmin(token) {
-  var auth = auth_verifySession_(token, 'admin');
-  if (!auth.ok) return auth;
-  return { ok: false, error: 'INTERNAL' };
+  try {
+    var auth = auth_verifySession_(token, 'admin');
+    if (!auth.ok) return auth;
+
+    var lock = LockService.getScriptLock();
+    if (!lock.tryLock(5000)) return { ok: false, error: 'BUSY' };
+
+    try {
+      var loginId = util_generateLoginId_();
+      var initialPassword = util_generatePassword_(14);
+      var salt = util_generateSalt_();
+      var pepper = PropertiesService.getScriptProperties().getProperty('PASSWORD_PEPPER');
+      var hash = util_hashPassword_(initialPassword, salt, pepper, 10000);
+      var now = util_nowJst_();
+
+      var newUser = {
+        login_id: loginId,
+        role: 'admin',
+        student_id: '',
+        password_salt: salt,
+        password_hash: hash,
+        hash_iterations: '10000',
+        force_password_change: 'true',
+        failed_login_count: '0',
+        locked_until: '',
+        created_at: now
+      };
+      db_insertRow_('USERS', newUser);
+
+      db_logAudit_('MASTER_UPDATE', auth.user.login_id, 'admin', '', '', null, { op: 'create_admin', loginId: loginId });
+
+      return {
+        ok: true,
+        data: {
+          loginId: loginId,
+          initialPassword: initialPassword
+        }
+      };
+    } finally {
+      lock.releaseLock();
+    }
+  } catch (err) {
+    return { ok: false, error: 'INTERNAL' };
+  }
 }
 
 function api_adminStudentDetail(token, studentId) {
-  var auth = auth_verifySession_(token, 'admin');
-  if (!auth.ok) return auth;
-  return { ok: false, error: 'INTERNAL' };
+  try {
+    var auth = auth_verifySession_(token, 'admin');
+    if (!auth.ok) return auth;
+
+    if (!studentId || typeof studentId !== 'string') return { ok: false, error: 'BAD_REQUEST' };
+
+    var students = db_readAllRows_('STUDENTS');
+    var targetStudent = null;
+    for (var i = 0; i < students.length; i++) {
+      if (students[i].student_id === studentId) {
+        targetStudent = students[i];
+        break;
+      }
+    }
+    if (!targetStudent) return { ok: false, error: 'NOT_FOUND' };
+
+    var studentData = {
+      studentId: targetStudent.student_id,
+      name: targetStudent.name,
+      className: targetStudent.class,
+      birthDate: targetStudent.birth_date || '',
+      language: targetStudent.language || 'ja',
+      enrollmentDate: targetStudent.enrollment_date || '',
+      graduationDate: targetStudent.graduation_date || null,
+      withdrawalDate: targetStudent.withdrawal_date || null,
+      status: targetStudent.status || '在籍',
+      workPermission: targetStudent.work_permission === 'true',
+      permissionExpires: targetStudent.permission_expires || null,
+      permissionCheckedAt: targetStudent.permission_checked_at || null
+    };
+
+    var wpRows = db_readAllRows_('WORKPLACES');
+    var workplacesList = [];
+    for (var j = 0; j < wpRows.length; j++) {
+      var wp = wpRows[j];
+      if (wp.student_id === studentId && wp.active !== 'false') {
+        workplacesList.push({
+          workplaceId: wp.workplace_id,
+          name: wp.name,
+          prefecture: wp.prefecture,
+          jobDescription: wp.job_description,
+          baseHourlyWage: Number(wp.baseHourlyWage || wp.base_hourly_wage) || 0,
+          earlyStart: wp.early_start || null,
+          earlyEnd: wp.early_end || null,
+          earlyPremium: wp.early_premium ? Number(wp.early_premium) : null,
+          verificationStatus: wp.verification_status || '確認中',
+          verifiedBy: wp.verified_by || null,
+          verifiedAt: wp.verified_at || null
+        });
+      }
+    }
+
+    var subRows = db_readAllRows_('MONTHLY_SUBMISSIONS');
+    var mySubs = [];
+    for (var k = 0; k < subRows.length; k++) {
+      if (subRows[k].student_id === studentId) {
+        mySubs.push(subRows[k]);
+      }
+    }
+    mySubs.sort(function(a, b) {
+      return b.year_month.localeCompare(a.year_month);
+    });
+
+    var monthsList = mySubs.map(function(s) {
+      return {
+        yearMonth: s.year_month,
+        status: s.status,
+        actualStatus: s.actual_status || '未確認'
+      };
+    });
+
+    return {
+      ok: true,
+      data: {
+        student: studentData,
+        workplaces: workplacesList,
+        months: monthsList
+      }
+    };
+  } catch (err) {
+    return { ok: false, error: 'INTERNAL' };
+  }
 }
 
 function api_adminBoard(token, yearMonth, filters) {
-  var auth = auth_verifySession_(token, 'admin');
-  if (!auth.ok) return auth;
-  return { ok: false, error: 'INTERNAL' };
+  try {
+    var auth = auth_verifySession_(token, 'admin');
+    if (!auth.ok) return auth;
+
+    if (!yearMonth || typeof yearMonth !== 'string' || !/^\d{4}-(0[1-9]|1[0-2])$/.test(yearMonth)) {
+      return { ok: false, error: 'BAD_REQUEST' };
+    }
+    var f = filters || {};
+
+    var allStudents = db_readAllRows_('STUDENTS');
+    var allSubs = db_readAllRows_('MONTHLY_SUBMISSIONS');
+    var subMap = {};
+    for (var i = 0; i < allSubs.length; i++) {
+      var s = allSubs[i];
+      if (s.year_month === yearMonth) {
+        subMap[s.student_id] = s;
+      }
+    }
+
+    var daysInMonth = core_getDaysInMonth_(yearMonth);
+    var firstDayStr = core_buildDateStr_(yearMonth, 1);
+    var lastDayStr = core_buildDateStr_(yearMonth, daysInMonth);
+
+    // 対象学生の判定
+    // 入学日がその月の末日以前で、退学日・卒業日（早いほう、無ければ無期限）がその月の初日以後の学生。
+    // 加えて、その月の行を持つ学生。
+    var targetStudents = [];
+    for (var j = 0; j < allStudents.length; j++) {
+      var st = allStudents[j];
+      var hasSub = !!subMap[st.student_id];
+
+      var enrollmentValid = !st.enrollment_date || st.enrollment_date <= lastDayStr;
+
+      var endDates = [];
+      if (st.withdrawal_date) endDates.push(st.withdrawal_date);
+      if (st.graduation_date) endDates.push(st.graduation_date);
+      var earliestEnd = null;
+      if (endDates.length > 0) {
+        endDates.sort();
+        earliestEnd = endDates[0];
+      }
+
+      var activeInMonth = enrollmentValid && (!earliestEnd || earliestEnd >= firstDayStr);
+
+      if (activeInMonth || hasSub) {
+        targetStudents.push(st);
+      }
+    }
+
+    // クラス絞り込み
+    var classTargetStudents = targetStudents;
+    if (f.className) {
+      classTargetStudents = targetStudents.filter(function(st) {
+        return st.class === f.className;
+      });
+    }
+
+    var counts = {
+      students: classTargetStudents.length,
+      confirmed: 0,
+      draft: 0,
+      notSubmitted: 0,
+      error: 0,
+      outOfScope: 0
+    };
+
+    var allRows = [];
+    var now = util_nowJst_();
+    var nextMonthFirstDay = core_addDays_(lastDayStr, 1) + ' 00:00';
+    var isActualPeriod = (now >= nextMonthFirstDay);
+    var actualUnconfirmedCount = 0;
+
+    for (var k = 0; k < classTargetStudents.length; k++) {
+      var cSt = classTargetStudents[k];
+      var cSub = subMap[cSt.student_id];
+
+      var displayStatus = '未提出';
+      var errorCodes = [];
+      var actualStatus = '未確認';
+      var actualOver = false;
+      var updatedAt = null;
+
+      if (cSub) {
+        if (cSub.status === '確定済') {
+          displayStatus = '確定済';
+        } else if (cSub.status === '学校確定') {
+          displayStatus = '対象外';
+        } else if (cSub.status === '下書き') {
+          displayStatus = '下書き';
+        } else {
+          displayStatus = '未提出';
+        }
+
+        if (cSub.validation_codes) {
+          try {
+            var parsed = JSON.parse(cSub.validation_codes);
+            if (Array.isArray(parsed)) {
+              // 重複排除
+              var codeSet = {};
+              for (var ci = 0; ci < parsed.length; ci++) {
+                codeSet[parsed[ci]] = true;
+              }
+              errorCodes = Object.keys(codeSet);
+            }
+          } catch (e) {}
+        }
+
+        if (cSub.actual_status) {
+          actualStatus = cSub.actual_status;
+        }
+
+        if (cSub.actual_codes) {
+          try {
+            var aParsed = JSON.parse(cSub.actual_codes);
+            if (Array.isArray(aParsed) && aParsed.indexOf('ACTUAL_OVER') !== -1) {
+              actualOver = true;
+            }
+          } catch (e) {}
+        }
+
+        if (cSub.updated_at) {
+          updatedAt = cSub.updated_at;
+        }
+      }
+
+      // counts 集計
+      if (displayStatus === '確定済') counts.confirmed++;
+      else if (displayStatus === '下書き') counts.draft++;
+      else if (displayStatus === '未提出') counts.notSubmitted++;
+      else if (displayStatus === '対象外') counts.outOfScope++;
+
+      if (errorCodes.length > 0) counts.error++;
+
+      if (isActualPeriod && displayStatus !== '対象外') {
+        if (actualStatus === '未確認') {
+          actualUnconfirmedCount++;
+        }
+      }
+
+      allRows.push({
+        studentId: cSt.student_id,
+        name: cSt.name,
+        className: cSt.class,
+        displayStatus: displayStatus,
+        errorCodes: errorCodes,
+        actualStatus: actualStatus,
+        actualOver: actualOver,
+        updatedAt: updatedAt
+      });
+    }
+
+    // 勤務先の確認待ち集計
+    var allWorkplaces = db_readAllRows_('WORKPLACES');
+    var holidays = db_readAllRows_('SCHOOL_HOLIDAYS').map(function(h) {
+      return { startDate: h.start_date, endDate: h.end_date };
+    });
+    var settings = student_getSettings_();
+    var slaDays = settings.workplaceSlaDays || 3;
+
+    var workplacesPending = 0;
+    var workplacesOverdue = 0;
+    var todayStr = util_todayJst_();
+
+    for (var wIdx = 0; wIdx < allWorkplaces.length; wIdx++) {
+      var wp = allWorkplaces[wIdx];
+      if (wp.active !== 'false' && wp.verification_status === '確認中') {
+        workplacesPending++;
+
+        // 営業日数計算: 登録日の翌日から今日まで
+        var createdDate = (wp.created_at || '').slice(0, 10);
+        if (createdDate && createdDate < todayStr) {
+          var busDays = 0;
+          var cur = core_addDays_(createdDate, 1);
+          while (cur <= todayStr) {
+            var parts = cur.split('-');
+            var dt = new Date(Date.UTC(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2])));
+            var dayOfWeek = dt.getUTCDay(); // 0: Sun, 6: Sat
+            if (dayOfWeek !== 0 && dayOfWeek !== 6 && !core_isHoliday_(holidays, cur)) {
+              busDays++;
+            }
+            cur = core_addDays_(cur, 1);
+          }
+          if (busDays > slaDays) {
+            workplacesOverdue++;
+          }
+        }
+      }
+    }
+
+    // rows の絞り込み（status, query）
+    var filteredRows = allRows;
+    if (f.status) {
+      filteredRows = filteredRows.filter(function(r) {
+        return r.displayStatus === f.status;
+      });
+    }
+    if (f.query) {
+      var q = f.query.trim();
+      filteredRows = filteredRows.filter(function(r) {
+        return r.studentId.indexOf(q) === 0 || r.name.indexOf(q) !== -1;
+      });
+    }
+
+    filteredRows.sort(function(a, b) {
+      return a.studentId.localeCompare(b.studentId);
+    });
+
+    return {
+      ok: true,
+      data: {
+        counts: counts,
+        workplacesPending: workplacesPending,
+        workplacesOverdue: workplacesOverdue,
+        actualUnconfirmed: actualUnconfirmedCount,
+        rows: filteredRows
+      }
+    };
+  } catch (err) {
+    return { ok: false, error: 'INTERNAL' };
+  }
 }
 
 function api_adminQuarterCheck(token, params) {
-  var auth = auth_verifySession_(token, 'admin');
-  if (!auth.ok) return auth;
-  return { ok: false, error: 'INTERNAL' };
+  try {
+    var auth = auth_verifySession_(token, 'admin');
+    if (!auth.ok) return auth;
+
+    if (!params || typeof params !== 'object') return { ok: false, error: 'BAD_REQUEST' };
+    var endYearMonth = params.endYearMonth;
+    var className = params.className || null;
+
+    if (!endYearMonth || !/^\d{4}-(0[1-9]|1[0-2])$/.test(endYearMonth)) {
+      return { ok: false, error: 'BAD_REQUEST' };
+    }
+
+    var parts = endYearMonth.split('-');
+    var ey = Number(parts[0]);
+    var em = Number(parts[1]);
+
+    var d1 = new Date(Date.UTC(ey, em - 3, 1));
+    var ym1 = d1.getUTCFullYear() + '-' + String(d1.getUTCMonth() + 1).padStart(2, '0');
+    var d2 = new Date(Date.UTC(ey, em - 2, 1));
+    var ym2 = d2.getUTCFullYear() + '-' + String(d2.getUTCMonth() + 1).padStart(2, '0');
+    var ym3 = endYearMonth;
+
+    var months = [ym1, ym2, ym3];
+
+    var allStudents = db_readAllRows_('STUDENTS');
+    if (className) {
+      allStudents = allStudents.filter(function(st) { return st.class === className; });
+    }
+    allStudents.sort(function(a, b) { return a.student_id.localeCompare(b.student_id); });
+
+    var allSubs = db_readAllRows_('MONTHLY_SUBMISSIONS');
+    var subMap = {};
+    for (var i = 0; i < allSubs.length; i++) {
+      var s = allSubs[i];
+      subMap[s.student_id + '_' + s.year_month] = s;
+    }
+
+    var rows = [];
+    for (var j = 0; j < allStudents.length; j++) {
+      var st = allStudents[j];
+      var studentMonths = [];
+
+      for (var mi = 0; mi < months.length; mi++) {
+        var ym = months[mi];
+        var sub = subMap[st.student_id + '_' + ym];
+
+        var displayStatus = '未提出';
+        var actualStatus = '未確認';
+        var actualTotalMinutes = null;
+        var actualOver = false;
+
+        if (sub) {
+          if (sub.status === '確定済') displayStatus = '確定済';
+          else if (sub.status === '学校確定') displayStatus = '対象外';
+          else if (sub.status === '下書き') displayStatus = '下書き';
+
+          if (sub.actual_status) actualStatus = sub.actual_status;
+          if (sub.actual_json) actualTotalMinutes = Number(sub.actual_total_minutes) || 0;
+
+          if (sub.actual_codes) {
+            try {
+              var aParsed = JSON.parse(sub.actual_codes);
+              if (Array.isArray(aParsed) && aParsed.indexOf('ACTUAL_OVER') !== -1) {
+                actualOver = true;
+              }
+            } catch (e) {}
+          }
+        }
+
+        studentMonths.push({
+          yearMonth: ym,
+          displayStatus: displayStatus,
+          actualStatus: actualStatus,
+          actualTotalMinutes: actualTotalMinutes,
+          actualOver: actualOver
+        });
+      }
+
+      rows.push({
+        studentId: st.student_id,
+        name: st.name,
+        className: st.class,
+        months: studentMonths
+      });
+    }
+
+    db_logAudit_('QUARTER_CHECK', auth.user.login_id, 'admin', '', endYearMonth, null, { className: className });
+
+    return {
+      ok: true,
+      data: {
+        months: months,
+        rows: rows
+      }
+    };
+  } catch (err) {
+    return { ok: false, error: 'INTERNAL' };
+  }
 }
 
 function api_adminSetHoliday(token, params) {
-  var auth = auth_verifySession_(token, 'admin');
-  if (!auth.ok) return auth;
-  return { ok: false, error: 'INTERNAL' };
+  try {
+    var auth = auth_verifySession_(token, 'admin');
+    if (!auth.ok) return auth;
+
+    if (!params || typeof params !== 'object') return { ok: false, error: 'BAD_REQUEST' };
+    var name = params.name;
+    var startDate = params.startDate;
+    var endDate = params.endDate;
+    var schoolYear = params.schoolYear;
+
+    if (!name || !startDate || !endDate) return { ok: false, error: 'BAD_REQUEST' };
+    if (startDate > endDate) return { ok: false, error: 'BAD_REQUEST' };
+
+    var lock = LockService.getScriptLock();
+    if (!lock.tryLock(5000)) return { ok: false, error: 'BUSY' };
+
+    try {
+      var rows = db_readAllRows_('SCHOOL_HOLIDAYS');
+      var holidayId = params.holidayId;
+
+      if (holidayId) {
+        var existing = null;
+        for (var i = 0; i < rows.length; i++) {
+          if (rows[i].holiday_id === holidayId) {
+            existing = rows[i];
+            break;
+          }
+        }
+        if (existing) {
+          existing.name = name;
+          existing.start_date = startDate;
+          existing.end_date = endDate;
+          existing.school_year = schoolYear != null ? String(schoolYear) : '';
+          db_updateRow_('SCHOOL_HOLIDAYS', existing._rowNum, existing);
+          db_logAudit_('MASTER_UPDATE', auth.user.login_id, 'admin', '', '', null, { op: 'update_holiday', holidayId: holidayId });
+          return { ok: true, data: { holidayId: holidayId } };
+        }
+      }
+
+      var newId = 'HOL_' + util_uuid_().slice(0, 8);
+      var newHol = {
+        holiday_id: newId,
+        name: name,
+        start_date: startDate,
+        end_date: endDate,
+        school_year: schoolYear != null ? String(schoolYear) : ''
+      };
+      db_insertRow_('SCHOOL_HOLIDAYS', newHol);
+      db_logAudit_('MASTER_UPDATE', auth.user.login_id, 'admin', '', '', null, { op: 'set_holiday', holidayId: newId });
+
+      return { ok: true, data: { holidayId: newId } };
+    } finally {
+      lock.releaseLock();
+    }
+  } catch (err) {
+    return { ok: false, error: 'INTERNAL' };
+  }
 }
 
 function api_adminDeleteHoliday(token, holidayId) {
-  var auth = auth_verifySession_(token, 'admin');
-  if (!auth.ok) return auth;
-  return { ok: false, error: 'INTERNAL' };
+  try {
+    var auth = auth_verifySession_(token, 'admin');
+    if (!auth.ok) return auth;
+
+    if (!holidayId) return { ok: false, error: 'BAD_REQUEST' };
+
+    var lock = LockService.getScriptLock();
+    if (!lock.tryLock(5000)) return { ok: false, error: 'BUSY' };
+
+    try {
+      var rows = db_readAllRows_('SCHOOL_HOLIDAYS');
+      var existing = null;
+      for (var i = 0; i < rows.length; i++) {
+        if (rows[i].holiday_id === holidayId) {
+          existing = rows[i];
+          break;
+        }
+      }
+      if (!existing) return { ok: false, error: 'NOT_FOUND' };
+
+      db_deleteRow_('SCHOOL_HOLIDAYS', existing._rowNum);
+      db_logAudit_('MASTER_UPDATE', auth.user.login_id, 'admin', '', '', null, { op: 'delete_holiday', holidayId: holidayId });
+
+      return { ok: true, data: null };
+    } finally {
+      lock.releaseLock();
+    }
+  } catch (err) {
+    return { ok: false, error: 'INTERNAL' };
+  }
 }
 
 function api_adminListHolidays(token) {
-  var auth = auth_verifySession_(token, 'admin');
-  if (!auth.ok) return auth;
-  return { ok: false, error: 'INTERNAL' };
+  try {
+    var auth = auth_verifySession_(token, 'admin');
+    if (!auth.ok) return auth;
+
+    var rows = db_readAllRows_('SCHOOL_HOLIDAYS');
+    var list = rows.map(function(h) {
+      return {
+        holidayId: h.holiday_id,
+        name: h.name,
+        startDate: h.start_date,
+        endDate: h.end_date,
+        schoolYear: h.school_year ? Number(h.school_year) : null
+      };
+    });
+    return { ok: true, data: list };
+  } catch (err) {
+    return { ok: false, error: 'INTERNAL' };
+  }
 }
 
 function api_adminPurgeExpired(token) {
-  var auth = auth_verifySession_(token, 'admin');
-  if (!auth.ok) return auth;
-  return { ok: false, error: 'INTERNAL' };
+  try {
+    var auth = auth_verifySession_(token, 'admin');
+    if (!auth.ok) return auth;
+
+    var lock = LockService.getScriptLock();
+    if (!lock.tryLock(5000)) return { ok: false, error: 'BUSY' };
+
+    try {
+      var settings = student_getSettings_();
+      var retentionMonths = settings.retentionMonths || 24;
+
+      var currentYm = util_currentYearMonth_();
+      var parts = currentYm.split('-');
+      var cy = Number(parts[0]);
+      var cm = Number(parts[1]);
+
+      var cutoffDate = new Date(Date.UTC(cy, cm - 1 - retentionMonths, 1));
+      var cutoffYm = cutoffDate.getUTCFullYear() + '-' + String(cutoffDate.getUTCMonth() + 1).padStart(2, '0');
+
+      var rows = db_readAllRows_('MONTHLY_SUBMISSIONS');
+      var deletedRows = 0;
+
+      // 行番号がずれないよう、後ろから削除
+      for (var i = rows.length - 1; i >= 0; i--) {
+        if (rows[i].year_month < cutoffYm) {
+          db_deleteRow_('MONTHLY_SUBMISSIONS', rows[i]._rowNum);
+          deletedRows++;
+        }
+      }
+
+      db_logAudit_('PURGE', auth.user.login_id, 'admin', '', '', null, { deletedRows: deletedRows });
+
+      return { ok: true, data: { deletedRows: deletedRows } };
+    } finally {
+      lock.releaseLock();
+    }
+  } catch (err) {
+    return { ok: false, error: 'INTERNAL' };
+  }
 }
