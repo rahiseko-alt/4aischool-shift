@@ -192,12 +192,24 @@ test('パスワードは秘密鍵（PASSWORD_PEPPER）を使ってハッシュ�
   ok(ctx.api('api_login', st.loginId, st.password));
 });
 
-test('パスワードの照合では HMAC-SHA256 を10,000回以上反復する', () => {
+test('パスワードは指示書 6.3 の方式（HMAC-SHA256 を保存した回数だけ反復、既定10,000回）で保存される', () => {
+  // GAS の Utilities を1万回呼ぶと本物の環境では数分かかるため、呼び出し回数ではなく結果の値で確かめる（2026-09-30 変更）。
+  const crypto = require('node:crypto');
   const ctx = boot();
   const st = addStudent(ctx);
-  const before = ctx.env.hmacCalls;
-  ok(ctx.api('api_login', st.loginId, st.password));
-  assert.ok(ctx.env.hmacCalls - before >= 10000, 'ログイン1回の HMAC 回数: ' + (ctx.env.hmacCalls - before));
+  const sheet = ctx.env.spreadsheets.get(ctx.env.properties.get('SHIFT_DB_ID')).getSheetByName('USERS');
+  const unq = (v) => String(v).replace(/^'/, '');
+  const rows = sheet.getDataRange().getValues().map((r) => r.map(unq));
+  const head = rows[0];
+  const row = rows.find((r) => r[head.indexOf('login_id')] === st.loginId);
+  assert.ok(row, 'USERS に学生の行が無い');
+  const salt = row[head.indexOf('password_salt')];
+  const iterations = Number(row[head.indexOf('hash_iterations')]);
+  assert.ok(iterations >= 10000, '反復回数: ' + iterations);
+  const pepper = ctx.env.properties.get('PASSWORD_PEPPER');
+  let sig = crypto.createHmac('sha256', pepper).update(salt + ':' + st.password).digest();
+  for (let i = 1; i < iterations; i++) sig = crypto.createHmac('sha256', pepper).update(sig.toString('base64') + salt).digest();
+  assert.equal(row[head.indexOf('password_hash')], sig.toString('base64'));
 });
 
 test('パスワード・トークンを base64・16進・SHA-256 1回にしただけの値も、スプレッドシートに残らない', () => {
