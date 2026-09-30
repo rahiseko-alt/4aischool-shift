@@ -10,27 +10,39 @@ var PREFECTURES_ = [
   '熊本県', '大分県', '宮崎県', '鹿児島県', '沖縄県'
 ];
 
+// 学校設定の項目と、受け付ける値の範囲。ここに無い項目は読みも書きもしない。
+var SETTINGS_RULES_ = {
+  schoolName: { type: 'string', max: 100 },
+  retentionMonths: { type: 'int', min: 24, max: 120 },
+  sessionTtlMinutes: { type: 'int', min: 5, max: 720 },
+  workplaceSlaDays: { type: 'int', min: 1, max: 30 },
+  allowLeaveOfAbsence: { type: 'bool' },
+  actualConfirmDefaultDay: { type: 'int', min: 1, max: 28 }
+};
+var SETTINGS_DEFAULTS_ = {
+  schoolName: '', retentionMonths: 24, sessionTtlMinutes: 120, workplaceSlaDays: 3,
+  allowLeaveOfAbsence: false, actualConfirmDefaultDay: 10
+};
+
+function settings_isValid_(key, value) {
+  var rule = SETTINGS_RULES_[key];
+  if (!rule) return false;
+  if (rule.type === 'string') return typeof value === 'string' && value.length <= rule.max;
+  if (rule.type === 'bool') return typeof value === 'boolean';
+  return typeof value === 'number' && Math.floor(value) === value && value >= rule.min && value <= rule.max;
+}
+
 function student_getSettings_() {
   var rows = db_readAllRows_('SETTINGS');
-  var map = {
-    schoolName: '',
-    retentionMonths: 24,
-    sessionTtlMinutes: 120,
-    workplaceSlaDays: 3,
-    allowLeaveOfAbsence: false,
-    actualConfirmDefaultDay: 10,
-    timezone: 'Asia/Tokyo'
-  };
+  var map = { timezone: 'Asia/Tokyo' };
+  for (var k in SETTINGS_DEFAULTS_) map[k] = SETTINGS_DEFAULTS_[k];
   for (var i = 0; i < rows.length; i++) {
-    var k = rows[i].key;
-    var v = rows[i].value;
-    if (k === 'retentionMonths' || k === 'sessionTtlMinutes' || k === 'workplaceSlaDays' || k === 'actualConfirmDefaultDay') {
-      map[k] = Number(v);
-    } else if (k === 'allowLeaveOfAbsence') {
-      map[k] = (v === 'true');
-    } else if (k) {
-      map[k] = v;
-    }
+    var key = rows[i].key;
+    var rule = SETTINGS_RULES_[key];
+    if (!rule) continue;
+    var raw = rows[i].value;
+    var v = rule.type === 'int' ? Number(raw) : rule.type === 'bool' ? raw === 'true' : raw;
+    if (settings_isValid_(key, v)) map[key] = v;
   }
   return map;
 }
@@ -304,6 +316,7 @@ function api_getMonth(token, yearMonth) {
       ok: true,
       data: {
         yearMonth: yearMonth,
+        student: { studentId: student.student_id, name: student.name },
         status: status,
         closed: closed,
         deadlineAt: deadlineAt,
@@ -1019,6 +1032,7 @@ function api_saveWorkplace(token, workplace) {
         existing.verified_by = '';
         existing.verified_at = '';
         db_updateRow_('WORKPLACES', existing._rowNum, existing);
+        db_logAudit_('MASTER_UPDATE', auth.user.login_id, 'student', auth.user.student_id, '', null, { op: 'update_workplace', workplaceId: existing.workplace_id });
 
         return { ok: true, data: { workplaceId: existing.workplace_id } };
       } else {
@@ -1040,6 +1054,7 @@ function api_saveWorkplace(token, workplace) {
           active: 'true'
         };
         db_insertRow_('WORKPLACES', newWp);
+        db_logAudit_('MASTER_UPDATE', auth.user.login_id, 'student', auth.user.student_id, '', null, { op: 'create_workplace', workplaceId: newId });
 
         return { ok: true, data: { workplaceId: newId } };
       }

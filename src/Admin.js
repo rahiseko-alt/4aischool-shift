@@ -1,36 +1,37 @@
 // 管理者の窓口
 
+// 学生情報の検証。必須: 学籍番号（英数字とハイフン20文字まで）・氏名・クラス・生年月日・入学日・言語・在籍状態・許可の有無。
+function admin_isValidStudent_(st) {
+  if (!st || typeof st !== 'object' || Array.isArray(st)) return false;
+  if (typeof st.studentId !== 'string' || !/^[A-Za-z0-9-]{1,20}$/.test(st.studentId)) return false;
+  if (!util_isNonEmptyString_(st.name, 100) || !util_isNonEmptyString_(st.className, 30)) return false;
+  if (!util_isDate_(st.birthDate) || !util_isDate_(st.enrollmentDate)) return false;
+  var optionalDates = [st.graduationDate, st.withdrawalDate, st.permissionExpires, st.permissionCheckedAt];
+  for (var i = 0; i < optionalDates.length; i++) {
+    var d = optionalDates[i];
+    if (d !== null && d !== undefined && d !== '' && !util_isDate_(d)) return false;
+  }
+  if (['ja', 'ne', 'vi'].indexOf(st.language) < 0) return false;
+  if (['在籍', '休学', '卒業', '退学'].indexOf(st.status) < 0) return false;
+  if (typeof st.workPermission !== 'boolean') return false;
+  return true;
+}
+
+// 学生のログイン行を探す（管理者の行は対象にしない）
+function admin_findStudentUser_(users, studentId) {
+  if (typeof studentId !== 'string' || studentId === '') return null;
+  for (var i = 0; i < users.length; i++) {
+    if (users[i].role === 'student' && users[i].student_id === studentId) return users[i];
+  }
+  return null;
+}
+
 function api_adminUpsertStudent(token, student) {
   try {
     var auth = auth_verifySession_(token, 'admin');
     if (!auth.ok) return auth;
 
-    if (!student || typeof student !== 'object') return { ok: false, error: 'BAD_REQUEST' };
-    if (!student.studentId || !student.name || !student.className) {
-      return { ok: false, error: 'BAD_REQUEST' };
-    }
-    var DATE_REGEX = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
-    if (student.birthDate && !DATE_REGEX.test(student.birthDate)) {
-      return { ok: false, error: 'BAD_REQUEST' };
-    }
-    if (student.enrollmentDate && !DATE_REGEX.test(student.enrollmentDate)) {
-      return { ok: false, error: 'BAD_REQUEST' };
-    }
-    if (student.graduationDate && !DATE_REGEX.test(student.graduationDate)) {
-      return { ok: false, error: 'BAD_REQUEST' };
-    }
-    if (student.withdrawalDate && !DATE_REGEX.test(student.withdrawalDate)) {
-      return { ok: false, error: 'BAD_REQUEST' };
-    }
-
-    var validLangs = ['ja', 'ne', 'vi'];
-    if (student.language && validLangs.indexOf(student.language) === -1) {
-      return { ok: false, error: 'BAD_REQUEST' };
-    }
-    var validStatuses = ['在籍', '休学', '卒業', '退学'];
-    if (student.status && validStatuses.indexOf(student.status) === -1) {
-      return { ok: false, error: 'BAD_REQUEST' };
-    }
+    if (!admin_isValidStudent_(student)) return { ok: false, error: 'BAD_REQUEST' };
 
     var lock = LockService.getScriptLock();
     if (!lock.tryLock(5000)) return { ok: false, error: 'BUSY' };
@@ -140,14 +141,7 @@ function api_adminResetPassword(token, studentId) {
     if (!lock.tryLock(5000)) return { ok: false, error: 'BUSY' };
 
     try {
-      var users = db_readAllRows_('USERS');
-      var targetUser = null;
-      for (var i = 0; i < users.length; i++) {
-        if (users[i].student_id === studentId) {
-          targetUser = users[i];
-          break;
-        }
-      }
+      var targetUser = admin_findStudentUser_(db_readAllRows_('USERS'), studentId);
 
       if (!targetUser) return { ok: false, error: 'NOT_FOUND' };
 
@@ -188,14 +182,7 @@ function api_adminUnlockLogin(token, studentId) {
     if (!lock.tryLock(5000)) return { ok: false, error: 'BUSY' };
 
     try {
-      var users = db_readAllRows_('USERS');
-      var targetUser = null;
-      for (var i = 0; i < users.length; i++) {
-        if (users[i].student_id === studentId) {
-          targetUser = users[i];
-          break;
-        }
-      }
+      var targetUser = admin_findStudentUser_(db_readAllRows_('USERS'), studentId);
 
       if (!targetUser) return { ok: false, error: 'NOT_FOUND' };
 
@@ -256,6 +243,12 @@ function api_adminGrantUnlock(token, studentId, yearMonth, until) {
   try {
     var auth = auth_verifySession_(token, 'admin');
     if (!auth.ok) return auth;
+
+    if (typeof studentId !== 'string' || !util_isYearMonth_(yearMonth) || !util_isDateTime_(until)) {
+      return { ok: false, error: 'BAD_REQUEST' };
+    }
+    var exists = db_readAllRows_('STUDENTS').some(function (st) { return st.student_id === studentId; });
+    if (!exists) return { ok: false, error: 'NOT_FOUND' };
 
     var lock = LockService.getScriptLock();
     if (!lock.tryLock(5000)) return { ok: false, error: 'BUSY' };
@@ -403,7 +396,10 @@ function api_adminSetDeadline(token, params) {
     var deadlineAt = params.deadlineAt;
     var actualDeadlineAt = params.actualDeadlineAt || null;
 
-    if (!yearMonth || !className || !deadlineAt) return { ok: false, error: 'BAD_REQUEST' };
+    if (!util_isYearMonth_(yearMonth) || !util_isNonEmptyString_(className, 30) || !util_isDateTime_(deadlineAt)) {
+      return { ok: false, error: 'BAD_REQUEST' };
+    }
+    if (actualDeadlineAt !== null && !util_isDateTime_(actualDeadlineAt)) return { ok: false, error: 'BAD_REQUEST' };
 
     var lock = LockService.getScriptLock();
     if (!lock.tryLock(5000)) return { ok: false, error: 'BUSY' };
@@ -453,7 +449,14 @@ function api_adminSetMinimumWage(token, params) {
     var effectiveFrom = params.effectiveFrom;
     var effectiveTo = params.effectiveTo || null;
 
-    if (!prefecture || !amount || !effectiveFrom) return { ok: false, error: 'BAD_REQUEST' };
+    if (PREFECTURES_.indexOf(prefecture) < 0) return { ok: false, error: 'BAD_REQUEST' };
+    if (typeof amount !== 'number' || Math.floor(amount) !== amount || amount < 1 || amount > 10000) {
+      return { ok: false, error: 'BAD_REQUEST' };
+    }
+    if (!util_isDate_(effectiveFrom)) return { ok: false, error: 'BAD_REQUEST' };
+    if (effectiveTo !== null && (!util_isDate_(effectiveTo) || effectiveTo < effectiveFrom)) {
+      return { ok: false, error: 'BAD_REQUEST' };
+    }
 
     var lock = LockService.getScriptLock();
     if (!lock.tryLock(5000)) return { ok: false, error: 'BUSY' };
@@ -529,7 +532,11 @@ function api_adminSetSettings(token, params) {
     var auth = auth_verifySession_(token, 'admin');
     if (!auth.ok) return auth;
 
-    if (!params || typeof params !== 'object') return { ok: false, error: 'BAD_REQUEST' };
+    if (!params || typeof params !== 'object' || Array.isArray(params)) return { ok: false, error: 'BAD_REQUEST' };
+    for (var pk in params) {
+      if (!Object.prototype.hasOwnProperty.call(params, pk)) continue;
+      if (!settings_isValid_(pk, params[pk])) return { ok: false, error: 'BAD_REQUEST' };
+    }
 
     var lock = LockService.getScriptLock();
     if (!lock.tryLock(5000)) return { ok: false, error: 'BUSY' };
@@ -844,12 +851,21 @@ function api_adminBoard(token, yearMonth, filters) {
         errorCodes: errorCodes,
         actualStatus: actualStatus,
         actualOver: actualOver,
-        updatedAt: updatedAt
+        updatedAt: updatedAt,
+        pendingWorkplaces: 0
       });
     }
 
     // 勤務先の確認待ち集計
     var allWorkplaces = db_readAllRows_('WORKPLACES');
+    // 画面で「どの学生の勤務先が確認待ちか」を探せるよう、行ごとの件数も返す
+    var pendingByStudent = {};
+    allWorkplaces.forEach(function (w) {
+      if (w.verification_status === '確認中' && w.active !== 'false') {
+        pendingByStudent[w.student_id] = (pendingByStudent[w.student_id] || 0) + 1;
+      }
+    });
+    allRows.forEach(function (r) { r.pendingWorkplaces = pendingByStudent[r.studentId] || 0; });
     var holidays = db_readAllRows_('SCHOOL_HOLIDAYS').map(function(h) {
       return { startDate: h.start_date, endDate: h.end_date };
     });
@@ -1031,8 +1047,14 @@ function api_adminSetHoliday(token, params) {
     var endDate = params.endDate;
     var schoolYear = params.schoolYear;
 
-    if (!name || !startDate || !endDate) return { ok: false, error: 'BAD_REQUEST' };
+    if (!util_isNonEmptyString_(name, 50) || !util_isDate_(startDate) || !util_isDate_(endDate)) {
+      return { ok: false, error: 'BAD_REQUEST' };
+    }
     if (startDate > endDate) return { ok: false, error: 'BAD_REQUEST' };
+    schoolYear = Number(schoolYear);
+    if (!(schoolYear >= 2000 && schoolYear <= 2100 && Math.floor(schoolYear) === schoolYear)) {
+      return { ok: false, error: 'BAD_REQUEST' };
+    }
 
     var lock = LockService.getScriptLock();
     if (!lock.tryLock(5000)) return { ok: false, error: 'BUSY' };

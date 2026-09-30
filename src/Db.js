@@ -64,6 +64,33 @@ function db_getSheet_(ss, sheetName) {
   return s;
 }
 
+// 本物のスプレッドシートは、書いた文字列を日付・時刻・数値・数式に自動で読み替える。
+// "2026-10" が日付に、"=USERS!E2" が数式になるのを防ぐため、ShiftDB へは値の先頭に ' を付けて書く
+// （' は文字列として固定する印で、本物のスプレッドシートは読み出し時に外す）。読むときも念のため外す。
+function db_toCell_(v) {
+  if (v === undefined || v === null) return '';
+  var s = String(v);
+  return s === '' ? '' : "'" + s;
+}
+
+function db_fromCell_(v) {
+  if (v === undefined || v === null) return '';
+  var s = String(v);
+  return s.charAt(0) === "'" ? s.slice(1) : s;
+}
+
+// 監査ログは人が読むので ' を付けないが、数式として解釈される文字で始まる値だけは無害化する。
+function db_auditCell_(v) {
+  if (v === undefined || v === null) return '';
+  var s = String(v);
+  return /^[=+\-@]/.test(s) ? "'" + s : s;
+}
+
+// 新しく作ったシートの全体を「書式なしテキスト」にする（自動変換を防ぐ二重の備え）。
+function db_setPlainText_(sheet) {
+  sheet.getRange(1, 1, sheet.getMaxRows(), sheet.getMaxColumns()).setNumberFormat('@');
+}
+
 function db_readAllRows_(sheetName) {
   var ss = db_getShiftDb_();
   var sheet = db_getSheet_(ss, sheetName);
@@ -77,7 +104,7 @@ function db_readAllRows_(sheetName) {
   for (var r = 1; r < data.length; r++) {
     var rowObj = { _rowNum: r + 1 };
     for (var c = 0; c < headers.length; c++) {
-      rowObj[headers[c]] = data[r][c] !== undefined ? String(data[r][c]) : '';
+      rowObj[db_fromCell_(headers[c])] = db_fromCell_(data[r][c]);
     }
     rows.push(rowObj);
   }
@@ -93,8 +120,7 @@ function db_insertRow_(sheetName, obj) {
   var row = [];
   for (var i = 0; i < headers.length; i++) {
     var h = headers[i];
-    var val = obj[h];
-    row.push(val !== undefined && val !== null ? String(val) : '');
+    row.push(db_toCell_(obj[h]));
   }
   sheet.appendRow(row);
   return obj;
@@ -109,8 +135,7 @@ function db_updateRow_(sheetName, rowNum, obj) {
   var row = [];
   for (var i = 0; i < headers.length; i++) {
     var h = headers[i];
-    var val = obj[h];
-    row.push(val !== undefined && val !== null ? String(val) : '');
+    row.push(db_toCell_(obj[h]));
   }
   sheet.getRange(rowNum, 1, 1, row.length).setValues([row]);
   return obj;
@@ -128,13 +153,13 @@ function db_logAudit_(action, userId, role, studentId, yearMonth, version, detai
   var ts = util_nowJst_();
   var row = [
     ts,
-    userId || '',
+    String(userId || '').slice(0, 64),
     role || '',
     action,
     studentId || '',
     yearMonth || '',
     version !== undefined && version !== null ? String(version) : '',
     details ? JSON.stringify(details) : ''
-  ];
+  ].map(db_auditCell_);
   sheet.appendRow(row);
 }

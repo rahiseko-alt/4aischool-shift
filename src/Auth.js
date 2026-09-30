@@ -7,62 +7,78 @@ function setupInitial() {
     return;
   }
 
-  // 1. ShiftDB 作成
+  // 1. ShiftDB 作成（全シートを書式なしテキストにしてから見出しを書く）
   var shiftDb = SpreadsheetApp.create('ShiftDB');
   var tableNames = [
     'STUDENTS', 'USERS', 'WORKPLACES', 'MONTHLY_SUBMISSIONS',
     'SCHOOL_HOLIDAYS', 'DEADLINES', 'MINIMUM_WAGES', 'SETTINGS', 'SESSIONS'
   ];
-
   for (var i = 0; i < tableNames.length; i++) {
     var tName = tableNames[i];
     var s = shiftDb.getSheetByName(tName) || shiftDb.insertSheet(tName);
-    var headers = DB_TABLES_[tName];
-    s.appendRow(headers);
+    db_setPlainText_(s);
+    s.appendRow(DB_TABLES_[tName]);
+    s.setFrozenRows(1);
   }
-  var defaultSheet1 = shiftDb.getSheetByName('Sheet1');
-  if (defaultSheet1 && shiftDb.getSheets().length > 1) {
-    try { shiftDb.deleteSheet(defaultSheet1); } catch (e) {}
-  }
+  setup_removeOtherSheets_(shiftDb, tableNames);
 
   // 2. AuditLog 作成
   var auditDb = SpreadsheetApp.create('AuditLog');
   var auditSheet = auditDb.getSheetByName('AUDIT_LOG') || auditDb.insertSheet('AUDIT_LOG');
+  db_setPlainText_(auditSheet);
   auditSheet.appendRow(DB_AUDIT_LOG_HEADERS_);
-  var defaultSheet2 = auditDb.getSheetByName('Sheet1');
-  if (defaultSheet2 && auditDb.getSheets().length > 1) {
-    try { auditDb.deleteSheet(defaultSheet2); } catch (e) {}
-  }
+  auditSheet.setFrozenRows(1);
+  setup_removeOtherSheets_(auditDb, ['AUDIT_LOG']);
 
-  // 3. Script Properties 設定
+  // 3. Script Properties 設定（SETUP_DONE は最後に置く。途中で失敗したら再実行できるように）
   var pepper = util_generateSalt_() + util_generateSalt_();
   props.setProperty('SHIFT_DB_ID', shiftDb.getId());
   props.setProperty('AUDIT_LOG_ID', auditDb.getId());
   props.setProperty('PASSWORD_PEPPER', pepper);
-  props.setProperty('SETUP_DONE', 'true');
 
   // 4. 初期管理者作成
   var adminLoginId = util_generateLoginId_();
   var adminPassword = util_generatePassword_(16);
   var salt = util_generateSalt_();
-  var hash = util_hashPassword_(adminPassword, salt, pepper, 10000);
-  var now = util_nowJst_();
+  db_insertRow_('USERS', {
+    login_id: adminLoginId,
+    role: 'admin',
+    student_id: '',
+    password_salt: salt,
+    password_hash: util_hashPassword_(adminPassword, salt, pepper, 10000),
+    hash_iterations: '10000',
+    force_password_change: 'true',
+    failed_login_count: '0',
+    locked_until: '',
+    created_at: util_nowJst_()
+  });
 
-  var usersSheet = shiftDb.getSheetByName('USERS');
-  usersSheet.appendRow([
-    adminLoginId,
-    'admin',
-    '',
-    salt,
-    hash,
-    '10000',
-    'true',
-    '0',
-    '',
-    now
-  ]);
-
+  props.setProperty('SETUP_DONE', 'true');
   Logger.log('INITIAL_ADMIN loginId=%s password=%s', adminLoginId, adminPassword);
+}
+
+// 新しいスプレッドシートに最初からある空のシート（言語により名前が違う）を消す。
+function setup_removeOtherSheets_(ss, keepNames) {
+  ss.getSheets().forEach(function (sh) {
+    if (keepNames.indexOf(sh.getName()) < 0 && ss.getSheets().length > 1) {
+      try { ss.deleteSheet(sh); } catch (e) {}
+    }
+  });
+}
+
+// 期限切れのセッションを消す（ロックの中で呼ぶ）。下の行から消して行番号のずれを防ぐ。
+function auth_purgeExpiredSessions_(now) {
+  var sessions = db_readAllRows_('SESSIONS');
+  for (var i = sessions.length - 1; i >= 0; i--) {
+    if (!sessions[i].expires_at || sessions[i].expires_at <= now) {
+      db_deleteRow_('SESSIONS', sessions[i]._rowNum);
+    }
+  }
+}
+
+function auth_sessionTtlMinutes_() {
+  var n = Number(student_getSettings_().sessionTtlMinutes);
+  return n >= 5 && n <= 720 ? Math.floor(n) : 120;
 }
 
 function api_login(loginId, password) {
@@ -92,9 +108,13 @@ function api_login(loginId, password) {
         return { ok: false, error: 'LOGIN_FAILED' };
       }
 
-      // ロック確認
+      // ロック確認。ロックが切れていたら失敗回数も0から数え直す。
       if (user.locked_until && user.locked_until > now) {
         return { ok: false, error: 'LOGIN_LOCKED', details: { lockedUntil: user.locked_until } };
+      }
+      if (user.locked_until) {
+        user.locked_until = '';
+        user.failed_login_count = '0';
       }
 
       // パスワード照合
@@ -124,10 +144,11 @@ function api_login(loginId, password) {
       user.locked_until = '';
       db_updateRow_('USERS', user._rowNum, user);
 
-      // セッション発行 (有効期限120分)
+      // セッション発行（有効期限は設定の分数）。ついでに期限切れのセッションを片付ける。
+      auth_purgeExpiredSessions_(now);
       var token = util_generateToken_();
       var tokenHash = util_sha256Hex_(token);
-      var expiresAt = util_addMinutesToJst_(now, 120);
+      var expiresAt = util_addMinutesToJst_(now, auth_sessionTtlMinutes_());
 
       db_insertRow_('SESSIONS', {
         token_hash: tokenHash,
@@ -163,13 +184,20 @@ function api_logout(token) {
     var auth = auth_verifySession_(token);
     if (!auth.ok) return { ok: false, error: 'AUTH_REQUIRED' };
 
-    var sessions = db_readAllRows_('SESSIONS');
-    var tokenHash = util_sha256Hex_(token);
-    for (var i = 0; i < sessions.length; i++) {
-      if (sessions[i].token_hash === tokenHash) {
-        db_deleteRow_('SESSIONS', sessions[i]._rowNum);
-        break;
+    var lock = LockService.getScriptLock();
+    if (!lock.tryLock(5000)) return { ok: false, error: 'BUSY' };
+    try {
+      // ロックの中で読み直してから消す（他の人の削除で行番号がずれるのを防ぐ）
+      var sessions = db_readAllRows_('SESSIONS');
+      var tokenHash = util_sha256Hex_(token);
+      for (var i = 0; i < sessions.length; i++) {
+        if (sessions[i].token_hash === tokenHash) {
+          db_deleteRow_('SESSIONS', sessions[i]._rowNum);
+          break;
+        }
       }
+    } finally {
+      lock.releaseLock();
     }
     return { ok: true, data: null };
   } catch (err) {

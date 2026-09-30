@@ -34,11 +34,13 @@ function backupMonthly() {
   Logger.log('Backup completed for: ' + currentYm);
 }
 
+// 画面からも呼べてしまう関数なので、すでにトリガーがあれば何もしない（消して作り直さない）。
 function installTriggers() {
   var triggers = ScriptApp.getProjectTriggers();
   for (var i = 0; i < triggers.length; i++) {
     if (triggers[i].getHandlerFunction() === 'backupMonthly') {
-      ScriptApp.deleteTrigger(triggers[i]);
+      Logger.log('Trigger already installed for backupMonthly');
+      return;
     }
   }
 

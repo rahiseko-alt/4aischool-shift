@@ -931,7 +931,7 @@ button:disabled {
     padding: 0.5rem;
   }
   .admin-sidebar-footer {
-    display: none;
+    padding: 0.5rem;
   }
 }
 
@@ -1212,4 +1212,34 @@ button:disabled {
 [hidden] {
   display: none !important;
 }
+
+/* 2026-09-30 追加: 保存の知らせ・計算欄・コード表示・管理フォーム */
+.info-msg {
+  color: var(--success);
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  border-radius: var(--radius-md);
+  padding: 0.6rem 0.9rem;
+  font-size: 0.88rem;
+  margin-top: 0.6rem;
+}
+.shift-row-calc {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  font-size: 0.8rem;
+  color: var(--text-sub);
+  min-height: 1rem;
+}
+.codes-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin: 0.35rem 0;
+}
+.admin-form .field input,
+.admin-form .field select {
+  width: 100%;
+}
+[hidden] { display: none !important; }
 </style>

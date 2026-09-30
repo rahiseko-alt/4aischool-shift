@@ -1,6 +1,7 @@
 cf36d9126a72ef32cd38c1510629b0ac99202819fc5c99dfcb4d962590da36b5  test/api/actual.test.js
 647f3a1e69346a5cff545905d47eac0b19fbb92cbd88027e2d13eadc0b0df0b2  test/api/admin.test.js
 cae13c058c8e423306344d2d3753eb5c9bdaa231f0f549b9f369331f53b55c76  test/api/auth.test.js
+ba9e93ac34791a5d57d634bfc2b4cc5fb5c0f2268dcdc4e3af0be762f42c8893  test/api/hardening.test.js
 960958dbb06ca47aa5126f58fa9e5489fde790370b0156de692b7f0d8b147593  test/api/permissions.test.js
 63712ead93b8da5fd792d03796eeab69099875ec3943b108fbe528467bd79313  test/api/submission.test.js
 a8cf6b8813bbbb73cda5b6edad449554d8a9277a4dc30510144f23ab8192d107  test/core/eligibility.test.js

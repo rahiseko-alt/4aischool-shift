@@ -158,16 +158,17 @@ function api_adminPrintHtml(token, params) {
     // 各学生 × 各月のページ生成
     for (var sIdx = 0; sIdx < studentIds.length; sIdx++) {
       var sId = studentIds[sIdx];
+      // 登録の無い学籍番号は、許可ありなどと推測せず「未登録」として印刷する
       var student = studentMap[sId] || {
         student_id: sId,
-        name: sId,
+        name: '（未登録の学籍番号）',
         class: '',
         status: '在籍',
         birth_date: '',
         enrollment_date: '',
         graduation_date: '',
         withdrawal_date: '',
-        work_permission: 'true',
+        work_permission: 'false',
         permission_expires: ''
       };
 
