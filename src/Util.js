@@ -27,7 +27,8 @@ function util_uuid_() {
 
 // 紛らわしい文字 0, O, 1, I, l を除いた英数字57文字
 var UTIL_LOGIN_ID_CHARS_ = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
-var UTIL_PASS_CHARS_ = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%^&*()-_=+';
+// パスワード用にもフォーマット文字列誤動作を防ぐため英数字のみを使用
+var UTIL_PASS_CHARS_ = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
 
 function util_generateLoginId_() {
   var raw = (Utilities.getUuid() + Utilities.getUuid()).replace(/[^a-zA-Z0-9]/g, '');
@@ -94,7 +95,6 @@ function util_constantTimeEquals_(a, b) {
 }
 
 function util_addMinutesToJst_(jstStr, minutes) {
-  // jstStr format: "YYYY-MM-DD HH:MM"
   var parts = jstStr.split(' ');
   var dParts = parts[0].split('-');
   var tParts = parts[1].split(':');
