@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  // ---- 国際化 ----
+  // ---- 国際化辞書 ----
   const I18N_DATA = <?!= JSON.stringify(I18N) ?>;
   let currentLang = 'ja';
 
@@ -12,9 +12,24 @@
   }
 
   function applyLang() {
-    document.querySelectorAll('[data-i18n]').forEach(function (el) {
-      el.textContent = t(el.getAttribute('data-i18n'));
+    document.querySelectorAll('[data-i18n]').forEach(function (element) {
+      const k = element.getAttribute('data-i18n');
+      element.textContent = t(k);
     });
+
+    document.querySelectorAll('.lang-switch button').forEach(function (btn) {
+      if (btn.getAttribute('data-lang') === currentLang) {
+        btn.classList.add('active');
+      } else {
+        btn.classList.remove('active');
+      }
+    });
+
+    if (state.monthData && !el('student-screen').hidden) {
+      renderShifts();
+      renderActual();
+      renderWorkplaces();
+    }
   }
 
   document.querySelectorAll('.lang-switch button').forEach(function (btn) {
@@ -24,7 +39,7 @@
     });
   });
 
-  // ---- サーバ呼び出し ----
+  // ---- サーバ呼び出し（指数バックオフ付きリトライ） ----
   function callServer(fn, args, retries) {
     retries = retries === undefined ? 3 : retries;
     return new Promise(function (resolve, reject) {
@@ -51,11 +66,12 @@
     });
   }
 
-  // ---- 状態 ----
+  // ---- アプリケーション状態 ----
   var state = {
     token: null,
     role: null,
     studentId: null,
+    studentName: null,
     yearMonth: null,
     monthData: null,
     workplaces: []
@@ -71,21 +87,22 @@
   }
 
   function showError(elId, key) {
-    var e = el(elId);
-    e.textContent = t('error.' + key) || key;
-    e.hidden = false;
+    var target = el(elId);
+    if (!target) return;
+    target.textContent = t('error.' + key) || key;
+    target.hidden = false;
   }
 
   function hideError(elId) {
-    var e = el(elId);
-    if (e) e.hidden = true;
+    var target = el(elId);
+    if (target) target.hidden = true;
   }
 
   function showSpinner() { el('global-spinner').hidden = false; }
   function hideSpinner() { el('global-spinner').hidden = true; }
 
   function esc(s) {
-    return String(s)
+    return String(s || '')
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
@@ -106,7 +123,27 @@
     return d.slice(0, 7);
   }
 
-  // ---- ログイン ----
+  function addMonth(ym, delta) {
+    var y = parseInt(ym.slice(0, 4), 10);
+    var m = parseInt(ym.slice(5, 7), 10) + delta;
+    if (m > 12) { y++; m -= 12; }
+    if (m < 1) { y--; m += 12; }
+    return y + '-' + String(m).padStart(2, '0');
+  }
+
+  function getDayOfWeek(dateStr) {
+    var parts = dateStr.split('-');
+    var d = new Date(Date.UTC(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10)));
+    return ['日', '月', '火', '水', '木', '金', '土'][d.getUTCDay()];
+  }
+
+  function daysInMonth(ym) {
+    var y = parseInt(ym.slice(0, 4), 10);
+    var m = parseInt(ym.slice(5, 7), 10);
+    return new Date(Date.UTC(y, m, 0)).getUTCDate();
+  }
+
+  // ---- ログイン処理 ----
   el('btn-login').addEventListener('click', function () {
     hideError('login-error');
     var loginId = el('inp-loginId').value.trim();
@@ -128,10 +165,12 @@
       } else {
         state.yearMonth = todayYearMonth();
         showScreen('student-screen');
-        el('st-name').textContent = '';
         loadStudentMonth();
       }
-    }).catch(function () { hideSpinner(); showError('login-error', 'BUSY'); });
+    }).catch(function () {
+      hideSpinner();
+      showError('login-error', 'BUSY');
+    });
   });
 
   // ---- パスワード変更 ----
@@ -152,27 +191,28 @@
         showScreen('student-screen');
         loadStudentMonth();
       }
-    }).catch(function () { hideSpinner(); showError('change-password-error', 'BUSY'); });
+    }).catch(function () {
+      hideSpinner();
+      showError('change-password-error', 'BUSY');
+    });
   });
 
   // ---- ログアウト ----
   function doLogout() {
-    callServer('api_logout', [state.token]);
-    state.token = null; state.role = null; state.studentId = null;
+    if (state.token) {
+      callServer('api_logout', [state.token]);
+    }
+    state.token = null;
+    state.role = null;
+    state.studentId = null;
+    state.monthData = null;
+    state.workplaces = [];
     showScreen('login-screen');
   }
   el('btn-logout-st').addEventListener('click', doLogout);
   el('btn-logout-admin').addEventListener('click', doLogout);
 
-  // ---- 月ナビゲーション ----
-  function addMonth(ym, delta) {
-    var y = parseInt(ym.slice(0, 4), 10);
-    var m = parseInt(ym.slice(5, 7), 10) + delta;
-    if (m > 12) { y++; m -= 12; }
-    if (m < 1) { y--; m += 12; }
-    return y + '-' + String(m).padStart(2, '0');
-  }
-
+  // ---- 月移動ボタン ----
   el('btn-prev-month').addEventListener('click', function () {
     state.yearMonth = addMonth(state.yearMonth, -1);
     loadStudentMonth();
@@ -191,7 +231,7 @@
     loadAdminBoard();
   });
 
-  // ---- 学生画面 ----
+  // ---- 学生画面ロード ----
   function loadStudentMonth() {
     el('st-year-month').textContent = state.yearMonth;
     showSpinner();
@@ -199,9 +239,15 @@
       hideSpinner();
       if (!res.ok) { showError('shift-error', res.error); return; }
       state.monthData = res.data;
+      if (res.data.student) {
+        el('st-name').textContent = res.data.student.name + ' (' + res.data.student.studentId + ')';
+      }
       renderShifts();
       renderActual();
-    }).catch(function () { hideSpinner(); showError('shift-error', 'BUSY'); });
+    }).catch(function () {
+      hideSpinner();
+      showError('shift-error', 'BUSY');
+    });
 
     callServer('api_listWorkplaces', [state.token]).then(function (res) {
       if (!res || !res.ok) return;
@@ -215,18 +261,7 @@
     });
   }
 
-  function getDayOfWeek(dateStr) {
-    var parts = dateStr.split('-');
-    var d = new Date(Date.UTC(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10)));
-    return ['日', '月', '火', '水', '木', '金', '土'][d.getUTCDay()];
-  }
-
-  function daysInMonth(ym) {
-    var y = parseInt(ym.slice(0, 4), 10);
-    var m = parseInt(ym.slice(5, 7), 10);
-    return new Date(Date.UTC(y, m, 0)).getUTCDate();
-  }
-
+  // ---- シフト入力表の描画 ----
   function renderShifts() {
     var data = state.monthData;
     if (!data) return;
@@ -234,41 +269,10 @@
     var holidays = data.holidays || [];
     var shifts = data.shifts || {};
     var days = daysInMonth(data.yearMonth);
-    var html = '';
-    for (var d = 1; d <= days; d++) {
-      var dateStr = data.yearMonth + '-' + String(d).padStart(2, '0');
-      var isHoliday = holidays.indexOf(dateStr) >= 0;
-      var dow = getDayOfWeek(dateStr);
-      var dayShifts = shifts[String(d)] || [];
-      html += '<div class="day-card' + (isHoliday ? ' holiday-day' : '') + '" data-day="' + d + '">';
-      html += '<div class="day-header"><span class="day-num">' + d + '</span><span class="day-dow">' + dow + '</span></div>';
-      if (isHoliday) {
-        html += '<span class="holiday-label">' + t('label.holiday') + '</span>';
-      } else {
-        var rows = dayShifts.length > 0 ? dayShifts : [{}];
-        rows.forEach(function (sh, i) {
-          html += '<div class="shift-row" data-day="' + d + '" data-idx="' + i + '">';
-          html += '<select class="wp-select"' + (closed ? ' disabled' : '') + '>';
-          html += '<option value="">—</option>';
-          state.workplaces.forEach(function (wp) {
-            var sel = sh.workplace === wp.workplaceId ? ' selected' : '';
-            html += '<option value="' + esc(wp.workplaceId) + '"' + sel + '>' + esc(wp.name) + '</option>';
-          });
-          html += '</select>';
-          html += '<input type="time" class="sh-start" step="900" value="' + esc(sh.start || '') + '"' + (closed ? ' disabled' : '') + '>';
-          html += '<input type="time" class="sh-end" step="900" value="' + esc(sh.end || '') + '"' + (closed ? ' disabled' : '') + '>';
-          html += '</div>';
-        });
-        if (!closed) {
-          html += '<button class="btn-add-row" data-day="' + d + '">+ 行追加</button>';
-          if (dayShifts.length > 0) {
-            html += '<button class="btn-del-row" data-day="' + d + '">行削除</button>';
-          }
-        }
-      }
-      html += '</div>';
-    }
-    el('shifts-table').innerHTML = html;
+
+    // 締切情報
+    var deadlineText = t('label.deadline') + ': ' + (data.deadlineAt || '—');
+    el('st-deadline-info').textContent = deadlineText;
 
     if (closed) {
       el('st-closed-notice').hidden = false;
@@ -281,30 +285,98 @@
       el('btn-confirm-shift').disabled = false;
     }
 
-    // 行追加・削除ボタン
-    el('shifts-table').addEventListener('click', function (ev) {
-      if (ev.target.classList.contains('btn-add-row')) {
-        var day = ev.target.getAttribute('data-day');
-        var card = ev.target.closest('.day-card');
-        var rows = card.querySelectorAll('.shift-row');
-        if (rows.length >= 10) return;
-        var idx = rows.length;
-        var div = document.createElement('div');
-        div.className = 'shift-row';
-        div.setAttribute('data-day', day);
-        div.setAttribute('data-idx', String(idx));
-        div.innerHTML = '<select class="wp-select"><option value="">—</option>' +
-          state.workplaces.map(function (wp) { return '<option value="' + esc(wp.workplaceId) + '">' + esc(wp.name) + '</option>'; }).join('') +
-          '</select><input type="time" class="sh-start" step="900"><input type="time" class="sh-end" step="900">';
-        ev.target.before(div);
+    var html = '';
+    for (var d = 1; d <= days; d++) {
+      var dateStr = data.yearMonth + '-' + String(d).padStart(2, '0');
+      var isHoliday = holidays.indexOf(dateStr) >= 0;
+      var dow = getDayOfWeek(dateStr);
+      var dowClass = dow === '日' ? 'dow-sun' : (dow === '土' ? 'dow-sat' : 'dow-weekday');
+      var dayShifts = shifts[String(d)] || [];
+
+      html += '<div class="day-card' + (isHoliday ? ' holiday-day' : '') + '" data-day="' + d + '">';
+      html += '  <div class="day-header">';
+      html += '    <div class="day-title-group">';
+      html += '      <span class="day-num">' + d + '</span>';
+      html += '      <span class="day-dow ' + dowClass + '">(' + dow + ')</span>';
+      html += '    </div>';
+      if (isHoliday) {
+        html += '    <span class="badge badge-holiday">' + t('label.holiday') + '</span>';
       }
-      if (ev.target.classList.contains('btn-del-row')) {
-        var card2 = ev.target.closest('.day-card');
-        var lastRow = card2.querySelector('.shift-row:last-of-type');
-        if (lastRow) lastRow.remove();
+      html += '  </div>';
+
+      if (isHoliday) {
+        html += '<p style="font-size:0.85rem; color:var(--danger-strong); font-weight:600; padding:0.5rem 0;">※ 1日最大8時間・週40時間まで勤務可能</p>';
       }
-    });
+
+      var rows = dayShifts.length > 0 ? dayShifts : [{}];
+      rows.forEach(function (sh, i) {
+        html += '<div class="shift-row" data-day="' + d + '" data-idx="' + i + '">';
+        html += '  <select class="wp-select"' + (closed ? ' disabled' : '') + '>';
+        html += '    <option value="">— 勤務先を選択 —</option>';
+        state.workplaces.forEach(function (wp) {
+          var sel = sh.workplace === wp.workplaceId ? ' selected' : '';
+          html += '  <option value="' + esc(wp.workplaceId) + '"' + sel + '>' + esc(wp.name) + '</option>';
+        });
+        html += '  </select>';
+        html += '  <div class="shift-row-inputs">';
+        html += '    <input type="time" class="sh-start" step="900" value="' + esc(sh.start || '') + '"' + (closed ? ' disabled' : '') + '>';
+        html += '    <span class="shift-row-sep">〜</span>';
+        html += '    <input type="time" class="sh-end" step="900" value="' + esc(sh.end || '') + '"' + (closed ? ' disabled' : '') + '>';
+        html += '  </div>';
+        if (!closed && rows.length > 1) {
+          html += '  <div class="shift-row-footer">';
+          html += '    <button type="button" class="btn-del-row" data-day="' + d + '">削除</button>';
+          html += '  </div>';
+        }
+        html += '</div>';
+      });
+
+      if (!closed) {
+        html += '<div class="day-card-actions">';
+        html += '  <button type="button" class="btn-add-row" data-day="' + d + '">＋ 行を追加</button>';
+        html += '</div>';
+      }
+
+      html += '</div>';
+    }
+    el('shifts-table').innerHTML = html;
   }
+
+  // 行追加・行削除イベントリスナー
+  el('shifts-table').addEventListener('click', function (ev) {
+    if (ev.target.classList.contains('btn-add-row')) {
+      var day = ev.target.getAttribute('data-day');
+      var card = ev.target.closest('.day-card');
+      var rows = card.querySelectorAll('.shift-row');
+      if (rows.length >= 10) return;
+      var idx = rows.length;
+      var div = document.createElement('div');
+      div.className = 'shift-row';
+      div.setAttribute('data-day', day);
+      div.setAttribute('data-idx', String(idx));
+
+      var opts = state.workplaces.map(function (wp) {
+        return '<option value="' + esc(wp.workplaceId) + '">' + esc(wp.name) + '</option>';
+      }).join('');
+
+      div.innerHTML =
+        '<select class="wp-select"><option value="">— 勤務先を選択 —</option>' + opts + '</select>' +
+        '<div class="shift-row-inputs">' +
+        '  <input type="time" class="sh-start" step="900">' +
+        '  <span class="shift-row-sep">〜</span>' +
+        '  <input type="time" class="sh-end" step="900">' +
+        '</div>' +
+        '<div class="shift-row-footer">' +
+        '  <button type="button" class="btn-del-row" data-day="' + day + '">削除</button>' +
+        '</div>';
+
+      ev.target.parentElement.before(div);
+    }
+    if (ev.target.classList.contains('btn-del-row')) {
+      var row = ev.target.closest('.shift-row');
+      if (row) row.remove();
+    }
+  });
 
   function collectShifts() {
     var result = {};
@@ -321,6 +393,7 @@
     return result;
   }
 
+  // ---- 途中保存・確定ボタン ----
   el('btn-save-draft').addEventListener('click', function () {
     hideError('shift-error');
     var shifts = collectShifts();
@@ -331,7 +404,11 @@
       if (!res.ok) { showError('shift-error', res.error); return; }
       state.monthData.version = res.data.version;
       state.monthData.status = res.data.status;
-    }).catch(function () { hideSpinner(); showError('shift-error', 'BUSY'); });
+      alert(t('label.status.draft') + 'を保存しました。');
+    }).catch(function () {
+      hideSpinner();
+      showError('shift-error', 'BUSY');
+    });
   });
 
   el('btn-confirm-shift').addEventListener('click', function () {
@@ -344,9 +421,15 @@
       if (!res.ok) { showError('shift-error', res.error); return; }
       state.monthData.version = res.data.version;
       state.monthData.status = res.data.status;
-    }).catch(function () { hideSpinner(); showError('shift-error', 'BUSY'); });
+      alert(t('label.status.confirmed') + 'しました。');
+      loadStudentMonth();
+    }).catch(function () {
+      hideSpinner();
+      showError('shift-error', 'BUSY');
+    });
   });
 
+  // ---- 実績確認セクションの描画 ----
   function renderActual() {
     var data = state.monthData;
     if (!data || !data.actual || !data.actual.open) {
@@ -358,39 +441,85 @@
     var actualShifts = actual.shifts || {};
     var planShifts = data.shifts || {};
     var days = daysInMonth(data.yearMonth);
+
     var html = '';
     for (var d = 1; d <= days; d++) {
       var ds = String(d);
       var ps = planShifts[ds] || [];
       var as = actualShifts[ds] || [];
-      html += '<div class="day-card" data-day="' + d + '">';
-      html += '<div class="day-header"><span class="day-num">' + d + '</span></div>';
-      html += '<div class="actual-row">';
-      html += '<span class="plan-shifts">予定: ' + (ps.map(function (s) { return s.start + '-' + s.end; }).join(', ') || '—') + '</span>';
-      html += '</div>';
-      var rows2 = as.length > 0 ? as : [{}];
+      var dateStr = data.yearMonth + '-' + String(d).padStart(2, '0');
+      var dow = getDayOfWeek(dateStr);
+      var dowClass = dow === '日' ? 'dow-sun' : (dow === '土' ? 'dow-sat' : 'dow-weekday');
+
+      var planText = ps.map(function (s) {
+        var wpObj = state.workplaces.find(function (w) { return w.workplaceId === s.workplace; });
+        var wpName = wpObj ? wpObj.name : s.workplace;
+        return wpName + ' (' + s.start + '〜' + s.end + ')';
+      }).join(', ') || '予定なし';
+
+      html += '<div class="day-card actual-day-card" data-day="' + d + '">';
+      html += '  <div class="day-header">';
+      html += '    <div class="day-title-group">';
+      html += '      <span class="day-num">' + d + '</span>';
+      html += '      <span class="day-dow ' + dowClass + '">(' + dow + ')</span>';
+      html += '    </div>';
+      html += '  </div>';
+
+      html += '  <div class="actual-plan-preview">';
+      html += '    <span>予定: ' + esc(planText) + '</span>';
+      if (ps.length > 0) {
+        html += '  <button type="button" class="btn-as-planned" data-day="' + d + '">予定どおり</button>';
+      }
+      html += '  </div>';
+
+      var rows2 = as.length > 0 ? as : (ps.length > 0 ? ps : [{}]);
       rows2.forEach(function (sh, i) {
-        html += '<div class="shift-row" data-day="' + d + '" data-idx="' + i + '">';
-        html += '<select class="wp-select">';
-        html += '<option value="">—</option>';
+        html += '<div class="shift-row actual-shift-row" data-day="' + d + '" data-idx="' + i + '">';
+        html += '  <select class="wp-select">';
+        html += '    <option value="">— 勤務先を選択 —</option>';
         state.workplaces.forEach(function (wp) {
           var sel = sh.workplace === wp.workplaceId ? ' selected' : '';
-          html += '<option value="' + esc(wp.workplaceId) + '"' + sel + '>' + esc(wp.name) + '</option>';
+          html += '  <option value="' + esc(wp.workplaceId) + '"' + sel + '>' + esc(wp.name) + '</option>';
         });
-        html += '</select>';
-        html += '<input type="time" class="sh-start" step="900" value="' + esc(sh.start || '') + '">';
-        html += '<input type="time" class="sh-end" step="900" value="' + esc(sh.end || '') + '">';
+        html += '  </select>';
+        html += '  <div class="shift-row-inputs">';
+        html += '    <input type="time" class="sh-start" step="900" value="' + esc(sh.start || '') + '">';
+        html += '    <span class="shift-row-sep">〜</span>';
+        html += '    <input type="time" class="sh-end" step="900" value="' + esc(sh.end || '') + '">';
+        html += '  </div>';
         html += '</div>';
       });
+
       html += '</div>';
     }
     el('actual-table').innerHTML = html;
   }
 
+  // 実績確認の「予定どおり」ボタンイベント
+  el('actual-table').addEventListener('click', function (ev) {
+    if (ev.target.classList.contains('btn-as-planned')) {
+      var day = ev.target.getAttribute('data-day');
+      var ps = (state.monthData && state.monthData.shifts && state.monthData.shifts[day]) || [];
+      var card = ev.target.closest('.day-card');
+      if (!card || ps.length === 0) return;
+
+      var row = card.querySelector('.actual-shift-row');
+      if (row && ps[0]) {
+        var wpSel = row.querySelector('.wp-select');
+        var startInp = row.querySelector('.sh-start');
+        var endInp = row.querySelector('.sh-end');
+        if (wpSel) wpSel.value = ps[0].workplace;
+        if (startInp) startInp.value = ps[0].start;
+        if (endInp) endInp.value = ps[0].end;
+      }
+    }
+  });
+
+  // ---- 実績保存・確定 ----
   el('btn-save-actual').addEventListener('click', function () {
     hideError('actual-error');
     var shifts = {};
-    el('actual-table').querySelectorAll('.shift-row').forEach(function (row) {
+    el('actual-table').querySelectorAll('.actual-shift-row').forEach(function (row) {
       var day = row.getAttribute('data-day');
       var wp = row.querySelector('.wp-select').value;
       var start = row.querySelector('.sh-start').value;
@@ -405,7 +534,11 @@
       hideSpinner();
       if (!res.ok) { showError('actual-error', res.error); return; }
       state.monthData.version = res.data.version;
-    }).catch(function () { hideSpinner(); showError('actual-error', 'BUSY'); });
+      alert('実績を保存しました。');
+    }).catch(function () {
+      hideSpinner();
+      showError('actual-error', 'BUSY');
+    });
   });
 
   el('btn-confirm-actual').addEventListener('click', function () {
@@ -415,19 +548,47 @@
     callServer('api_confirmActual', [state.token, state.yearMonth, version]).then(function (res) {
       hideSpinner();
       if (!res.ok) { showError('actual-error', res.error); return; }
+      alert('実績を確定しました。');
       el('actual-section').hidden = true;
-    }).catch(function () { hideSpinner(); showError('actual-error', 'BUSY'); });
+      loadStudentMonth();
+    }).catch(function () {
+      hideSpinner();
+      showError('actual-error', 'BUSY');
+    });
   });
 
-  // ---- 勤務先 ----
+  // ---- 勤務先一覧 & 追加 ----
   function renderWorkplaces() {
+    if (!state.workplaces || state.workplaces.length === 0) {
+      el('workplace-list').innerHTML = '<p style="color:var(--text-muted); font-size:0.9rem; padding:0.5rem 0;">登録されている勤務先はありません。「勤務先を追加」から登録してください。</p>';
+      return;
+    }
     var html = state.workplaces.map(function (wp) {
-      return '<div class="wp-item card">' +
-        '<span class="wp-name">' + esc(wp.name) + '</span>' +
-        ' ' + esc(wp.prefecture) +
-        ' ' + esc(wp.jobDescription) +
-        ' ' + wp.baseHourlyWage + '円' +
-        ' [' + esc(wp.verificationStatus) + ']' +
+      var statusBadge = '';
+      if (wp.verificationStatus === '確認済') {
+        statusBadge = '<span class="badge badge-confirmed">確認済</span>';
+      } else if (wp.verificationStatus === '勤務不可') {
+        statusBadge = '<span class="badge badge-error">勤務不可</span>';
+      } else {
+        statusBadge = '<span class="badge badge-draft">勤務先要確認</span>';
+      }
+
+      var earlyText = '';
+      if (wp.earlyStart && wp.earlyEnd && wp.earlyPremium) {
+        earlyText = '<span>早朝手当: ' + esc(wp.earlyStart) + '〜' + esc(wp.earlyEnd) + ' (+' + wp.earlyPremium + '円)</span>';
+      }
+
+      return '<div class="wp-item-card">' +
+        '  <div class="wp-item-top">' +
+        '    <span class="wp-name">' + esc(wp.name) + '</span>' +
+        '    ' + statusBadge +
+        '  </div>' +
+        '  <div class="wp-details">' +
+        '    <span>📍 ' + esc(wp.prefecture) + '</span>' +
+        '    <span>💼 ' + esc(wp.jobDescription) + '</span>' +
+        '    <span class="wp-wage-tag">時給 ' + wp.baseHourlyWage + '円</span>' +
+        '    ' + earlyText +
+        '  </div>' +
         '</div>';
     }).join('');
     el('workplace-list').innerHTML = html;
@@ -460,23 +621,48 @@
       hideSpinner();
       if (!res.ok) { showError('wp-error', res.error); return; }
       el('workplace-form').hidden = true;
+      el('wp-name').value = '';
+      el('wp-pref').value = '';
+      el('wp-job').value = '';
+      el('wp-wage').value = '';
+      el('wp-early-start').value = '';
+      el('wp-early-end').value = '';
+      el('wp-early-premium').value = '';
       return callServer('api_listWorkplaces', [state.token]);
     }).then(function (res) {
       if (!res || !res.ok) return;
       state.workplaces = res.data;
       renderWorkplaces();
-    }).catch(function () { hideSpinner(); showError('wp-error', 'BUSY'); });
+      renderShifts();
+    }).catch(function () {
+      hideSpinner();
+      showError('wp-error', 'BUSY');
+    });
   });
 
-  // ---- 履歴 ----
+  // ---- 提出履歴 ----
   function renderHistory(rows) {
-    var html = rows.map(function (r) {
-      return '<div class="history-item">' + esc(r.yearMonth) + ' ' + esc(r.status) + ' ' + esc(r.actualStatus || '') + '</div>';
-    }).join('');
-    el('history-list').innerHTML = html || '—';
+    if (!rows || rows.length === 0) {
+      el('history-list').innerHTML = '<p style="color:var(--text-muted); font-size:0.9rem;">提出履歴はありません。</p>';
+      return;
+    }
+    var html = '<table class="history-table"><thead><tr>' +
+      '<th>対象月</th><th>シフト状態</th><th>実績状態</th>' +
+      '</tr></thead><tbody>';
+    rows.forEach(function (r) {
+      var statusClass = r.status === '確定済' ? 'badge-confirmed' : 'badge-draft';
+      var actualClass = r.actualStatus === '確定済' ? 'badge-confirmed' : 'badge-draft';
+      html += '<tr>' +
+        '<td><strong>' + esc(r.yearMonth) + '</strong></td>' +
+        '<td><span class="badge ' + statusClass + '">' + esc(r.status) + '</span></td>' +
+        '<td>' + (r.actualStatus ? '<span class="badge ' + actualClass + '">' + esc(r.actualStatus) + '</span>' : '—') + '</td>' +
+        '</tr>';
+    });
+    html += '</tbody></table>';
+    el('history-list').innerHTML = html;
   }
 
-  // ---- 管理画面 ----
+  // ---- 管理者画面 ----
   function loadAdminBoard() {
     el('admin-year-month').textContent = state.yearMonth;
     var className = el('admin-class-filter').value.trim() || null;
@@ -487,134 +673,267 @@
       hideSpinner();
       if (!res.ok) return;
       renderAdminBoard(res.data);
-    }).catch(function () { hideSpinner(); });
+    }).catch(function () {
+      hideSpinner();
+    });
   }
 
   function renderAdminBoard(data) {
     var c = data.counts;
+    // KPI統計カード
     el('admin-counts').innerHTML =
-      '学生:' + c.students + ' 確定:' + c.confirmed + ' 下書:' + c.draft +
-      ' 未提:' + c.notSubmitted + ' エラー:' + c.error + ' 対象外:' + c.outOfScope +
-      ' | 勤務先確認待:' + data.workplacesPending + '(' + data.workplacesOverdue + ')' +
-      ' 実績未確認:' + data.actualUnconfirmed;
+      '<div class="counts-grid">' +
+      '  <div class="kpi-card">' +
+      '    <span class="kpi-label">総学生数</span>' +
+      '    <span class="kpi-val">' + c.students + '</span>' +
+      '  </div>' +
+      '  <div class="kpi-card kpi-confirmed">' +
+      '    <span class="kpi-label">確定済</span>' +
+      '    <span class="kpi-val" style="color:var(--success);">' + c.confirmed + '</span>' +
+      '  </div>' +
+      '  <div class="kpi-card kpi-draft">' +
+      '    <span class="kpi-label">下書き</span>' +
+      '    <span class="kpi-val" style="color:var(--warning);">' + c.draft + '</span>' +
+      '  </div>' +
+      '  <div class="kpi-card kpi-notsubmitted">' +
+      '    <span class="kpi-label">未提出</span>' +
+      '    <span class="kpi-val">' + c.notSubmitted + '</span>' +
+      '  </div>' +
+      '  <div class="kpi-card kpi-error">' +
+      '    <span class="kpi-label">エラー検出</span>' +
+      '    <span class="kpi-val" style="color:var(--danger);">' + c.error + '</span>' +
+      '  </div>' +
+      '  <div class="kpi-card kpi-outofscope">' +
+      '    <span class="kpi-label">対象外</span>' +
+      '    <span class="kpi-val" style="color:var(--text-muted);">' + c.outOfScope + '</span>' +
+      '  </div>' +
+      '</div>' +
+      '<div class="kpi-banner">' +
+      '  <span>⚠️ 勤務先確認待ち: <strong>' + data.workplacesPending + '件</strong> (うち期限超え: <strong>' + data.workplacesOverdue + '件</strong>)</span>' +
+      '  <span>⏱️ 実績未確認: <strong>' + data.actualUnconfirmed + '件</strong></span>' +
+      '</div>';
 
+    // テーブル生成
     var html = '<table class="admin-table"><thead><tr>' +
       '<th>学籍番号</th><th>氏名</th><th>クラス</th><th>状態</th><th>エラー</th><th>実績</th><th>更新日</th><th>操作</th>' +
       '</tr></thead><tbody>';
-    data.rows.forEach(function (row) {
-      var cls = row.actualOver ? ' class="actual-over"' : '';
-      html += '<tr' + cls + '>';
-      html += '<td>' + esc(row.studentId) + '</td>';
-      html += '<td>' + esc(row.name) + '</td>';
-      html += '<td>' + esc(row.className) + '</td>';
-      html += '<td>' + esc(row.displayStatus) + '</td>';
-      html += '<td>' + esc((row.errorCodes || []).join(' ')) + '</td>';
-      html += '<td>' + esc(row.actualStatus || '') + '</td>';
-      html += '<td>' + esc(row.updatedAt || '') + '</td>';
-      html += '<td><button class="btn-admin-detail" data-sid="' + esc(row.studentId) + '">詳細</button>';
-      html += '<button class="btn-admin-print" data-sid="' + esc(row.studentId) + '">印刷</button></td>';
-      html += '</tr>';
-    });
+
+    if (!data.rows || data.rows.length === 0) {
+      html += '<tr><td colspan="8" style="text-align:center; color:var(--text-muted); padding:2rem;">該当する学生データはありません</td></tr>';
+    } else {
+      data.rows.forEach(function (row) {
+        var cls = row.actualOver ? ' class="actual-over"' : '';
+        var statusClass = 'badge-not-submitted';
+        if (row.displayStatus === '確定済') statusClass = 'badge-confirmed';
+        else if (row.displayStatus === '下書き') statusClass = 'badge-draft';
+        else if (row.displayStatus === '対象外') statusClass = 'badge-out-of-scope';
+
+        var errorBadges = (row.errorCodes || []).map(function (code) {
+          return '<span class="badge badge-error">' + esc(t('error.' + code) || code) + '</span>';
+        }).join(' ');
+
+        var actualText = row.actualStatus || '—';
+        if (row.actualOver) {
+          actualText += ' <span class="badge badge-error">超過</span>';
+        }
+
+        html += '<tr' + cls + '>';
+        html += '<td><strong>' + esc(row.studentId) + '</strong></td>';
+        html += '<td>' + esc(row.name) + '</td>';
+        html += '<td><span class="badge" style="background:#f1f5f9; border:1px solid #e2e8f0;">' + esc(row.className) + '</span></td>';
+        html += '<td><span class="badge ' + statusClass + '">' + esc(row.displayStatus) + '</span></td>';
+        html += '<td>' + (errorBadges || '—') + '</td>';
+        html += '<td>' + actualText + '</td>';
+        html += '<td style="font-size:0.82rem; color:var(--text-sub);">' + esc(row.updatedAt || '—') + '</td>';
+        html += '<td>';
+        html += '  <button type="button" class="btn-primary btn-sm btn-admin-detail btn-table-action" data-sid="' + esc(row.studentId) + '">詳細</button>';
+        html += '  <button type="button" class="btn-secondary btn-sm btn-admin-print btn-table-action" data-sid="' + esc(row.studentId) + '">印刷</button>';
+        html += '</td>';
+        html += '</tr>';
+      });
+    }
+
     html += '</tbody></table>';
     el('admin-board').innerHTML = html;
-
-    el('admin-board').addEventListener('click', function (ev) {
-      if (ev.target.classList.contains('btn-admin-detail')) {
-        openStudentDetail(ev.target.getAttribute('data-sid'));
-      }
-      if (ev.target.classList.contains('btn-admin-print')) {
-        printStudent(ev.target.getAttribute('data-sid'));
-      }
-    });
   }
+
+  // 管理者ボード内クリック
+  el('admin-board').addEventListener('click', function (ev) {
+    var detailBtn = ev.target.closest('.btn-admin-detail');
+    if (detailBtn) {
+      openStudentDetail(detailBtn.getAttribute('data-sid'));
+      return;
+    }
+    var printBtn = ev.target.closest('.btn-admin-print');
+    if (printBtn) {
+      printStudent(printBtn.getAttribute('data-sid'));
+      return;
+    }
+  });
 
   el('btn-admin-search').addEventListener('click', loadAdminBoard);
 
+  // ---- サイドバー ナビゲーション ----
+  document.querySelectorAll('.admin-sidebar-nav .admin-nav-item').forEach(function (item) {
+    item.addEventListener('click', function () {
+      document.querySelectorAll('.admin-sidebar-nav .admin-nav-item').forEach(function (i) { i.classList.remove('active'); });
+      item.classList.add('active');
+      var targetId = item.getAttribute('data-target');
+      var targetEl = el(targetId);
+      if (targetEl) {
+        targetEl.scrollIntoView({ behavior: 'smooth' });
+      }
+    });
+  });
+
+  // ---- 学生詳細モーダル ----
   function openStudentDetail(studentId) {
     showSpinner();
     callServer('api_adminStudentDetail', [state.token, studentId]).then(function (res) {
       hideSpinner();
       if (!res.ok) return;
       var d = res.data;
-      var html = '<h2>' + esc(d.student.name) + ' (' + esc(d.student.studentId) + ')</h2>';
-      html += '<p>クラス: ' + esc(d.student.className) + ' 状態: ' + esc(d.student.status) + '</p>';
+      var html = '<div class="dialog-student-meta">' +
+        '  <h2 style="color:var(--navy); font-size:1.3rem; margin-bottom:0.25rem;">' + esc(d.student.name) + ' (' + esc(d.student.studentId) + ')</h2>' +
+        '  <p>クラス: <strong>' + esc(d.student.className) + '</strong> | 状態: <strong>' + esc(d.student.status) + '</strong> | 資格外活動許可: <strong>' + (d.student.workPermission ? '許可済' : '未許可/期限切') + '</strong></p>' +
+        '</div>';
+
+      html += '<h4 style="margin-bottom:0.5rem; color:var(--navy);">提出年月履歴 (最大24か月)</h4>';
       html += '<div class="month-list">';
       d.months.forEach(function (m) {
-        html += '<div>' + esc(m.yearMonth) + ' ' + esc(m.status) + ' ' + esc(m.actualStatus || '') +
-          ' <button class="btn-school-confirm" data-sid="' + esc(studentId) + '" data-ym="' + esc(m.yearMonth) + '">学校確定</button>' +
-          ' <button class="btn-grant-unlock" data-sid="' + esc(studentId) + '" data-ym="' + esc(m.yearMonth) + '">修正許可</button>' +
-          ' <button class="btn-print-month" data-sid="' + esc(studentId) + '" data-ym="' + esc(m.yearMonth) + '">印刷</button>' +
+        var stBadge = m.status === '確定済' ? 'badge-confirmed' : 'badge-draft';
+        html += '<div class="month-row">' +
+          '  <div>' +
+          '    <strong style="margin-right:0.5rem;">' + esc(m.yearMonth) + '</strong>' +
+          '    <span class="badge ' + stBadge + '" style="margin-right:0.35rem;">' + esc(m.status) + '</span>' +
+          '    <span style="font-size:0.8rem; color:var(--text-sub);">' + (m.actualStatus ? '実績:' + esc(m.actualStatus) : '') + '</span>' +
+          '  </div>' +
+          '  <div style="display:flex; gap:0.35rem;">' +
+          '    <button type="button" class="btn-secondary btn-sm btn-school-confirm" data-sid="' + esc(studentId) + '" data-ym="' + esc(m.yearMonth) + '">学校確定</button>' +
+          '    <button type="button" class="btn-outline btn-sm btn-grant-unlock" data-sid="' + esc(studentId) + '" data-ym="' + esc(m.yearMonth) + '">修正許可</button>' +
+          '    <button type="button" class="btn-outline btn-sm btn-print-month" data-sid="' + esc(studentId) + '" data-ym="' + esc(m.yearMonth) + '">印刷</button>' +
+          '  </div>' +
           '</div>';
       });
       html += '</div>';
-      html += '<button id="btn-reset-password" data-sid="' + esc(studentId) + '">パスワード再発行</button>';
-      html += ' <button id="btn-unlock-login" data-sid="' + esc(studentId) + '">ロック解除</button>';
-      html += ' <button id="btn-print-all-2y" data-sid="' + esc(studentId) + '">2年間一括印刷</button>';
+
+      html += '<div class="dialog-actions">' +
+        '  <button type="button" id="btn-reset-password" class="btn-secondary" data-sid="' + esc(studentId) + '">🔑 パスワード再発行</button>' +
+        '  <button type="button" id="btn-unlock-login" class="btn-outline" data-sid="' + esc(studentId) + '">🔓 ロック解除</button>' +
+        '  <button type="button" id="btn-print-all-2y" class="btn-gold" data-sid="' + esc(studentId) + '">🖨️ 2年間一括印刷</button>' +
+        '</div>';
+
       el('admin-dialog-body').innerHTML = html;
       el('admin-dialog-overlay').hidden = false;
+    }).catch(function () {
+      hideSpinner();
+    });
+  }
 
-      el('admin-dialog-body').addEventListener('click', function (ev) {
-        if (ev.target.classList.contains('btn-school-confirm')) {
-          var sid = ev.target.getAttribute('data-sid');
-          var ym = ev.target.getAttribute('data-ym');
-          callServer('api_adminSchoolConfirm', [state.token, sid, ym]).then(function (r) {
-            if (r.ok) openStudentDetail(sid);
-          });
-        }
-        if (ev.target.classList.contains('btn-grant-unlock')) {
-          var sid2 = ev.target.getAttribute('data-sid');
-          var ym2 = ev.target.getAttribute('data-ym');
-          var until = prompt('修正許可の期限（YYYY-MM-DD HH:MM）');
-          if (!until) return;
-          callServer('api_adminGrantUnlock', [state.token, sid2, ym2, until]);
-        }
-        if (ev.target.classList.contains('btn-print-month')) {
-          var sid3 = ev.target.getAttribute('data-sid');
-          var ym3 = ev.target.getAttribute('data-ym');
-          printStudentMonths(sid3, [ym3]);
-        }
-        if (ev.target.id === 'btn-reset-password') {
-          callServer('api_adminResetPassword', [state.token, ev.target.getAttribute('data-sid')]).then(function (r) {
-            if (r.ok) alert('新パスワード: ' + r.data.initialPassword);
-          });
-        }
-        if (ev.target.id === 'btn-unlock-login') {
-          callServer('api_adminUnlockLogin', [state.token, ev.target.getAttribute('data-sid')]);
-        }
-        if (ev.target.id === 'btn-print-all-2y') {
-          var sid4 = ev.target.getAttribute('data-sid');
-          var today = currentJst().slice(0, 7);
-          var months = [];
-          for (var i = 0; i < 24; i++) {
-            months.push(addMonth(today, -i));
-          }
-          printStudentMonths(sid4, months);
+  // ダイアログ内アクション
+  el('admin-dialog-body').addEventListener('click', function (ev) {
+    var confBtn = ev.target.closest('.btn-school-confirm');
+    if (confBtn) {
+      var sid = confBtn.getAttribute('data-sid');
+      var ym = confBtn.getAttribute('data-ym');
+      showSpinner();
+      callServer('api_adminSchoolConfirm', [state.token, sid, ym]).then(function (r) {
+        hideSpinner();
+        if (r.ok) {
+          alert('学校確定しました。');
+          openStudentDetail(sid);
+          loadAdminBoard();
+        } else {
+          alert('エラー: ' + r.error);
         }
       });
-    }).catch(function () { hideSpinner(); });
-  }
+      return;
+    }
+
+    var unlockBtn = ev.target.closest('.btn-grant-unlock');
+    if (unlockBtn) {
+      var sid2 = unlockBtn.getAttribute('data-sid');
+      var ym2 = unlockBtn.getAttribute('data-ym');
+      var until = prompt('修正許可の期限を入力してください（例: 2026-10-31 23:59）');
+      if (!until) return;
+      showSpinner();
+      callServer('api_adminGrantUnlock', [state.token, sid2, ym2, until]).then(function (r) {
+        hideSpinner();
+        if (r.ok) {
+          alert('修正許可を設定しました。');
+          openStudentDetail(sid2);
+        } else {
+          alert('エラー: ' + r.error);
+        }
+      });
+      return;
+    }
+
+    var printMonthBtn = ev.target.closest('.btn-print-month');
+    if (printMonthBtn) {
+      var sid3 = printMonthBtn.getAttribute('data-sid');
+      var ym3 = printMonthBtn.getAttribute('data-ym');
+      printStudentMonths(sid3, [ym3]);
+      return;
+    }
+
+    if (ev.target.id === 'btn-reset-password') {
+      var sidReset = ev.target.getAttribute('data-sid');
+      showSpinner();
+      callServer('api_adminResetPassword', [state.token, sidReset]).then(function (r) {
+        hideSpinner();
+        if (r.ok) alert('新パスワードを再発行しました:\n' + r.data.initialPassword);
+        else alert('エラー: ' + r.error);
+      });
+      return;
+    }
+
+    if (ev.target.id === 'btn-unlock-login') {
+      var sidUnlock = ev.target.getAttribute('data-sid');
+      showSpinner();
+      callServer('api_adminUnlockLogin', [state.token, sidUnlock]).then(function (r) {
+        hideSpinner();
+        if (r.ok) alert('アカウントロックを解除しました。');
+        else alert('エラー: ' + r.error);
+      });
+      return;
+    }
+
+    if (ev.target.id === 'btn-print-all-2y') {
+      var sid4 = ev.target.getAttribute('data-sid');
+      var today = currentJst().slice(0, 7);
+      var months = [];
+      for (var i = 0; i < 24; i++) {
+        months.push(addMonth(today, -i));
+      }
+      printStudentMonths(sid4, months);
+      return;
+    }
+  });
 
   el('btn-dialog-close').addEventListener('click', function () {
     el('admin-dialog-overlay').hidden = true;
     el('admin-dialog-body').innerHTML = '';
   });
 
+  // ---- 印刷機能 ----
   function printStudent(studentId) {
     var today = currentJst().slice(0, 7);
     printStudentMonths(studentId, [today]);
   }
 
   function printStudentMonths(studentId, months) {
-    // 最大50件×24か月で分割
     var studentIds = [studentId];
     var chunks = [];
     for (var i = 0; i < months.length; i += 24) {
       chunks.push(months.slice(i, i + 24));
     }
+    showSpinner();
     var promises = chunks.map(function (chunk) {
       return callServer('api_adminPrintHtml', [state.token, { studentIds: studentIds, yearMonths: chunk }]);
     });
     Promise.all(promises).then(function (results) {
+      hideSpinner();
       var html = results.map(function (r) { return r.ok ? r.data.html : ''; }).join('');
       var w = window.open('', '_blank');
       if (!w) return;
@@ -622,29 +941,31 @@
       w.document.write(html);
       w.document.close();
       w.print();
+    }).catch(function () {
+      hideSpinner();
     });
   }
 
-  // ---- 管理者追加 ----
+  // ---- マスタ操作ダイアログ / 呼び出し ----
   el('btn-create-admin').addEventListener('click', function () {
     showSpinner();
     callServer('api_adminCreateAdmin', [state.token]).then(function (res) {
       hideSpinner();
-      if (!res.ok) return;
-      alert('新管理者 ID: ' + res.data.loginId + ' パスワード: ' + res.data.initialPassword);
+      if (!res.ok) { alert('エラー: ' + res.error); return; }
+      alert('新しい管理者アカウントを発行しました:\nログインID: ' + res.data.loginId + '\n初期パスワード: ' + res.data.initialPassword);
     }).catch(function () { hideSpinner(); });
   });
 
-  // ---- 学生フォーム ----
   el('btn-open-student-form').addEventListener('click', function () {
-    var studentId = prompt('学籍番号（新規は空欄）');
+    var studentId = prompt('学籍番号（新規作成時は空欄のままOK）');
     var name = prompt('氏名');
-    var className = prompt('クラス');
-    var birthDate = prompt('生年月日（YYYY-MM-DD）');
-    var language = prompt('言語（ja/ne/vi）');
-    var enrollmentDate = prompt('入学日（YYYY-MM-DD）');
-    var status = prompt('状態（在籍/休学/卒業/退学）');
+    var className = prompt('クラス (例: 1A)');
+    var birthDate = prompt('生年月日 (YYYY-MM-DD)');
+    var language = prompt('母語・第一言語 (ja / ne / vi)');
+    var enrollmentDate = prompt('入学年月日 (YYYY-MM-DD)');
+    var status = prompt('在籍状態 (在籍 / 休学 / 卒業 / 退学)');
     if (!name || !className || !birthDate || !language || !enrollmentDate || !status) return;
+
     var student = {
       studentId: studentId || undefined,
       name: name,
@@ -655,7 +976,7 @@
       graduationDate: null,
       withdrawalDate: null,
       status: status,
-      workPermission: false,
+      workPermission: true,
       permissionExpires: null,
       permissionCheckedAt: null
     };
@@ -664,88 +985,89 @@
       hideSpinner();
       if (!res.ok) { alert('エラー: ' + res.error); return; }
       if (res.data.created) {
-        alert('作成しました。ID: ' + res.data.loginId + ' パスワード: ' + res.data.initialPassword);
+        alert('学生を新規登録しました:\nID: ' + res.data.loginId + '\n初期パスワード: ' + res.data.initialPassword);
       } else {
-        alert('更新しました。');
+        alert('学生情報を更新しました。');
       }
+      loadAdminBoard();
     }).catch(function () { hideSpinner(); });
   });
 
-  // ---- 締切設定 ----
   el('btn-open-deadline').addEventListener('click', function () {
-    var ym = prompt('年月（YYYY-MM）', state.yearMonth);
-    var cls = prompt('クラス');
-    var deadlineAt = prompt('予定締切（YYYY-MM-DD HH:MM）');
-    var actualDeadlineAt = prompt('実績締切（YYYY-MM-DD HH:MM、省略可）') || null;
+    var ym = prompt('対象年月 (YYYY-MM)', state.yearMonth);
+    var cls = prompt('対象クラス (例: 1A)');
+    var deadlineAt = prompt('シフト予定の提出締切 (YYYY-MM-DD HH:MM)');
+    var actualDeadlineAt = prompt('勤務実績の提出締切 (YYYY-MM-DD HH:MM、省略可)') || null;
     if (!ym || !cls || !deadlineAt) return;
     showSpinner();
     callServer('api_adminSetDeadline', [state.token, { yearMonth: ym, className: cls, deadlineAt: deadlineAt, actualDeadlineAt: actualDeadlineAt }]).then(function (res) {
       hideSpinner();
       if (!res.ok) alert('エラー: ' + res.error);
+      else alert('締切を設定しました。');
     }).catch(function () { hideSpinner(); });
   });
 
-  // ---- 長期休業設定 ----
   el('btn-open-holiday').addEventListener('click', function () {
     showSpinner();
     callServer('api_adminListHolidays', [state.token]).then(function (res) {
       hideSpinner();
       if (!res.ok) return;
-      var list = res.data.map(function (h) {
-        return h.holidayId + ': ' + h.name + ' ' + h.startDate + '〜' + h.endDate;
+      var list = (res.data || []).map(function (h) {
+        return h.holidayId + ': ' + h.name + ' (' + h.startDate + '〜' + h.endDate + ')';
       }).join('\n');
-      var name = prompt('名前（リスト:' + list + '）');
+      var name = prompt('長期休業名（登録済:\n' + list + '）');
       if (!name) return;
-      var startDate = prompt('開始日（YYYY-MM-DD）');
-      var endDate = prompt('終了日（YYYY-MM-DD）');
-      var schoolYear = prompt('年度（例: 2025）');
+      var startDate = prompt('開始年月日 (YYYY-MM-DD)');
+      var endDate = prompt('終了年月日 (YYYY-MM-DD)');
+      var schoolYear = prompt('年度 (例: 2026)');
       if (!startDate || !endDate || !schoolYear) return;
       return callServer('api_adminSetHoliday', [state.token, { name: name, startDate: startDate, endDate: endDate, schoolYear: schoolYear }]);
     }).then(function (res) {
-      if (res && !res.ok) alert('エラー: ' + res.error);
+      if (res && res.ok) alert('長期休業を設定しました。');
+      else if (res) alert('エラー: ' + res.error);
     }).catch(function () {});
   });
 
-  // ---- 最低賃金設定 ----
   el('btn-open-wage').addEventListener('click', function () {
-    var pref = prompt('都道府県名（例: 東京都）');
-    var amount = parseInt(prompt('金額（円）'), 10);
-    var effectiveFrom = prompt('発効日（YYYY-MM-DD）');
+    var pref = prompt('都道府県名 (例: 東京都)');
+    var amount = parseInt(prompt('最低賃金額 (円)'), 10);
+    var effectiveFrom = prompt('発効年月日 (YYYY-MM-DD)');
     if (!pref || !amount || !effectiveFrom) return;
     showSpinner();
     callServer('api_adminSetMinimumWage', [state.token, { prefecture: pref, amount: amount, effectiveFrom: effectiveFrom, effectiveTo: null }]).then(function (res) {
       hideSpinner();
       if (!res.ok) alert('エラー: ' + res.error);
+      else alert('最低賃金を登録しました。');
     }).catch(function () { hideSpinner(); });
   });
 
-  // ---- 学校設定 ----
   el('btn-open-settings').addEventListener('click', function () {
     showSpinner();
     callServer('api_adminGetSettings', [state.token]).then(function (res) {
       hideSpinner();
       if (!res.ok) return;
       var d = res.data;
-      var schoolName = prompt('学校名', d.schoolName);
+      var schoolName = prompt('学校名', d.schoolName || '');
       if (schoolName === null) return;
       return callServer('api_adminSetSettings', [state.token, { schoolName: schoolName }]);
     }).then(function (res) {
-      if (res && !res.ok) alert('エラー: ' + res.error);
+      if (res && res.ok) alert('学校設定を更新しました。');
+      else if (res) alert('エラー: ' + res.error);
     }).catch(function () {});
   });
 
-  // ---- 保存期限超過データ削除 ----
   el('btn-purge-expired').addEventListener('click', function () {
-    if (!confirm('保存期限を超えたデータを削除します。よろしいですか？')) return;
+    if (!confirm('保存期間（原則3年間）を超過した過去データを完全に削除します。よろしいですか？')) return;
     showSpinner();
     callServer('api_adminPurgeExpired', [state.token]).then(function (res) {
       hideSpinner();
       if (!res.ok) { alert('エラー: ' + res.error); return; }
-      alert(res.data.deletedRows + ' 件削除しました。');
+      alert(res.data.deletedRows + ' 件の期限超過データを削除しました。');
+      loadAdminBoard();
     }).catch(function () { hideSpinner(); });
   });
 
-  // ---- クラス一括印刷 ----
+  // ---- クラス一括印刷 & 表示中一括印刷 ----
   el('btn-print-all-class').addEventListener('click', function () {
     var cls = el('admin-class-filter').value.trim();
     var ym = state.yearMonth;
@@ -755,15 +1077,22 @@
       if (!res.ok) return;
       var rows = res.data.rows.filter(function (r) { return r.displayStatus !== '対象外'; });
       var sids = rows.map(function (r) { return r.studentId; });
+      if (sids.length === 0) {
+        alert('印刷対象の学生がいません。');
+        return;
+      }
       printBatch(sids, [ym]);
     }).catch(function () { hideSpinner(); });
   });
 
-  // ---- 表示中一括印刷 ----
   el('btn-print-board').addEventListener('click', function () {
     var sids = Array.from(el('admin-board').querySelectorAll('.btn-admin-print')).map(function (btn) {
       return btn.getAttribute('data-sid');
     });
+    if (sids.length === 0) {
+      alert('現在表示中の印刷対象がありません。');
+      return;
+    }
     printBatch(sids, [state.yearMonth]);
   });
 
@@ -772,10 +1101,12 @@
     for (var i = 0; i < sids.length; i += 50) {
       chunks.push(sids.slice(i, i + 50));
     }
+    showSpinner();
     var promises = chunks.map(function (chunk) {
       return callServer('api_adminPrintHtml', [state.token, { studentIds: chunk, yearMonths: months }]);
     });
     Promise.all(promises).then(function (results) {
+      hideSpinner();
       var html = results.map(function (r) { return r.ok ? r.data.html : ''; }).join('');
       var w = window.open('', '_blank');
       if (!w) return;
@@ -783,7 +1114,7 @@
       w.document.write(html);
       w.document.close();
       w.print();
-    });
+    }).catch(function () { hideSpinner(); });
   }
 
 })();
