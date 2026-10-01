@@ -897,6 +897,19 @@ a.adm-stat.is-active { color: var(--navy); text-decoration: underline; font-weig
 .detail-table { font-size: 0.85rem; }
 .detail-table td { cursor: default; }
 .month-row button.adm-link + button.adm-link { margin-left: 0.9rem; }
+/* 学生詳細: 名前・学生情報・申告の中身の3段。操作ボタンは各段の下に1列で並べる */
+.dt-head { display: flex; align-items: baseline; gap: 0.6rem; flex-wrap: wrap; margin-bottom: 0.75rem; }
+.dt-name { font-size: 1.25rem; color: var(--navy); margin: 0; }
+.dt-id { color: var(--text-sub); font-size: 0.95rem; }
+.dt-sec { border-top: 1px solid var(--border); padding: 0.75rem 0; }
+.dt-sec-title { font-size: 0.9rem; color: var(--text-sub); margin: 0 0 0.5rem; font-weight: 600; }
+.dt-info { border-collapse: collapse; font-size: 0.88rem; width: 100%; }
+.dt-info th { text-align: left; font-weight: 500; color: var(--text-sub); padding: 0.2rem 0.75rem 0.2rem 0; white-space: nowrap; width: 8rem; vertical-align: top; }
+.dt-info td { padding: 0.2rem 0; }
+.dt-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.75rem; }
+.dt-actions .btn-outline { color: var(--navy); border-color: #cbd5e1; background: var(--surface); }
+.dt-month { font-size: 0.88rem; color: var(--text-sub); margin-bottom: 0.4rem; }
+.dt-month select { width: auto; display: inline-block; margin-left: 0.4rem; padding: 0.3rem 0.5rem; border-radius: 3px; font-size: 0.95rem; }
 
 .adm-bottom { margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid var(--border); }
 .adm-bottom button { width: auto; padding: 0.5rem 1.5rem; }

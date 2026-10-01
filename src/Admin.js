@@ -987,6 +987,135 @@ function api_adminSeedDemo(token) {
   }
 }
 
+// ---- 見本データ（生徒モードを初めて押したときに一緒に入る。管理画面の見た目を試すためのもの） ----
+// 架空の学生10人（クラス DEMO）と、前月・今月・翌月の予定・実績、学校の長期休業（秋季・冬季）。
+// 確定にする月も、本物の確定と同じ evaluateMonth の検算を通し、止まる注意があれば下書きにする。
+var SAMPLE_STUDENTS_ = [
+  { id: 'DEMO-01', name: 'グエン・ティ・ラン', lang: 'vi', birth: '2002-03-14', type: 'evening', cur: '確定', next: '確定', actual: '予定どおり' },
+  { id: 'DEMO-02', name: 'タパ・ラジェシュ', lang: 'ne', birth: '2001-07-02', type: 'night', cur: '確定', next: '下書き', actual: '修正あり' },
+  { id: 'DEMO-03', name: 'チャン・ヴァン・ミン', lang: 'vi', birth: '2003-11-20', type: 'weekend', cur: '確定', next: '確定', actual: '予定どおり' },
+  { id: 'DEMO-04', name: 'グルン・アニタ', lang: 'ne', birth: '2000-01-30', type: 'weekday', cur: '下書き', next: 'なし', actual: '予定どおり' },
+  { id: 'DEMO-05', name: 'アウン・チョー・ミン', lang: 'my', birth: '2002-09-09', type: 'heavy', cur: '確定', next: '確定', actual: '修正あり' },
+  { id: 'DEMO-06', name: 'ペレラ・ニマル', lang: 'si', birth: '2001-04-18', type: 'evening', cur: '確定', next: '下書き', actual: '予定どおり', permitEndsNext: true },
+  { id: 'DEMO-07', name: 'ラーマン・ハサン', lang: 'bn', birth: '2003-06-25', type: 'weekend', cur: 'なし', next: 'なし', actual: '未確認' },
+  { id: 'DEMO-08', name: 'ジョン・スミス', lang: 'en', birth: '1999-12-05', type: 'weekday', cur: '確定', next: '確定', actual: '予定どおり' },
+  { id: 'DEMO-09', name: 'レ・ティ・ホア', lang: 'vi', birth: '2009-05-10', type: 'evening', cur: '下書き', next: 'なし', actual: '予定どおり' },
+  { id: 'DEMO-10', name: 'シュレスタ・ビカス', lang: 'ne', birth: '2002-02-14', type: 'heavy', cur: '確定', next: '超過', actual: '予定どおり' }
+];
+var SAMPLE_HOLIDAYS_ = [
+  { name: '秋季休業', start: '2026-09-21', end: '2026-09-30', year: 2026 },
+  { name: '冬季休業', start: '2026-12-21', end: '2027-01-07', year: 2026 }
+];
+
+// 勤務の型ごとに、その日の予定を返す（無ければ null）。長期休業中は週末型が8時間まで働く。
+function admin_sampleShift_(type, dow, isHoliday, day, over) {
+  if (type === 'evening') return (dow === 1 || dow === 3 || dow === 5) ? { start: '17:00', end: '21:00' } : null;
+  if (type === 'night') return (dow === 2 || dow === 4 || dow === 6) ? { start: '22:00', end: '05:00' } : null;
+  if (type === 'weekend') {
+    if (dow === 0 || dow === 6) return { start: '09:00', end: '17:00' };
+    return isHoliday && dow === 3 ? { start: '09:00', end: '18:00' } : null;
+  }
+  if (type === 'weekday') return (dow >= 1 && dow <= 5) ? { start: '18:00', end: '22:00' } : null;
+  if (type === 'heavy') {
+    if (dow >= 1 && dow <= 6) return { start: '10:00', end: '14:30' };
+    return over ? { start: '10:00', end: '14:30' } : null; // 日曜も入れると7日で31時間30分（28時間超）
+  }
+  return null;
+}
+
+function admin_sampleMonthShifts_(sample, ym, holidays, over) {
+  var shifts = {};
+  var days = core_getDaysInMonth_(ym);
+  for (var d = 1; d <= days; d++) {
+    var dateStr = core_buildDateStr_(ym, d);
+    var dow = new Date(Date.UTC(Number(ym.slice(0, 4)), Number(ym.slice(5, 7)) - 1, d)).getUTCDay();
+    var sh = admin_sampleShift_(sample.type, dow, core_isHoliday_(holidays, dateStr), d, over);
+    if (sh) shifts[String(d)] = [sh];
+  }
+  return shifts;
+}
+
+function admin_seedSampleData_(token, auth) {
+  // 1. 長期休業（同じ名前・開始日のものが無ければ足す）
+  var holRows = db_readAllRows_('SCHOOL_HOLIDAYS');
+  var newHol = SAMPLE_HOLIDAYS_.filter(function (h) {
+    return !holRows.some(function (r) { return r.name === h.name && r.start_date === h.start; });
+  }).map(function (h) {
+    return { holiday_id: 'HOL_' + util_uuid_().slice(0, 8), name: h.name, start_date: h.start, end_date: h.end, school_year: String(h.year) };
+  });
+  db_insertRows_('SCHOOL_HOLIDAYS', newHol);
+  var holidays = db_readAllRows_('SCHOOL_HOLIDAYS').map(function (h) { return { startDate: h.start_date, endDate: h.end_date }; });
+
+  // 2. 学生（無い人だけ）
+  var ym = util_currentYearMonth_();
+  var prevYm = admin_addMonths_(ym, -1), nextYm = admin_addMonths_(ym, 1);
+  var existing = {};
+  db_readAllRows_('STUDENTS').forEach(function (s) { existing[s.student_id] = true; });
+  var added = [];
+  for (var i = 0; i < SAMPLE_STUDENTS_.length; i++) {
+    var sm = SAMPLE_STUDENTS_[i];
+    if (existing[sm.id]) continue;
+    var permitEnd = sm.permitEndsNext ? core_buildDateStr_(nextYm, 15) : '2099-12-31';
+    var res = api_adminUpsertStudent(token, {
+      studentId: sm.id, name: sm.name, className: DEMO_CLASS_, birthDate: sm.birth, language: sm.lang,
+      enrollmentDate: '2025-04-01', graduationDate: null, withdrawalDate: null, status: '在籍',
+      workPermission: true, permissionExpires: permitEnd, permissionCheckedAt: '2025-04-01'
+    });
+    if (!res.ok) return res;
+    added.push(sm);
+  }
+  if (!added.length) return { ok: true };
+
+  // 3. 3か月分の申告（新しく入れた学生だけ）。前月の実働を次の月の28時間の検算に渡す。
+  var now = util_nowJst_();
+  var rows = [];
+  added.forEach(function (sm) {
+    var student = {
+      birthDate: sm.birth, enrollmentDate: '2025-04-01', withdrawalDate: null, graduationDate: null, status: '在籍',
+      workPermission: true, permissionExpires: sm.permitEndsNext ? core_buildDateStr_(nextYm, 15) : '2099-12-31'
+    };
+    var prevDaily = {};
+    [[prevYm, '確定'], [ym, sm.cur], [nextYm, sm.next]].forEach(function (pair, idx) {
+      var month = pair[0], plan = pair[1];
+      if (plan === 'なし') { prevDaily = {}; return; }
+      var shifts = admin_sampleMonthShifts_(sm, month, holidays, plan === '超過');
+      var ev = evaluateMonth({ yearMonth: month, mode: 'plan', student: student, shifts: shifts,
+        prevMonthDaily: prevDaily, prevMonthSource: idx === 0 ? 'not_applicable' : 'confirmed', nextMonthDaily: {}, holidays: holidays, settings: {} });
+      var blocking = ev.codes.filter(function (c) { return c.severity === 'block'; });
+      var status = (plan === '確定' && !blocking.length) ? '確定済' : '下書き';
+      var row = {
+        submission_id: util_uuid_(), student_id: sm.id, year_month: month, status: status,
+        shift_json: JSON.stringify(shifts), actual_json: '', actual_status: '未確認',
+        total_minutes: String(ev.totalMinutes), max_rolling7_minutes: String(ev.maxRolling7Minutes),
+        validation_codes: JSON.stringify(blocking.map(function (c) { return c.code; })),
+        actual_total_minutes: '0', actual_max_rolling7_minutes: '0', actual_codes: '[]',
+        version: '1', confirmed_at: status === '確定済' ? now : '', updated_at: now, unlock_until: ''
+      };
+      // 前月だけ実績も入れる（予定どおり／1日だけ短く働いた修正あり／未確認）
+      if (idx === 0 && sm.actual !== '未確認') {
+        var actual = JSON.parse(JSON.stringify(shifts));
+        if (sm.actual === '修正あり') {
+          var firstDay = Object.keys(actual)[0];
+          if (firstDay) actual[firstDay] = [{ start: actual[firstDay][0].start, end: core_minutesToTime_((core_timeToMinutes_(actual[firstDay][0].start) + 120) % 1440) }];
+        }
+        var aev = evaluateMonth({ yearMonth: month, mode: 'actual', student: student, shifts: actual,
+          prevMonthDaily: {}, prevMonthSource: 'not_applicable', nextMonthDaily: {}, holidays: holidays, settings: {} });
+        row.actual_json = JSON.stringify(actual);
+        row.actual_status = sm.actual;
+        row.actual_total_minutes = String(aev.totalMinutes);
+        row.actual_max_rolling7_minutes = String(aev.maxRolling7Minutes);
+        row.actual_codes = JSON.stringify(aev.codes.map(function (c) { return c.code; }));
+        row.version = '2';
+      }
+      rows.push(row);
+      prevDaily = ev.daily;
+    });
+  });
+  db_insertRows_('MONTHLY_SUBMISSIONS', rows);
+  db_logAudit_('MASTER_UPDATE', auth.user.login_id, 'admin', '', '', null, { op: 'seed_sample', students: added.length, submissions: rows.length, holidays: newHol.length });
+  return { ok: true };
+}
+
 // 生徒モード: 管理者が、試用の学生（クラス DEMO）の画面にパスワード無しで入る。
 // DEMO 以外の学生には入れない。試用データがまだ無ければ先に入れる。
 function api_adminActAsDemoStudent(token, studentId) {
@@ -1005,8 +1134,16 @@ function api_adminActAsDemoStudent(token, studentId) {
       var seeded = api_adminSeedDemo(token);
       if (!seeded.ok) return seeded;
       newStudents = seeded.data.students;
-      students = db_readAllRows_('STUDENTS');
     }
+    // 見本データ（10人・3か月分・長期休業）も、まだ無ければ入れる
+    var sampleMissing = SAMPLE_STUDENTS_.some(function (d) {
+      return !students.some(function (s) { return s.student_id === d.id; });
+    });
+    if (sampleMissing) {
+      var sample = admin_seedSampleData_(token, auth);
+      if (!sample.ok) return sample;
+    }
+    if (missing || sampleMissing) students = db_readAllRows_('STUDENTS');
 
     var student = null;
     students.forEach(function (s) { if (s.student_id === studentId) student = s; });
