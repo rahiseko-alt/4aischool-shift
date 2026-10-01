@@ -257,6 +257,7 @@ function api_adminPrintHtml(token, params) {
         var planTotalMonth = 0;
         var actualTotalMonth = 0;
         var rowsHtml = [];
+        var publicHolidays = util_jpHolidaysOfMonth_(ym);
 
         for (var d = 1; d <= daysInMonth; d++) {
           var dayStr = String(d);
@@ -264,6 +265,7 @@ function api_adminPrintHtml(token, params) {
           var dow = print_getDayOfWeek_(dateStr);
           var isHoliday = core_isHoliday_(allHolidays, dateStr);
           var isOverDay = !!overDays[dateStr];
+          var phName = publicHolidays[dateStr] || '';
 
           var dayPShifts = (pEval && pEval.shifts && pEval.shifts[dayStr]) || pShifts[dayStr] || [];
           var dayAShifts = (aEval && aEval.shifts && aEval.shifts[dayStr]) || aShifts[dayStr] || [];
@@ -286,11 +288,12 @@ function api_adminPrintHtml(token, params) {
           } else {
             if (isOverDay) remarks.push('<span class="warn-badge">超過</span>');
             if (isHoliday) remarks.push('長期休暇');
+            if (phName) remarks.push(phName);
           }
 
           rowsHtml.push(
             '<tr' + trClassAttr + trStyleAttr + '>' +
-              '<td>' + d + '(' + dow + ')</td>' +
+              '<td' + (phName || dow === '日' ? ' style="color: #c00;"' : '') + '>' + d + '(' + dow + ')</td>' +
               '<td>' + pCell.times + '</td>' +
               '<td>' + pCell.breaks + '</td>' +
               '<td>' + pCell.workMinutes + '</td>' +

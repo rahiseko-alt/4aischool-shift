@@ -282,6 +282,7 @@ function api_getMonth(token, yearMonth) {
         shifts: shifts,
         evaluation: evaluation,
         holidays: monthHolidays,
+        publicHolidays: util_jpHolidaysOfMonth_(yearMonth),
         actual: {
           status: sub && sub.actual_status ? sub.actual_status : '未確認',
           shifts: actualShifts,

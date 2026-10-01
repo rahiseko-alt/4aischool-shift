@@ -193,6 +193,7 @@ src/
   shifts: {...},               // 保存した予定（行が無ければ {}）
   evaluation: {...},           // 予定を evaluateMonth(mode 'plan') で計算した結果
   holidays: ['YYYY-MM-DD', ...], // その月の長期休業日
+  publicHolidays: { 'YYYY-MM-DD': '祝日名' }, // その月の日本の祝日（表示用。法令の判定には使わない）
   actual: { status: '未確認'|'予定どおり'|'修正あり', shifts: {...}|null, evaluation: {...}|null,
             open: boolean, deadlineAt: 'YYYY-MM-DD HH:MM'|null }
 }
@@ -221,7 +222,7 @@ src/
 | `api_adminResetPassword` | `token, studentId` | `{ initialPassword }`（失敗回数・ロックも解除し、変更を強制） |
 | `api_adminUnlockLogin` | `token, studentId` | `null` |
 | `api_adminCreateAdmin` | `token` | `{ loginId, initialPassword }` |
-| `api_adminStudentDetail` | `token, studentId` | `{ student, months: [{ yearMonth, status, actualStatus, shifts, totalMinutes, codes, actual: object\|null, actualTotalMinutes: number\|null, actualCodes, unlockUntil }] }`（新しい月が先） |
+| `api_adminStudentDetail` | `token, studentId` | `{ student, months: [{ yearMonth, status, actualStatus, shifts, totalMinutes, codes, actual: object\|null, actualTotalMinutes: number\|null, actualCodes, unlockUntil, publicHolidays }] }`（新しい月が先） |
 | `api_adminGrantUnlock` | `token, studentId, yearMonth, until` | `null`（行が無ければ未入力の行を作る。version は変えない） |
 | `api_adminSchoolConfirm` | `token, studentId, yearMonth` | `null` |
 | `api_adminBoard` | `token, yearMonth, { className?, status?, query? }` | 下記 |

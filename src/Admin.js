@@ -562,6 +562,7 @@ function api_adminStudentDetail(token, studentId) {
         actual: s.actual_json ? parse(s.actual_json, null) : null,
         actualTotalMinutes: s.actual_json ? num(s.actual_total_minutes) : null,
         actualCodes: parse(s.actual_codes, []),
+        publicHolidays: util_jpHolidaysOfMonth_(s.year_month),
         unlockUntil: s.unlock_until || null
       };
     });

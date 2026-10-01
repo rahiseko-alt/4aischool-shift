@@ -260,7 +260,9 @@
       var dateStr = yearMonth + '-' + pad2(d);
       var isHoliday = (opts.holidays || []).indexOf(dateStr) >= 0;
       var di = dowIndex(dateStr);
-      var dowClass = di === 0 ? 'dow-sun' : (di === 6 ? 'dow-sat' : 'dow-weekday');
+      var phName = ((state.monthData && state.monthData.publicHolidays) || {})[dateStr];
+      // 祝日は日曜と同じ赤で出し、日付の下に名前を小さく出す（表示だけ。法令の判定には関係しない）
+      var dowClass = (di === 0 || phName) ? 'dow-sun' : (di === 6 ? 'dow-sat' : 'dow-weekday');
       var list = shifts[String(d)] || [];
       var rows = list.length ? list : [{}];
       var codes = dayCodes(opts.codes, dateStr);
@@ -272,6 +274,7 @@
         html += '<td class="col-date">';
         if (i === 0) {
           html += '<span class="day-num">' + d + '</span><span class="day-dow ' + dowClass + '">(' + esc((DOW[currentLang] || DOW.ja)[di]) + ')</span>';
+          if (phName) html += '<span class="ph-name">' + esc(phName) + '</span>';
           if (isHoliday) html += '<span class="badge badge-holiday hol-mark">' + esc(t('label.holiday')) + '</span>';
         }
         html += '</td>';
@@ -704,7 +707,8 @@
       (hasActual ? '<th>実績</th><th>休憩</th><th>実働</th>' : '') + '</tr></thead><tbody>';
     list.forEach(function (d) {
       var dateStr = ym + '-' + pad2(d);
-      html += '<tr><td class="nowrap">' + d + '(' + esc(DOW.ja[dowIndex(dateStr)]) + ')</td>' + cell(plan[String(d)]) +
+      var ph = (m.publicHolidays || {})[dateStr];
+      html += '<tr><td class="nowrap' + (ph || dowIndex(dateStr) === 0 ? ' dow-sun' : '') + '">' + d + '(' + esc(DOW.ja[dowIndex(dateStr)]) + ')' + (ph ? ' ' + esc(ph) : '') + '</td>' + cell(plan[String(d)]) +
         (hasActual ? cell(act[String(d)]) : '') + '</tr>';
     });
     return html + '</tbody></table></div>';

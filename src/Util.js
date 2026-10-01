@@ -226,3 +226,62 @@ function util_addMinutesToJst_(jstStr, minutes) {
   var min = String(dt.getUTCMinutes()).padStart(2, '0');
   return y + '-' + m + '-' + d + ' ' + h + ':' + min;
 }
+
+// 日本の祝日（表示用。法令の判定には使わない）。{ 'YYYY-MM-DD': '名前' } を返す。
+// 国民の祝日に関する法律（2020年以降の形）に沿って計算する。春分・秋分は 1980〜2099年の近似式。
+function util_jpHolidays_(year) {
+  var y = Number(year);
+  var pad = function (n) { return (n < 10 ? '0' : '') + n; };
+  var key = function (m, d) { return y + '-' + pad(m) + '-' + pad(d); };
+  var dow = function (m, d) { return new Date(Date.UTC(y, m - 1, d)).getUTCDay(); };
+  var nthMonday = function (m, n) { var first = dow(m, 1); return 1 + ((8 - first) % 7) + (n - 1) * 7; };
+  var shift = (y - 1980) * 0.242194 - Math.floor((y - 1980) / 4);
+  var h = {};
+  h[key(1, 1)] = '元日';
+  h[key(1, nthMonday(1, 2))] = '成人の日';
+  h[key(2, 11)] = '建国記念の日';
+  h[key(2, 23)] = '天皇誕生日';
+  h[key(3, Math.floor(20.8431 + shift))] = '春分の日';
+  h[key(4, 29)] = '昭和の日';
+  h[key(5, 3)] = '憲法記念日';
+  h[key(5, 4)] = 'みどりの日';
+  h[key(5, 5)] = 'こどもの日';
+  h[key(7, nthMonday(7, 3))] = '海の日';
+  h[key(8, 11)] = '山の日';
+  h[key(9, nthMonday(9, 3))] = '敬老の日';
+  h[key(9, Math.floor(23.2488 + shift))] = '秋分の日';
+  h[key(10, nthMonday(10, 2))] = 'スポーツの日';
+  h[key(11, 3)] = '文化の日';
+  h[key(11, 23)] = '勤労感謝の日';
+
+  var addDays = function (k, n) {
+    var t = new Date(Date.UTC(Number(k.slice(0, 4)), Number(k.slice(5, 7)) - 1, Number(k.slice(8, 10)) + n));
+    return t.getUTCFullYear() + '-' + pad(t.getUTCMonth() + 1) + '-' + pad(t.getUTCDate());
+  };
+  var base = Object.keys(h).sort();
+  // 国民の休日: 前日と翌日が祝日に挟まれた平日
+  base.forEach(function (k) {
+    var mid = addDays(k, 1), next = addDays(k, 2);
+    if (!h[mid] && h[next] && new Date(Date.UTC(y, Number(mid.slice(5, 7)) - 1, Number(mid.slice(8, 10)))).getUTCDay() !== 0) {
+      h[mid] = '国民の休日';
+    }
+  });
+  // 振替休日: 祝日が日曜なら、その後の最初の祝日でない日
+  base.forEach(function (k) {
+    if (new Date(Date.UTC(y, Number(k.slice(5, 7)) - 1, Number(k.slice(8, 10)))).getUTCDay() !== 0) return;
+    var d = addDays(k, 1);
+    while (h[d]) d = addDays(d, 1);
+    h[d] = '振替休日';
+  });
+  var out = {};
+  Object.keys(h).sort().forEach(function (k) { out[k] = h[k]; });
+  return out;
+}
+
+// その月の祝日だけ（表示用）
+function util_jpHolidaysOfMonth_(yearMonth) {
+  var all = util_jpHolidays_(Number(yearMonth.slice(0, 4)));
+  var out = {};
+  Object.keys(all).forEach(function (k) { if (k.slice(0, 7) === yearMonth) out[k] = all[k]; });
+  return out;
+}
