@@ -4,6 +4,70 @@ handover.md の保存上限（5 件）を超えて押し出された古いメモ
 会話開始時には読み込まれない。過去の経緯を掘り返すときだけ開く。新しいものを一番上に来るよう足す。
 
 ---
+## 2026-10-01 試用版を個人の Google アカウントに公開し、管理者ログインまで確認
+
+**決めたこと**
+
+- 公開先は aibisiness.kyouin@gmail.com（個人アカウント。架空データでの試用に限る）。送り込みは clasp
+- Apps Script のプロジェクト: https://script.google.com/d/1DilT1riEfEt9GmY2eiO425EOrC3OTdyx6DLxlAEip9V0sROG556dyshN/edit
+- アプリの URL: https://script.google.com/macros/s/AKfycbzloK9Wgxf_aQnaXZ2k_MOz-VbQK7HFhUXQVTS0VH2Ug6T2wd5-Eoq0fgebtq0nQ-HR/exec（ブラウザに複数アカウントがあると開けないので、シークレットウィンドウで開く）
+- 本物の GAS で見つかった2件を修正: パスワードのハッシュを JavaScript で計算（Utilities の1万回呼び出しは数分かかる）、画面部品をテンプレートとして読み込む（ログインボタンが無反応だった）
+
+**次にやること**
+
+- 管理画面で最低賃金・締切・架空の学生を登録し、学生としてシフト入力から確定まで試す
+- 修正を main に取り込む（rahiseko-alt/4aischool-shift#3）
+- 次の会話で再公開するときは clasp の再ログインが要る（作業環境が消えると許可も消える）。更新は同じ公開先（AKfycbzloK9…）に上書きする
+
+**未解決の問題**
+
+- 最初の setupInitial が作った ShiftDB・AuditLog 以外に、重複の表は作られていない（確認済み）が、本物のシート上での ' の扱いはまだ目視していない
+- ネパール語・ベトナム語の訳は話者の確認が必要
+- 個人アカウントで本物の学生情報を扱うと、元の仕様書の方針（個人 Gmail 禁止）に反する
+
+## 2026-09-30 Gemini の実装を点検し、重大な問題を修正
+
+**決めたこと**
+
+- Gemini の実装（段階1〜7）を取り込み、点検で見つかった問題を Claude が直した。内容は `docs/impl/REVIEW-2026-09-30.md`
+- 本物のスプレッドシートの自動変換と数式注入への対策として、ShiftDB へは値の先頭に `'` を付けて書く
+- テストは221件（`test/api/hardening.test.js` を追加）。画面の通し確認は `node scripts/e2e-browser.js`
+- 学校のアカウントは使わない方針（利用者の判断）。個人アカウントで公開する場合は、架空のデータでの試用にとどめることを推奨済み
+
+**次にやること**
+
+- 修正を main に取り込む（rahiseko-alt/4aischool-shift#3）
+- 利用者の Google アカウントで公開する（Claude は代行できない。手順は会話で渡す）
+- 公開後、本物のスプレッドシートで `'` の扱い・締切・ログインを確かめる
+
+**未解決の問題**
+
+- 本物の Google 上では一度も動かしていない
+- ネパール語・ベトナム語の訳は話者の確認が必要
+- 個人アカウントで本物の学生情報を扱うと、元の仕様書の方針（個人 Gmail 禁止）に反する
+
+## 2026-09-29 実装役向けの指示書とテスト210件を作成
+
+**決めたこと**
+
+- 実装役（Gemini）には `GEMINI.md` → `docs/impl/INSTRUCTIONS.md` の順に読ませる。仕様の写しは `docs/impl/SPEC.md`
+- テスト210件（計算93件・窓口・3言語辞書・暴走止め）を Claude が作成。手元の見本実装で全件通過、誤りを仕込む確認も約40通り全部検出（見本は置き場所に入れていない）
+- テストや指示書の書き換えは `test/LOCKED.sha256` の指紋照合（`npm run check-locked` と自動チェック）で検出する
+- 独立の点検で見つかった段階順の矛盾・実績の受付順・改ざん防止の穴などは修正済み
+
+**次にやること**
+
+- （済）rahiseko-alt/4aischool-shift#1 は 2026-09-29 に main へ取り込んだ
+- Gemini に最初の指示文を貼って作業させる（文面は会話で渡した。要点: main から gemini/impl を作る → GEMINI.md と INSTRUCTIONS.md を読む → 第0章を復唱 → 段階1〜7）
+- Gemini の成果を Claude が点検する（`npm test`・`npm run check-locked`・`git diff` で test/ と docs/ が変わっていないか）
+- `CONTEXT.md` や `docs/impl/` を今後直したら、`test/LOCKED.sha256` と `.github/workflows/test.yml` の指紋を作り直す
+
+**未解決の問題**
+
+- パスワードの10,000回反復が GAS で何秒かかるか未計測
+- ネパール語・ベトナム語の訳を確認する話者が未定
+- 画面は自動テストが無く、実機確認に頼る
+
 ## 2026-09-29 実装仕様を課題票#2として登録
 
 **決めたこと**

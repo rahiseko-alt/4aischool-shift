@@ -53,7 +53,7 @@ src/
   Student.js        学生の窓口（api_getMonth など）
   Admin.js          管理者の窓口（api_admin* のうち印刷以外）
   Print.js          api_adminPrintHtml
-  I18n.js           3言語の辞書 I18N
+  I18n.js           7言語の辞書 I18N（ja・ne・vi・en・my・si・bn）
   Backup.js         backupMonthly・installTriggers（DriveApp と ScriptApp はここでだけ使う）
   index.html        画面の骨組み
   client_css.html   画面の CSS
@@ -114,6 +114,7 @@ src/
 - 深夜帯は、開始日の 0:00〜5:00 と 22:00〜翌5:00。休憩と重なる分は数えない（18歳未満の深夜の判定に使う）。
 - 7日間の窓は「対象月の初日の6日前」から「対象月の末日」までの各日を初日として作る。
 - 18歳未満の7日40時間は、7日間のうち1日でも18歳未満の日を含む窓に当てはめる。どの日も成人の窓で 2,400 分を超えたら `LABOR_HOURS`。
+- 成人の1日8時間超は `OVER_8H`（block。2026-10-01 に注意 `LABOR_HOURS` から変更）。長期休業日は `OVER_8H_HOLIDAY` だけを出し、`OVER_8H` を重ねない。実績モードでは `ACTUAL_OVER` の対象。
 - 7日間の検算は、**違反した窓ごとに1つ**コードを出す（最初の1つだけで止めない）。`date` はその窓の初日。
 - `maxRolling7Minutes` は、28時間の検算をしない窓（7日すべてが長期休業日）も含めた、すべての窓の合計の最大値。
 - 時刻は `/^([01]\d|2[0-3]):(00|15|30|45)$/` に合うものだけ（`"9:00"`・`"24:00"`・`"09:10"` は `INVALID_TIME`）。
@@ -193,6 +194,7 @@ src/
   shifts: {...},               // 保存した予定（行が無ければ {}）
   evaluation: {...},           // 予定を evaluateMonth(mode 'plan') で計算した結果
   holidays: ['YYYY-MM-DD', ...], // その月の長期休業日
+  publicHolidays: { 'YYYY-MM-DD': '祝日名' }, // その月の日本の祝日（表示用。法令の判定には使わない）
   actual: { status: '未確認'|'予定どおり'|'修正あり', shifts: {...}|null, evaluation: {...}|null,
             open: boolean, deadlineAt: 'YYYY-MM-DD HH:MM'|null }
 }
@@ -221,11 +223,10 @@ src/
 | `api_adminResetPassword` | `token, studentId` | `{ initialPassword }`（失敗回数・ロックも解除し、変更を強制） |
 | `api_adminUnlockLogin` | `token, studentId` | `null` |
 | `api_adminCreateAdmin` | `token` | `{ loginId, initialPassword }` |
-| `api_adminStudentDetail` | `token, studentId` | `{ student, months: [{ yearMonth, status, actualStatus }] }` |
+| `api_adminStudentDetail` | `token, studentId` | `{ student, months: [{ yearMonth, status, actualStatus, shifts, totalMinutes, codes, actual: object\|null, actualTotalMinutes: number\|null, actualCodes, unlockUntil, publicHolidays }] }`（新しい月が先） |
 | `api_adminGrantUnlock` | `token, studentId, yearMonth, until` | `null`（行が無ければ未入力の行を作る。version は変えない） |
 | `api_adminSchoolConfirm` | `token, studentId, yearMonth` | `null` |
 | `api_adminBoard` | `token, yearMonth, { className?, status?, query? }` | 下記 |
-| `api_adminQuarterCheck` | `token, { className: string\|null, endYearMonth }` | `{ months: [3か月、古い順], rows: [{ studentId, name, className, months: [{ yearMonth, displayStatus, actualStatus, actualTotalMinutes: number\|null, actualOver }] }] }` |
 | `api_adminSetDeadline` | `token, { yearMonth, className, deadlineAt, actualDeadlineAt\|null }` | `null`（年月＋クラスで上書き） |
 | `api_adminSetHoliday` | `token, { holidayId?, name, startDate, endDate, schoolYear }` | `{ holidayId }`（開始＞終了は `BAD_REQUEST`） |
 | `api_adminDeleteHoliday` | `token, holidayId` | `null` |
@@ -307,7 +308,7 @@ AuditLog スプレッドシートの `AUDIT_LOG` シートは、**この列・�
 `timestamp, user_id, role, action, student_id, year_month, version, details`
 
 - `timestamp` は `"YYYY-MM-DD HH:MM"`、`user_id` は操作した人のログインID、`role` は `student`／`admin`。
-- `action` は次のどれか: `SAVE_DRAFT`・`CONFIRM`・`ACTUAL_SAVE`・`ACTUAL_CONFIRM`・`LOGIN_OK`・`LOGIN_FAIL`・`PASSWORD_CHANGE`・`PASSWORD_RESET`・`LOGIN_UNLOCK`・`ADMIN_UNLOCK`・`SCHOOL_CONFIRM`・`QUARTER_CHECK`・`MASTER_UPDATE`・`PURGE`。
+- `action` は次のどれか: `SAVE_DRAFT`・`CONFIRM`・`ACTUAL_SAVE`・`ACTUAL_CONFIRM`・`LOGIN_OK`・`LOGIN_FAIL`・`PASSWORD_CHANGE`・`PASSWORD_RESET`・`LOGIN_UNLOCK`・`ADMIN_UNLOCK`・`SCHOOL_CONFIRM`・`MASTER_UPDATE`・`PURGE`。
 - 保存・確定・学校確定の行には、書き込み後の `version` を入れる。
 - パスワード・トークン・秘密鍵を、どのシートにもログにも書かない（テストが全セルを検査する）。
 
@@ -353,7 +354,7 @@ AuditLog スプレッドシートの `AUDIT_LOG` シートは、**この列・�
 - 対象月・クラス・状態・検索、件数（学生数・確定済・下書き・未提出・エラー・対象外）、実績未確認。
 - 学生一覧（学籍番号・氏名・クラス・状態・エラー・実績・更新日・印刷）。実績超過の学生は赤。
 - 学生詳細（学生情報の編集、修正許可、学校確定、パスワード再発行、ロック解除、2年間一括印刷）。
-- 四半期確認、締切の設定、長期休業の設定、学校設定、学生の追加、保存期限超過データの削除、クラス一括印刷（50名ずつ）、表示中を一括印刷。
+- 締切の設定、長期休業の設定、学校設定、学生の追加、保存期限超過データの削除、クラス一括印刷（50名ずつ）、表示中を一括印刷。
 - 印刷は `api_adminPrintHtml` の HTML を新しいウィンドウに書いて `print()` を呼ぶ。
 
 ### 9.4 画面見本（mockup-v1.webp）について
@@ -372,7 +373,7 @@ AuditLog スプレッドシートの `AUDIT_LOG` シートは、**この列・�
 | 1 | `appsscript.json`、`Core.js`（evaluateMonth） | `node --test "test/core/*.test.js"` | `段階1: 計算の心臓部` |
 | 2 | `Util.js`・`Db.js`・`Auth.js`（setupInitial・ログイン・ログアウト・パスワード変更）、`api_adminUpsertStudent`・`api_adminResetPassword`・`api_adminUnlockLogin`・`api_getMonth`（読むだけ）、**第6章の公開関数すべての「入口」**（下記） | `node --test test/api/auth.test.js` | `段階2: 認証` |
 | 3 | 学生の窓口の残り（保存・確定・実績・履歴）、管理者の `api_adminSetDeadline`・`api_adminGetSettings`・`api_adminSetSettings`・`api_adminGrantUnlock`・`api_adminSchoolConfirm` | `node --test test/api/submission.test.js test/api/actual.test.js test/api/permissions.test.js` | `段階3: 学生の窓口` |
-| 4 | 管理者の窓口の残り（ボード・学生詳細・四半期確認・長期休業・管理者の追加・保存期限）、`Print.js` | `node --test test/api/admin.test.js` | `段階4: 管理者の窓口` |
+| 4 | 管理者の窓口の残り（ボード・学生詳細・長期休業・管理者の追加・保存期限）、`Print.js` | `node --test test/api/admin.test.js` | `段階4: 管理者の窓口` |
 | 5 | `I18n.js`、`Code.js`、`Backup.js` | `npm test`（全部） | `段階5: 辞書と公開関数` |
 | 6 | `index.html`・`client_css.html`・`client_js.html` | `npm test`（全部。画面を足しても落ちないこと） | `段階6: 画面` |
 | 7 | `docs/impl/REPORT.md`（第11章と第12章） | `npm test` と `npm run check-locked` | `段階7: 完了報告` |
@@ -417,5 +418,5 @@ AuditLog スプレッドシートの `AUDIT_LOG` シートは、**この列・�
 3. Drive にバックアップ用フォルダを作り、そのIDを Script Properties の `BACKUP_FOLDER_ID` に入れて、`installTriggers` を実行する。
 4. 「ウェブアプリとしてデプロイ」（次のユーザーとして実行: 自分、アクセス: 全員）。
 5. 管理画面で、長期休業・締切・学生を登録する。
-6. 実機確認（iOS Safari と Android Chrome）: ログイン → パスワード変更 → 31日分の入力 → 22:00〜02:00 の入力 → 途中保存 → 確定 → 3言語の切替、の順に確かめる項目の一覧。
+6. 実機確認（iOS Safari と Android Chrome）: ログイン → パスワード変更 → 31日分の入力 → 22:00〜02:00 の入力 → 途中保存 → 確定 → 言語の切替、の順に確かめる項目の一覧。
 7. 締切前の負荷確認: 30人程度が同時に保存したときに「混雑中」以外のエラーが出ないか確かめる手順。

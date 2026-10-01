@@ -1,5 +1,5 @@
 'use strict';
-// 管理ボード・マスタ・四半期確認・印刷・保存期限。
+// 管理ボード・マスタ・印刷・保存期限。
 // 実装役はこのファイルを変更してはならない。
 
 const test = require('node:test');
@@ -104,6 +104,19 @@ test('管理ボード・学生詳細に勤務先の項目は無い（2026-10-01 
   assert.equal(d.student.studentId, '251001');
 });
 
+test('学生詳細: 月ごとに、学生が入れた予定と実績の時間・合計・注意をそのまま見られる（2026-10-01 追加）', () => {
+  const w = world();
+  ok(w.api('api_saveDraft', w.st.token, YM, { '3': [sh('21:00', '06:00')], '4': [sh('09:00', '13:00')] }, 0));
+  const d = ok(w.api('api_adminStudentDetail', w.admin, w.st.studentId));
+  const m = d.months.find((x) => x.yearMonth === YM);
+  assert.deepEqual(m.shifts, { '3': [{ start: '21:00', end: '06:00' }], '4': [{ start: '09:00', end: '13:00' }] });
+  assert.equal(m.totalMinutes, 480 + 240);
+  assert.equal(m.actual, null);
+  assert.equal(m.actualTotalMinutes, null);
+  assert.ok(Array.isArray(m.codes));
+  assert.equal(d.student.loginId, w.st.loginId);
+});
+
 // ---- マスタが評価に反映される ----
 
 test('長期休業を登録すると、学生の評価に反映される（8時間15分で OVER_8H_HOLIDAY）', () => {
@@ -115,7 +128,10 @@ test('長期休業を登録すると、学生の評価に反映される（8時�
   const list = ok(w.api('api_adminListHolidays', w.admin));
   assert.equal(list.length, 1);
   ok(w.api('api_adminDeleteHoliday', w.admin, list[0].holidayId));
-  ok(w.api('api_confirm', w.st.token, '2026-12', { '25': [sh('09:00', '18:15')] }, 0));
+  // 長期休業を消すと、その日は普通の日の1日8時間超（OVER_8H）になる（2026-10-01 成人も確定を止める）
+  const r2 = w.api('api_confirm', w.st.token, '2026-12', { '25': [sh('09:00', '18:15')] }, 0);
+  assert.ok(r2.details.codes.some((c) => c.code === 'OVER_8H'));
+  assert.equal(r2.details.codes.some((c) => c.code === 'OVER_8H_HOLIDAY'), false);
 });
 
 test('長期休業の開始日が終了日より後なら BAD_REQUEST', () => {
@@ -150,7 +166,7 @@ test('学生情報の入力検証: 日付の形式・在籍状態・言語', () 
   for (const bad of [
     studentRecord({ birthDate: '2000/04/01' }),
     studentRecord({ status: '在学' }),
-    studentRecord({ language: 'en' }),
+    studentRecord({ language: 'zh' }), // 2026-10-01 英語は対応言語になった
     studentRecord({ studentId: '' }),
     studentRecord({ className: '' }),
   ]) {
@@ -164,24 +180,6 @@ test('管理者の追加: 新しい管理者は初回にパスワード変更を
   const login = ok(w.api('api_login', a.loginId, a.initialPassword));
   assert.equal(login.role, 'admin');
   assert.equal(login.mustChangePassword, true);
-});
-
-// ---- 四半期確認 ----
-
-test('四半期確認: 終わりの月を含む3か月分の実績を返し、監査ログに QUARTER_CHECK を1行残す', () => {
-  const w = world();
-  w.at('2026-11-02 10:00');
-  const m = ok(w.api('api_getMonth', w.st.token, YM));
-  const saved = ok(w.api('api_saveActual', w.st.token, YM, { '1': [sh('09:00', '12:00')] }, m.version));
-  ok(w.api('api_confirmActual', w.st.token, YM, saved.version));
-  const q = ok(w.api('api_adminQuarterCheck', w.admin, { className: null, endYearMonth: '2026-10' }));
-  assert.deepEqual(q.months, ['2026-08', '2026-09', '2026-10']);
-  const row = q.rows.find((r) => r.studentId === '251001');
-  const oct = row.months.find((x) => x.yearMonth === '2026-10');
-  assert.equal(oct.actualStatus, '修正あり');
-  assert.equal(oct.actualTotalMinutes, 180);
-  assert.equal(oct.actualOver, false);
-  assert.equal(auditRows(w).filter((r) => r.action === 'QUARTER_CHECK').length, 1);
 });
 
 // ---- 印刷 ----

@@ -145,7 +145,7 @@ html = html.replace('<head>', '<head><script>' + shim + '</script>');
   const msg = await page.textContent('#shift-error');
   if (msg !== '保存しました') throw new Error('途中保存の知らせ: ' + msg);
   const day2codes = await page.textContent('#shifts-table tr.day-codes-row[data-day="2"]');
-  if (!day2codes.includes('労基法上要確認')) throw new Error('2日の注意が出ない: ' + day2codes);
+  if (!day2codes.includes('1日8時間超過')) throw new Error('2日の注意が出ない: ' + day2codes);
   if ((await cells(row(3))) !== '1時間 / 8時間') throw new Error('保存後の表示: ' + (await cells(row(3))));
   if (process.env.E2E_SCREENSHOT) {
     await page.evaluate(() => window.scrollTo(0, document.getElementById('shifts-section').getBoundingClientRect().top + window.scrollY - document.querySelector('#student-screen .top-bar').offsetHeight - 8));
@@ -171,13 +171,17 @@ html = html.replace('<head>', '<head><script>' + shim + '</script>');
   if (!(await page.textContent('#shift-error')).includes('入力不足')) throw new Error('入力不足の案内');
   await row(5).locator('.sh-start').fill('');
 
-  step('言語切替（ネパール語・ベトナム語）');
-  await page.click('#student-screen .lang-switch button[data-lang="ne"]');
+  step('言語切替（ネパール語・ベトナム語・ベンガル語・ミャンマー語）');
+  await page.selectOption('#student-screen .lang-select', 'ne');
   if (!(await page.textContent('#btn-save-draft')).match(/[ऀ-ॿ]/)) throw new Error('ネパール語に変わらない');
-  await page.click('#student-screen .lang-switch button[data-lang="vi"]');
+  await page.selectOption('#student-screen .lang-select', 'vi');
   if ((await page.textContent('#shifts-table tr.day-row[data-day="1"] .day-dow')).indexOf('T5') < 0) throw new Error('ベトナム語の曜日');
   if (!(await totalText()).includes('Tổng giờ làm dự kiến')) throw new Error('ベトナム語の合計: ' + (await totalText()));
-  await page.click('#student-screen .lang-switch button[data-lang="ja"]');
+  await page.selectOption('#student-screen .lang-select', 'bn');
+  if (!(await page.textContent('#btn-save-draft')).match(/[\u0980-\u09FF]/)) throw new Error('ベンガル語に変わらない');
+  await page.selectOption('#student-screen .lang-select', 'my');
+  if (!(await page.textContent('#btn-save-draft')).match(/[\u1000-\u109F]/)) throw new Error('ミャンマー語に変わらない');
+  await page.selectOption('#student-screen .lang-select', 'ja');
 
   step('ページを読み込み直すとシフトが残っている（保存済みの内容）');
   await page.click('#btn-prev-month'); await wait(); await page.click('#btn-next-month'); await wait();
@@ -185,9 +189,16 @@ html = html.replace('<head>', '<head><script>' + shim + '</script>');
   if (v !== '18:15') throw new Error('保存したシフトが表示されない: ' + v);
   if ((await totalText()) !== '勤務予定時間合計: 20時間15分') throw new Error('読み込み直した合計: ' + (await totalText()));
 
-  step('学生で確定');
+  step('学生で確定: 1日8時間超の日があると止まり、その日が赤くなる。直せば確定できる');
+  if ((await page.textContent('#st-confirm-state')) !== '未確定') throw new Error('確定前に「未確定」が出ない: ' + (await page.textContent('#st-confirm-state')));
+  await page.click('#btn-confirm-shift'); await wait(); await wait();
+  if (!(await page.textContent('#shift-error')).startsWith('確定できません。')) throw new Error('「確定できません。」で始まらない: ' + (await page.textContent('#shift-error')));
+  if (!(await page.textContent('#shift-error')).includes('2日: 1日8時間超過')) throw new Error('8時間超で止まらない: ' + (await page.textContent('#shift-error')));
+  if (!(await row(2).getAttribute('class')).includes('row-error')) throw new Error('8時間超の日が赤くならない');
+  await row(2).locator('.sh-end').fill('18:00');
   await page.click('#btn-confirm-shift'); await wait(); await wait();
   if ((await page.textContent('#shift-error')) !== '確定済み') throw new Error('確定の知らせ: ' + (await page.textContent('#shift-error')));
+  if ((await page.textContent('#st-confirm-state')) !== '確定済') throw new Error('確定後に「確定済」が出ない: ' + (await page.textContent('#st-confirm-state')));
 
   // 時計を進めるとセッション（120分）が切れる。画面がログインに戻ることも確かめ、入り直す。
   const relogin = async () => {
@@ -214,39 +225,44 @@ html = html.replace('<head>', '<head><script>' + shim + '</script>');
   if ((await arow(2).locator('.cell-work').textContent()) !== '4時間') throw new Error('実績の実働がその場で変わらない');
   await page.click('#actual-table tr.actual-shift-row[data-day="2"] .btn-as-planned');
   const a2 = [await arow(2).locator('.sh-start').inputValue(), await arow(2).locator('.sh-end').inputValue()].join('〜');
-  if (a2 !== '09:00〜18:15') throw new Error('予定どおりで写らない: ' + a2);
-  if ((await arow(2).locator('.cell-work').textContent()) !== '8時間15分') throw new Error('予定どおり後の実働');
-  if (!(await page.textContent('#actual-table .month-total')).includes('20時間15分')) throw new Error('実績の合計: ' + (await page.textContent('#actual-table .month-total')));
+  if (a2 !== '09:00〜18:00') throw new Error('予定どおりで写らない: ' + a2);
+  if ((await arow(2).locator('.cell-work').textContent()) !== '8時間') throw new Error('予定どおり後の実働');
+  if (!(await page.textContent('#actual-table .month-total')).includes('20時間')) throw new Error('実績の合計: ' + (await page.textContent('#actual-table .month-total')));
   await page.click('#btn-save-actual'); await wait(); await wait();
   await page.click('#btn-confirm-actual'); await wait(); await wait();
-  if (!(await page.textContent('#actual-codes')).includes('予定どおり')) throw new Error('実績の状態: ' + (await page.textContent('#actual-codes')));
+  if (!(await page.textContent('#actual-error')).includes('確定済み')) throw new Error('実績の確認: ' + (await page.textContent('#actual-error')));
+  if ((await page.textContent('#actual-codes')).includes('予定どおり') || (await page.textContent('#history-list')).includes('未確認')) throw new Error('生徒に実績確認の進み具合が出ている');
 
-  step('管理者: 四半期確認・学校設定・印刷（ポップアップ）');
+  step('管理者: 学校設定・印刷（ポップアップ）');
   await page.click('#btn-logout-st');
   await page.fill('#inp-loginId', ADMIN.id); await page.fill('#inp-password', 'admin-pass-0001'); await page.click('#btn-login'); await wait();
-  await page.click('#btn-open-quarter');
-  await page.fill('[data-key="endYearMonth"]', '2026-10');
-  await page.click('[data-act="submit"]'); await wait();
-  if (!(await page.textContent('#admin-dialog-body')).includes('予定どおり')) throw new Error('四半期確認の表');
-  await page.click('#btn-dialog-close');
   await page.click('#btn-open-settings'); await wait();
   await page.fill('[data-key="retentionMonths"]', '1');
   await page.click('[data-act="submit"]'); await wait();
   if (!(await page.textContent('#admin-form-error')).includes('リクエスト')) throw new Error('範囲外の設定を止めない');
   await page.click('#btn-dialog-close');
-  const [popup] = await Promise.all([page.waitForEvent('popup'), page.click('.btn-admin-print')]);
+  const [popup] = await Promise.all([page.waitForEvent('popup'), page.click('#btn-print-board')]);
   await popup.waitForFunction(() => document.querySelectorAll('.student-page').length === 1, null, { timeout: 5000 });
   const printed = await popup.textContent('body');
   if (!printed.includes('勤務予定時間合計') || !printed.includes('実働(合計)時間')) throw new Error('印刷に紙の予定表の欄が無い');
   if (/勤務先|時給|給与|¥/.test(printed)) throw new Error('印刷に勤務先・お金の欄が残っている');
   await popup.close();
 
-  step('生徒モード: 生徒B（ネパール語）に入り、管理者に戻る');
-  await page.click('#btn-student-mode');
-  await page.click('[data-act="actas"][data-id="DEMO-B"]'); await wait(); await wait();
+  step('管理画面: 行を押すと詳細が開く・四半期確認と試用データのボタンは無い');
+  for (const id of ['#btn-open-quarter', '#btn-seed-demo', '#btn-print-all-class']) {
+    if (await page.$(id)) throw new Error('消したはずのボタンが残っている: ' + id);
+  }
+  await page.click('#admin-board tr.board-row td:nth-child(2)'); await wait();
+  if (await page.isHidden('#admin-dialog-overlay')) throw new Error('行を押しても詳細が開かない');
+  await page.selectOption('#detail-ym', '2026-10');
+  if (!(await page.textContent('#detail-month')).includes('〜')) throw new Error('詳細に学生の入力した時間が出ない: ' + (await page.textContent('#detail-month')));
+  await page.click('#btn-dialog-close');
+
+  step('生徒モード: ボタン1つで生徒Aの画面に入り、管理者に戻る');
+  await page.click('#btn-student-mode'); await wait(); await wait();
   if (!dialogs.some((m) => m.includes('生徒A') && m.includes('パスワード'))) throw new Error('試用の生徒のログイン情報が出ない');
   await page.waitForSelector('#student-screen:not([hidden])');
-  await page.waitForFunction(() => document.getElementById('st-name').textContent.includes('DEMO-B'));
+  await page.waitForFunction(() => document.getElementById('st-name').textContent.includes('DEMO-A'));
   if (await page.isHidden('#btn-back-admin')) throw new Error('管理者に戻るボタンが無い');
   await page.click('#btn-back-admin'); await wait();
   await page.waitForSelector('#admin-screen:not([hidden])');

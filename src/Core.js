@@ -193,11 +193,13 @@ function evaluateMonth(input) {
       codes.push({ code: 'OVER_8H_HOLIDAY', severity: 'block', date: dateKey });
     }
 
+    // 1日8時間超: 18歳未満は MINOR_OVER、成人は OVER_8H（どちらも確定を止める。2026-10-01 成人も注意から変更）。
+    // 長期休業日は上の OVER_8H_HOLIDAY が出るので重ねない。
     if (dayMinutes > 480) {
       if (isMinor) {
         codes.push({ code: 'MINOR_OVER', severity: 'block', date: dateKey });
-      } else {
-        codes.push({ code: 'LABOR_HOURS', severity: 'warn', date: dateKey });
+      } else if (!isHoliday) {
+        codes.push({ code: 'OVER_8H', severity: 'block', date: dateKey });
       }
     }
   }
@@ -259,7 +261,7 @@ function evaluateMonth(input) {
     var hasActualOver = false;
     for (var i = 0; i < codes.length; i++) {
       var c = codes[i];
-      if (c.code === 'OVER_28H' || c.code === 'OVER_8H_HOLIDAY' || c.code === 'MINOR_NIGHT' || c.code === 'MINOR_OVER') {
+      if (c.code === 'OVER_28H' || c.code === 'OVER_8H_HOLIDAY' || c.code === 'OVER_8H' || c.code === 'MINOR_NIGHT' || c.code === 'MINOR_OVER') {
         hasActualOver = true;
       }
       if (c.severity === 'block') {

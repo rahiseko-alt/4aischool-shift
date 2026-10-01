@@ -11,7 +11,7 @@ function admin_isValidStudent_(st) {
     var d = optionalDates[i];
     if (d !== null && d !== undefined && d !== '' && !util_isDate_(d)) return false;
   }
-  if (['ja', 'ne', 'vi'].indexOf(st.language) < 0) return false;
+  if (['ja', 'ne', 'vi', 'en', 'my', 'si', 'bn'].indexOf(st.language) < 0) return false;
   if (['在籍', '休学', '卒業', '退学'].indexOf(st.status) < 0) return false;
   if (typeof st.workPermission !== 'boolean') return false;
   return true;
@@ -520,6 +520,7 @@ function api_adminStudentDetail(token, studentId) {
 
     var studentData = {
       studentId: targetStudent.student_id,
+      loginId: targetStudent.login_id || '',
       name: targetStudent.name,
       className: targetStudent.class,
       birthDate: targetStudent.birth_date || '',
@@ -544,11 +545,25 @@ function api_adminStudentDetail(token, studentId) {
       return b.year_month.localeCompare(a.year_month);
     });
 
+    // 学生が入れた中身（予定・実績の時間、合計、注意）もそのまま返す。管理者が画面で確かめられるように。
+    var parse = function (txt, fallback) {
+      if (!txt) return fallback;
+      try { return JSON.parse(txt); } catch (e) { return fallback; }
+    };
+    var num = function (v) { return v === '' || v === undefined || v === null ? null : Number(v); };
     var monthsList = mySubs.map(function(s) {
       return {
         yearMonth: s.year_month,
         status: s.status,
-        actualStatus: s.actual_status || '未確認'
+        actualStatus: s.actual_status || '未確認',
+        shifts: parse(s.shift_json, {}),
+        totalMinutes: num(s.total_minutes),
+        codes: parse(s.validation_codes, []),
+        actual: s.actual_json ? parse(s.actual_json, null) : null,
+        actualTotalMinutes: s.actual_json ? num(s.actual_total_minutes) : null,
+        actualCodes: parse(s.actual_codes, []),
+        publicHolidays: util_jpHolidaysOfMonth_(s.year_month),
+        unlockUntil: s.unlock_until || null
       };
     });
 
@@ -747,107 +762,6 @@ function api_adminBoard(token, yearMonth, filters) {
   }
 }
 
-function api_adminQuarterCheck(token, params) {
-  try {
-    var auth = auth_verifySession_(token, 'admin');
-    if (!auth.ok) return auth;
-
-    if (!params || typeof params !== 'object') return { ok: false, error: 'BAD_REQUEST' };
-    var endYearMonth = params.endYearMonth;
-    var className = params.className || null;
-
-    if (!endYearMonth || !/^\d{4}-(0[1-9]|1[0-2])$/.test(endYearMonth)) {
-      return { ok: false, error: 'BAD_REQUEST' };
-    }
-
-    var parts = endYearMonth.split('-');
-    var ey = Number(parts[0]);
-    var em = Number(parts[1]);
-
-    var d1 = new Date(Date.UTC(ey, em - 3, 1));
-    var ym1 = d1.getUTCFullYear() + '-' + String(d1.getUTCMonth() + 1).padStart(2, '0');
-    var d2 = new Date(Date.UTC(ey, em - 2, 1));
-    var ym2 = d2.getUTCFullYear() + '-' + String(d2.getUTCMonth() + 1).padStart(2, '0');
-    var ym3 = endYearMonth;
-
-    var months = [ym1, ym2, ym3];
-
-    var allStudents = db_readAllRows_('STUDENTS');
-    if (className) {
-      allStudents = allStudents.filter(function(st) { return st.class === className; });
-    }
-    allStudents.sort(function(a, b) { return a.student_id.localeCompare(b.student_id); });
-
-    var allSubs = db_readAllRows_('MONTHLY_SUBMISSIONS');
-    var subMap = {};
-    for (var i = 0; i < allSubs.length; i++) {
-      var s = allSubs[i];
-      subMap[s.student_id + '_' + s.year_month] = s;
-    }
-
-    var rows = [];
-    for (var j = 0; j < allStudents.length; j++) {
-      var st = allStudents[j];
-      var studentMonths = [];
-
-      for (var mi = 0; mi < months.length; mi++) {
-        var ym = months[mi];
-        var sub = subMap[st.student_id + '_' + ym];
-
-        var displayStatus = '未提出';
-        var actualStatus = '未確認';
-        var actualTotalMinutes = null;
-        var actualOver = false;
-
-        if (sub) {
-          if (sub.status === '確定済') displayStatus = '確定済';
-          else if (sub.status === '学校確定') displayStatus = '対象外';
-          else if (sub.status === '下書き') displayStatus = '下書き';
-
-          if (sub.actual_status) actualStatus = sub.actual_status;
-          if (sub.actual_json) actualTotalMinutes = Number(sub.actual_total_minutes) || 0;
-
-          if (sub.actual_codes) {
-            try {
-              var aParsed = JSON.parse(sub.actual_codes);
-              if (Array.isArray(aParsed) && aParsed.indexOf('ACTUAL_OVER') !== -1) {
-                actualOver = true;
-              }
-            } catch (e) {}
-          }
-        }
-
-        studentMonths.push({
-          yearMonth: ym,
-          displayStatus: displayStatus,
-          actualStatus: actualStatus,
-          actualTotalMinutes: actualTotalMinutes,
-          actualOver: actualOver
-        });
-      }
-
-      rows.push({
-        studentId: st.student_id,
-        name: st.name,
-        className: st.class,
-        months: studentMonths
-      });
-    }
-
-    db_logAudit_('QUARTER_CHECK', auth.user.login_id, 'admin', '', endYearMonth, null, { className: className });
-
-    return {
-      ok: true,
-      data: {
-        months: months,
-        rows: rows
-      }
-    };
-  } catch (err) {
-    return { ok: false, error: 'INTERNAL' };
-  }
-}
-
 function api_adminSetHoliday(token, params) {
   try {
     var auth = auth_verifySession_(token, 'admin');
@@ -1014,9 +928,7 @@ function api_adminPurgeExpired(token) {
 // 本物の学生・本物の締切とは混ざらないよう、クラス名を「DEMO」に固定する。
 var DEMO_CLASS_ = 'DEMO';
 var DEMO_STUDENTS_ = [
-  { studentId: 'DEMO-A', name: '生徒A', language: 'ja' },
-  { studentId: 'DEMO-B', name: '生徒B', language: 'ne' },
-  { studentId: 'DEMO-C', name: '生徒C', language: 'vi' }
+  { studentId: 'DEMO-A', name: '生徒A', language: 'ja' }
 ];
 
 function api_adminSeedDemo(token) {
