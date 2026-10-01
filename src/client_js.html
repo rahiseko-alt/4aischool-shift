@@ -112,6 +112,7 @@
       btn.classList.toggle('active', btn.getAttribute('data-lang') === currentLang);
     });
     if (state.monthData && !el('student-screen').hidden) renderStudent();
+    if (lastHistory && !el('student-screen').hidden) renderHistory(lastHistory);
   }
   document.querySelectorAll('.lang-switch button').forEach(function (btn) {
     btn.addEventListener('click', function () { currentLang = btn.getAttribute('data-lang'); applyLang(); });
@@ -487,12 +488,25 @@
   function statusText(s) {
     return { '下書き': t('label.status.draft'), '確定済': t('label.status.confirmed'), '学校確定': t('label.status.schoolConfirmed'), '未入力': t('label.status.notEntered') }[s] || s;
   }
+  var lastHistory = null;
   function renderHistory(rows) {
+    lastHistory = rows;
     if (!rows || !rows.length) { el('history-list').innerHTML = ''; return; }
-    el('history-list').innerHTML = '<table class="history-table"><tbody>' + rows.map(function (r) {
-      return '<tr><td><strong>' + esc(r.yearMonth) + '</strong></td><td>' + esc(statusText(r.status)) + '</td><td>' + esc(actualStatusText(r.actualStatus)) + '</td></tr>';
-    }).join('') + '</tbody></table>';
+    // 見出しつきの表: 対象月・予定（提出の状態）・実績確認（月が終わってからの確認の状態）。行を押すとその月を開く
+    el('history-list').innerHTML = '<p class="history-hint">' + esc(t('label.historyHint')) + '</p>' +
+      '<table class="history-table"><thead><tr><th>' + esc(t('label.yearMonth')) + '</th><th>' + esc(t('label.plan')) + '</th><th>' +
+      esc(t('label.actualSection')) + '</th></tr></thead><tbody>' + rows.map(function (r) {
+        return '<tr class="history-row" data-ym="' + esc(r.yearMonth) + '"><td><strong>' + esc(r.yearMonth) + '</strong></td><td>' +
+          esc(statusText(r.status)) + '</td><td>' + esc(actualStatusText(r.actualStatus)) + '</td></tr>';
+      }).join('') + '</tbody></table>';
   }
+  el('history-list').addEventListener('click', function (ev) {
+    var r = ev.target.closest('tr[data-ym]');
+    if (!r) return;
+    state.yearMonth = r.getAttribute('data-ym');
+    loadStudentMonth();
+    window.scrollTo(0, 0);
+  });
 
   // =====================================================================
   // 管理画面（日本語だけ）
