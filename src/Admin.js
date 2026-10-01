@@ -520,6 +520,7 @@ function api_adminStudentDetail(token, studentId) {
 
     var studentData = {
       studentId: targetStudent.student_id,
+      loginId: targetStudent.login_id || '',
       name: targetStudent.name,
       className: targetStudent.class,
       birthDate: targetStudent.birth_date || '',
@@ -544,11 +545,24 @@ function api_adminStudentDetail(token, studentId) {
       return b.year_month.localeCompare(a.year_month);
     });
 
+    // 学生が入れた中身（予定・実績の時間、合計、注意）もそのまま返す。管理者が画面で確かめられるように。
+    var parse = function (txt, fallback) {
+      if (!txt) return fallback;
+      try { return JSON.parse(txt); } catch (e) { return fallback; }
+    };
+    var num = function (v) { return v === '' || v === undefined || v === null ? null : Number(v); };
     var monthsList = mySubs.map(function(s) {
       return {
         yearMonth: s.year_month,
         status: s.status,
-        actualStatus: s.actual_status || '未確認'
+        actualStatus: s.actual_status || '未確認',
+        shifts: parse(s.shift_json, {}),
+        totalMinutes: num(s.total_minutes),
+        codes: parse(s.validation_codes, []),
+        actual: s.actual_json ? parse(s.actual_json, null) : null,
+        actualTotalMinutes: s.actual_json ? num(s.actual_total_minutes) : null,
+        actualCodes: parse(s.actual_codes, []),
+        unlockUntil: s.unlock_until || null
       };
     });
 

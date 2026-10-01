@@ -242,6 +242,8 @@ html = html.replace('<head>', '<head><script>' + shim + '</script>');
   }
   await page.click('#admin-board tr.board-row td:nth-child(2)'); await wait();
   if (await page.isHidden('#admin-dialog-overlay')) throw new Error('行を押しても詳細が開かない');
+  await page.selectOption('#detail-ym', '2026-10');
+  if (!(await page.textContent('#detail-month')).includes('〜')) throw new Error('詳細に学生の入力した時間が出ない: ' + (await page.textContent('#detail-month')));
   await page.click('#btn-dialog-close');
 
   step('生徒モード: 生徒B（ネパール語）に入り、管理者に戻る');

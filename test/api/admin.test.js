@@ -104,6 +104,19 @@ test('管理ボード・学生詳細に勤務先の項目は無い（2026-10-01 
   assert.equal(d.student.studentId, '251001');
 });
 
+test('学生詳細: 月ごとに、学生が入れた予定と実績の時間・合計・注意をそのまま見られる（2026-10-01 追加）', () => {
+  const w = world();
+  ok(w.api('api_saveDraft', w.st.token, YM, { '3': [sh('21:00', '06:00')], '4': [sh('09:00', '13:00')] }, 0));
+  const d = ok(w.api('api_adminStudentDetail', w.admin, w.st.studentId));
+  const m = d.months.find((x) => x.yearMonth === YM);
+  assert.deepEqual(m.shifts, { '3': [{ start: '21:00', end: '06:00' }], '4': [{ start: '09:00', end: '13:00' }] });
+  assert.equal(m.totalMinutes, 480 + 240);
+  assert.equal(m.actual, null);
+  assert.equal(m.actualTotalMinutes, null);
+  assert.ok(Array.isArray(m.codes));
+  assert.equal(d.student.loginId, w.st.loginId);
+});
+
 // ---- マスタが評価に反映される ----
 
 test('長期休業を登録すると、学生の評価に反映される（8時間15分で OVER_8H_HOLIDAY）', () => {

@@ -221,7 +221,7 @@ src/
 | `api_adminResetPassword` | `token, studentId` | `{ initialPassword }`（失敗回数・ロックも解除し、変更を強制） |
 | `api_adminUnlockLogin` | `token, studentId` | `null` |
 | `api_adminCreateAdmin` | `token` | `{ loginId, initialPassword }` |
-| `api_adminStudentDetail` | `token, studentId` | `{ student, months: [{ yearMonth, status, actualStatus }] }` |
+| `api_adminStudentDetail` | `token, studentId` | `{ student, months: [{ yearMonth, status, actualStatus, shifts, totalMinutes, codes, actual: object\|null, actualTotalMinutes: number\|null, actualCodes, unlockUntil }] }`（新しい月が先） |
 | `api_adminGrantUnlock` | `token, studentId, yearMonth, until` | `null`（行が無ければ未入力の行を作る。version は変えない） |
 | `api_adminSchoolConfirm` | `token, studentId, yearMonth` | `null` |
 | `api_adminBoard` | `token, yearMonth, { className?, status?, query? }` | 下記 |

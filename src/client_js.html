@@ -671,6 +671,45 @@
   el('btn-open-student-form').addEventListener('click', function () { openStudentForm(null); });
 
   // ---- 学生詳細 ----
+  // 学生詳細の中の1か月分: 予定か実績のある日だけを1日1行で並べ、休憩・実働と月の合計、注意を出す
+  function detailMonthHtml(ym, m) {
+    if (!m) return '<p class="detail-empty">この月の入力はありません（未提出）。</p>';
+    var plan = m.shifts || {}, act = m.actual || {};
+    var hasActual = !!m.actual;
+    var days = {};
+    Object.keys(plan).concat(Object.keys(act)).forEach(function (k) { days[k] = true; });
+    var list = Object.keys(days).map(Number).sort(function (x, y) { return x - y; });
+    var cell = function (arr) {
+      if (!arr || !arr.length) return '<td>—</td><td></td><td></td>';
+      var brk = 0, work = 0;
+      arr.forEach(function (sh) { var c = calcShift(sh.start, sh.end); if (c) { brk += c.breakMinutes; work += c.workMinutes; } });
+      return '<td class="nowrap">' + esc(arr.map(function (sh) { return sh.start + '〜' + sh.end; }).join(' / ')) + '</td>' +
+        '<td class="nowrap">' + esc(dur(brk)) + '</td><td class="nowrap">' + esc(dur(work)) + '</td>';
+    };
+    var html = '<p class="detail-sum">状態 <strong>' + esc(m.status) + '</strong>　予定の合計 <strong>' + esc(dur(m.totalMinutes || 0, true)) + '</strong>' +
+      '　実績 <strong>' + esc(m.actualStatus) + '</strong>' + (hasActual ? '　実績の合計 <strong>' + esc(dur(m.actualTotalMinutes || 0, true)) + '</strong>' : '') +
+      (m.unlockUntil ? '　修正許可 ' + esc(m.unlockUntil) + ' まで' : '') + '</p>';
+    var codes = (m.codes || []).concat(m.actualCodes || []);
+    if (codes.length) {
+      var seen = {};
+      html += '<p class="detail-codes">' + codes.map(function (c) {
+        var line = (c.date ? Number(c.date.slice(8, 10)) + '日 ' : '') + tErr(c.code);
+        if (seen[line]) return '';
+        seen[line] = true;
+        return '<span class="badge ' + (c.severity === 'warn' ? 'badge-draft' : 'badge-error') + '">' + esc(line) + '</span>';
+      }).join(' ') + '</p>';
+    }
+    if (!list.length) return html + '<p class="detail-empty">勤務の予定はありません。</p>';
+    html += '<div class="adm-table-wrap"><table class="admin-table detail-table"><thead><tr><th>日付</th><th>予定</th><th>休憩</th><th>実働</th>' +
+      (hasActual ? '<th>実績</th><th>休憩</th><th>実働</th>' : '') + '</tr></thead><tbody>';
+    list.forEach(function (d) {
+      var dateStr = ym + '-' + pad2(d);
+      html += '<tr><td class="nowrap">' + d + '(' + esc(DOW.ja[dowIndex(dateStr)]) + ')</td>' + cell(plan[String(d)]) +
+        (hasActual ? cell(act[String(d)]) : '') + '</tr>';
+    });
+    return html + '</tbody></table></div>';
+  }
+
   function openStudentDetail(studentId) {
     call('api_adminStudentDetail', [state.token, studentId]).then(function (res) {
       if (!adminAlert(res)) return;
@@ -680,13 +719,17 @@
         (s.graduationDate ? ' ／ 卒業 ' + esc(s.graduationDate) : '') + (s.withdrawalDate ? ' ／ 退学 ' + esc(s.withdrawalDate) : '') + '</p>' +
         '<p>資格外活動許可: ' + (s.workPermission ? 'あり（期限 ' + esc(s.permissionExpires || '未登録') + '）' : 'なし') + ' ／ ログインID ' + esc(s.loginId || '') + '</p></div>';
 
-      html += '<h4>月ごとの申告</h4><div class="month-row"><div>月を指定: <input type="text" id="detail-ym" value="' + esc(state.yearMonth) + '" placeholder="YYYY-MM"></div>' +
-        '<div><button type="button" class="btn-secondary btn-sm" data-act="schoolConfirm">学校確定</button> ' +
-        '<button type="button" class="btn-outline btn-sm" data-act="unlock">修正許可</button> ' +
-        '<button type="button" class="btn-outline btn-sm" data-act="printMonth">印刷</button></div></div>';
-      d.months.forEach(function (m) {
-        html += '<div class="month-row"><div><strong>' + esc(m.yearMonth) + '</strong> ' + esc(m.status) + ' ／ 実績 ' + esc(m.actualStatus) + '</div></div>';
-      });
+      // 月を選ぶと、その月に学生が入れた中身（予定・実績）を表で出す
+      var yms = d.months.map(function (m) { return m.yearMonth; });
+      if (yms.indexOf(state.yearMonth) < 0) yms.push(state.yearMonth);
+      yms.sort().reverse();
+      html += '<h4>申告の中身</h4><div class="month-row"><div>月: <select id="detail-ym">' +
+        yms.map(function (y) { return '<option value="' + esc(y) + '"' + (y === state.yearMonth ? ' selected' : '') + '>' + esc(y) + '</option>'; }).join('') +
+        '</select></div>' +
+        '<div><button type="button" class="adm-link" data-act="schoolConfirm">学校確定</button> ' +
+        '<button type="button" class="adm-link" data-act="unlock">修正許可</button> ' +
+        '<button type="button" class="adm-link" data-act="printMonth">この月を印刷</button></div></div>' +
+        '<div id="detail-month"></div>';
 
       html += '<div class="dialog-actions">' +
         '<button type="button" class="btn-secondary" data-act="edit">学生情報を編集</button>' +
@@ -696,6 +739,12 @@
 
       openDialog('学生詳細', html);
       var ym = function () { return el('detail-ym').value.trim(); };
+      var showMonth = function () {
+        var m = d.months.filter(function (x) { return x.yearMonth === ym(); })[0];
+        el('detail-month').innerHTML = detailMonthHtml(ym(), m);
+      };
+      el('detail-ym').addEventListener('change', showMonth);
+      showMonth();
       dialogHandlers = {
         schoolConfirm: function () {
           if (!confirm(ym() + ' を学校確定（対象外）にします。退学・休学・卒業の学生の未入力の月にだけ使えます。')) return;
