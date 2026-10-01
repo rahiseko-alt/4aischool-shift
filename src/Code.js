@@ -6,6 +6,8 @@ function doGet() {
   var output = template.evaluate();
   output.setTitle('外国人留学生アルバイト申告');
   output.addMetaTag('viewport', 'width=device-width, initial-scale=1');
+  // ブラウザのタブのアイコン（この置き場所の assets/icon-64.png を、消えないようコミットを指定して参照する。GAS は画像の URL しか受け付けない）
+  output.setFaviconUrl('https://raw.githubusercontent.com/rahiseko-alt/4aischool-shift/79bc09b04846f4046fd352541d89028414b24643/assets/icon-64.png');
   return output;
 }
 
