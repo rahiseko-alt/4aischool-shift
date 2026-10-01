@@ -198,8 +198,19 @@
     var m = /^(\d{2}):(\d{2})$/.exec(hhmm || '');
     return m ? (+m[1]) * 60 + (+m[2]) : null;
   }
+  // 数字の打ち込みを「21:00」の形にそろえる。2100・210・21・21:00・21.00・全角数字を受け付ける。
+  // 時刻として読めないときは null（打った文字はそのまま残し、サーバの「時刻の形が違う」で知らせる）。
+  function normTime(v) {
+    v = String(v || '').replace(/[０-９]/g, function (c) { return String.fromCharCode(c.charCodeAt(0) - 0xFEE0); })
+      .replace(/[：．.]/g, ':').replace(/\s/g, '');
+    var m = /^(\d{1,2}):(\d{2})$/.exec(v) || /^(\d{1,2})(\d{2})$/.exec(v) || /^(\d{1,2})()$/.exec(v);
+    if (!m) return null;
+    var h = +m[1], mi = m[2] === '' ? 0 : +m[2];
+    if (h > 23 || mi > 59) return null;
+    return (h < 10 ? '0' : '') + h + ':' + (mi < 10 ? '0' : '') + mi;
+  }
   function calcShift(start, end) {
-    var s = toMin(start), e = toMin(end);
+    var s = toMin(normTime(start)), e = toMin(normTime(end));
     if (s === null || e === null) return null;
     if (e <= s) e += 1440;
     var bound = e - s;
@@ -265,9 +276,9 @@
         }
         html += '</td>';
         html += '<td class="col-time"><div class="time-pair">' +
-          '<input type="time" class="sh-start" step="900" value="' + esc(sh.start || '') + '"' + dis + '>' +
+          '<input type="text" class="sh-start" inputmode="numeric" maxlength="5" autocomplete="off" value="' + esc(sh.start || '') + '"' + dis + '>' +
           '<span class="shift-row-sep">〜</span>' +
-          '<input type="time" class="sh-end" step="900" value="' + esc(sh.end || '') + '"' + dis + '>' +
+          '<input type="text" class="sh-end" inputmode="numeric" maxlength="5" autocomplete="off" value="' + esc(sh.end || '') + '"' + dis + '>' +
           '</div>';
         if (opts.planShifts && i === 0) {
           var ps = opts.planShifts[String(d)] || [];
@@ -301,6 +312,15 @@
   ['shifts-table', 'actual-table'].forEach(function (id) {
     el(id).addEventListener('input', function () { refreshTotals(id); });
     el(id).addEventListener('change', function () { refreshTotals(id); });
+    // 入力欄を離れたら「21:00」の形に直す。読めない・15分刻みでない時刻は赤枠で知らせる。
+    el(id).addEventListener('focusout', function (ev) {
+      var inp = ev.target;
+      if (!inp.classList || !(inp.classList.contains('sh-start') || inp.classList.contains('sh-end'))) return;
+      var n = normTime(inp.value);
+      if (n) inp.value = n;
+      inp.classList.toggle('time-invalid', inp.value !== '' && !(n && /:(00|15|30|45)$/.test(n)));
+      refreshTotals(id);
+    });
   });
 
   function renderShifts() {
@@ -331,10 +351,8 @@
   function collectRows(containerId, rowClass) {
     var result = {};
     el(containerId).querySelectorAll('tr.' + rowClass).forEach(function (row) {
-      var sh = {
-        start: row.querySelector('.sh-start').value,
-        end: row.querySelector('.sh-end').value
-      };
+      var rawStart = row.querySelector('.sh-start').value.trim(), rawEnd = row.querySelector('.sh-end').value.trim();
+      var sh = { start: normTime(rawStart) || rawStart, end: normTime(rawEnd) || rawEnd };
       if (!sh.start && !sh.end) return;
       var day = row.getAttribute('data-day');
       (result[day] = result[day] || []).push(sh);

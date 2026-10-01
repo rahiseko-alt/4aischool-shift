@@ -152,6 +152,19 @@ html = html.replace('<head>', '<head><script>' + shim + '</script>');
     await page.screenshot({ path: process.env.E2E_SCREENSHOT });
   }
 
+  step('数字の打ち込み: 2100〜600 は 21:00〜06:00 にそろい、休憩・実働も出る。15分刻みでない時刻は赤枠');
+  await row(7).locator('.sh-start').fill('2100');
+  await row(7).locator('.sh-end').fill('600');
+  if ((await cells(row(7))) !== '1時間 / 8時間') throw new Error('打ち込み中の計算: ' + (await cells(row(7))));
+  await row(7).locator('.sh-end').blur();
+  await row(7).locator('.sh-start').focus(); await row(7).locator('.sh-start').blur();
+  const typed = [await row(7).locator('.sh-start').inputValue(), await row(7).locator('.sh-end').inputValue()].join('〜');
+  if (typed !== '21:00〜06:00') throw new Error('打ち込みのそろえ方: ' + typed);
+  if (await row(7).locator('.sh-start').getAttribute('type') !== 'text') throw new Error('時刻欄がダイヤルのまま');
+  await row(7).locator('.sh-end').fill('610'); await row(7).locator('.sh-end').blur();
+  if (!(await row(7).locator('.sh-end').getAttribute('class')).includes('time-invalid')) throw new Error('15分刻みでない時刻に赤枠が出ない');
+  await row(7).locator('.sh-start').fill(''); await row(7).locator('.sh-end').fill(''); await row(7).locator('.sh-end').blur();
+
   step('入力途中の行は入力不足で止まる（黙って消さない）');
   await row(5).locator('.sh-start').fill('10:00');
   await page.click('#btn-save-draft'); await wait();

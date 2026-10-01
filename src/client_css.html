@@ -645,12 +645,12 @@ button:disabled {
   gap: 0.15rem;
 }
 
-.shift-table input[type="time"] {
+.shift-table .time-pair input {
   flex: 1 1 0;
   min-width: 0;
   width: 100%;
   padding: 0.3rem 0.2rem;
-  font-size: 0.85rem;
+  font-size: 1rem; /* 16px 未満だと iPhone が入力時に画面を拡大する */
   text-align: center;
 }
 
@@ -722,11 +722,7 @@ button:disabled {
   .shift-card {
     padding: 0.75rem 0.4rem;
   }
-  .shift-table input[type="time"]::-webkit-calendar-picker-indicator {
-    display: none;
-  }
-  .shift-table input[type="time"] {
-    font-size: 0.8rem;
+  .shift-table .time-pair input {
     padding: 0.3rem 0.1rem;
   }
 }
@@ -1194,4 +1190,5 @@ button:disabled {
   width: 100%;
 }
 [hidden] { display: none !important; }
+.time-invalid { border-color: #d32f2f !important; background: #fff4f4; }
 </style>
