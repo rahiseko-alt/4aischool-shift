@@ -71,11 +71,23 @@ test('18歳未満: 長期休業中（28時間の検算が止まる7日間）で�
 
 // ---- 成人の注意（確定は止めない） ----
 
-test('成人: 1日の実働8時間15分は LABOR_HOURS（warn）で、block ではない', () => {
+test('成人: 1日の実働8時間15分は OVER_8H（block）で確定できない（2026-10-01 利用者の判断で注意から変更）', () => {
   const r = evaluateMonth(input({ shifts: { '1': [EIGHT_H15] } }));
-  assert.ok(has(r, 'LABOR_HOURS', '2026-10-01'));
-  assert.equal(r.codes.find((c) => c.code === 'LABOR_HOURS').severity, 'warn');
-  assert.deepEqual(blocking(r), []);
+  assert.ok(has(r, 'OVER_8H', '2026-10-01'));
+  assert.equal(r.codes.find((c) => c.code === 'OVER_8H').severity, 'block');
+  assert.equal(has(r, 'LABOR_HOURS'), false);
+});
+
+test('成人: 長期休業日の8時間超は OVER_8H_HOLIDAY だけ（OVER_8H を重ねない）', () => {
+  const r = evaluateMonth(input({ yearMonth: '2026-12', ...LONG_WINTER, shifts: { '25': [EIGHT_H15] } }));
+  assert.ok(has(r, 'OVER_8H_HOLIDAY', '2026-12-25'));
+  assert.equal(has(r, 'OVER_8H'), false);
+});
+
+test('実績: 1日8時間超は OVER_8H（admin）と ACTUAL_OVER', () => {
+  const r = evaluateMonth(input({ mode: 'actual', shifts: { '1': [EIGHT_H15] } }));
+  assert.equal(r.codes.find((c) => c.code === 'OVER_8H').severity, 'admin');
+  assert.ok(has(r, 'ACTUAL_OVER'));
 });
 
 test('成人: 1日の実働8時間ちょうどは LABOR_HOURS にならない', () => {
@@ -148,7 +160,7 @@ test('予定モードでは ACTUAL_OVER は付かない', () => {
 test('各コードの重さ（severity）は仕様どおり', () => {
   const expected = {
     OVER_28H: 'block', OVER_8H_HOLIDAY: 'block', NO_PERMIT: 'block', PERMIT_EXPIRED: 'block',
-    NOT_ENROLLED: 'block', MINOR_NIGHT: 'block', MINOR_OVER: 'block',
+    NOT_ENROLLED: 'block', MINOR_NIGHT: 'block', MINOR_OVER: 'block', OVER_8H: 'block',
     PREV_MONTH_DRAFT: 'warn', LABOR_HOURS: 'warn',
   };
   const r = evaluateMonth(input({

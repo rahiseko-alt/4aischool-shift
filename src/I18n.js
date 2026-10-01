@@ -12,6 +12,7 @@ const I18N = {
     // ---- 法令・計算エラー ----
     'error.OVER_28H':          '28時間超過',
     'error.OVER_8H_HOLIDAY':   '8時間超過',
+    'error.OVER_8H': '1日8時間超過',
     'error.NO_PERMIT':         '許可未確認',
     'error.PERMIT_EXPIRED':    '許可期限切れ',
     'error.NOT_ENROLLED':      '在籍対象外',
@@ -97,6 +98,7 @@ const I18N = {
     // ---- 法令・計算エラー ----
     'error.OVER_28H':          '२८ घण्टा बढी',
     'error.OVER_8H_HOLIDAY':   '८ घण्टा बढी',
+    'error.OVER_8H': 'दिनमा ८ घण्टाभन्दा बढी',
     'error.NO_PERMIT':         'अनुमति अपुष्टि',
     'error.PERMIT_EXPIRED':    'अनुमति म्याद सकिएको',
     'error.NOT_ENROLLED':      'नामांकन बाहिर',
@@ -182,6 +184,7 @@ const I18N = {
     // ---- 法令・計算エラー ----
     'error.OVER_28H':          'Vượt 28 giờ',
     'error.OVER_8H_HOLIDAY':   'Vượt 8 giờ',
+    'error.OVER_8H': 'Quá 8 giờ/ngày',
     'error.NO_PERMIT':         'Chưa xác nhận giấy phép',
     'error.PERMIT_EXPIRED':    'Giấy phép hết hạn',
     'error.NOT_ENROLLED':      'Ngoài đối tượng',
@@ -266,6 +269,7 @@ const I18N = {
   en: {
     'error.OVER_28H': 'Over 28 hours',
     'error.OVER_8H_HOLIDAY': 'Over 8 hours',
+    'error.OVER_8H': 'Over 8 hours a day',
     'error.NO_PERMIT': 'Permission not confirmed',
     'error.PERMIT_EXPIRED': 'Permission expired',
     'error.NOT_ENROLLED': 'Not enrolled',
@@ -348,6 +352,7 @@ const I18N = {
   my: {
     'error.OVER_28H': '၂၈ နာရီ ကျော်',
     'error.OVER_8H_HOLIDAY': '၈ နာရီ ကျော်',
+    'error.OVER_8H': 'တစ်ရက် ၈ နာရီ ကျော်',
     'error.NO_PERMIT': 'ခွင့်ပြုချက် မအတည်ပြုရသေး',
     'error.PERMIT_EXPIRED': 'ခွင့်ပြုချက် သက်တမ်းကုန်',
     'error.NOT_ENROLLED': 'ကျောင်းသား မဟုတ်',
@@ -430,6 +435,7 @@ const I18N = {
   si: {
     'error.OVER_28H': 'පැය 28 ඉක්මවා ඇත',
     'error.OVER_8H_HOLIDAY': 'පැය 8 ඉක්මවා ඇත',
+    'error.OVER_8H': 'දිනකට පැය 8 ඉක්මවා ඇත',
     'error.NO_PERMIT': 'අවසරය තහවුරු කර නැත',
     'error.PERMIT_EXPIRED': 'අවසරය කල් ඉකුත් වී ඇත',
     'error.NOT_ENROLLED': 'ලියාපදිංචි නැත',
@@ -512,6 +518,7 @@ const I18N = {
   bn: {
     'error.OVER_28H': '২৮ ঘণ্টার বেশি',
     'error.OVER_8H_HOLIDAY': '৮ ঘণ্টার বেশি',
+    'error.OVER_8H': 'দিনে ৮ ঘণ্টার বেশি',
     'error.NO_PERMIT': 'অনুমতি নিশ্চিত নয়',
     'error.PERMIT_EXPIRED': 'অনুমতির মেয়াদ শেষ',
     'error.NOT_ENROLLED': 'ভর্তি নেই',

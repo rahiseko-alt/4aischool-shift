@@ -145,7 +145,7 @@ html = html.replace('<head>', '<head><script>' + shim + '</script>');
   const msg = await page.textContent('#shift-error');
   if (msg !== '保存しました') throw new Error('途中保存の知らせ: ' + msg);
   const day2codes = await page.textContent('#shifts-table tr.day-codes-row[data-day="2"]');
-  if (!day2codes.includes('労基法上要確認')) throw new Error('2日の注意が出ない: ' + day2codes);
+  if (!day2codes.includes('1日8時間超過')) throw new Error('2日の注意が出ない: ' + day2codes);
   if ((await cells(row(3))) !== '1時間 / 8時間') throw new Error('保存後の表示: ' + (await cells(row(3))));
   if (process.env.E2E_SCREENSHOT) {
     await page.evaluate(() => window.scrollTo(0, document.getElementById('shifts-section').getBoundingClientRect().top + window.scrollY - document.querySelector('#student-screen .top-bar').offsetHeight - 8));
@@ -189,7 +189,11 @@ html = html.replace('<head>', '<head><script>' + shim + '</script>');
   if (v !== '18:15') throw new Error('保存したシフトが表示されない: ' + v);
   if ((await totalText()) !== '勤務予定時間合計: 20時間15分') throw new Error('読み込み直した合計: ' + (await totalText()));
 
-  step('学生で確定');
+  step('学生で確定: 1日8時間超の日があると止まり、その日が赤くなる。直せば確定できる');
+  await page.click('#btn-confirm-shift'); await wait(); await wait();
+  if (!(await page.textContent('#shift-error')).includes('2日: 1日8時間超過')) throw new Error('8時間超で止まらない: ' + (await page.textContent('#shift-error')));
+  if (!(await row(2).getAttribute('class')).includes('row-error')) throw new Error('8時間超の日が赤くならない');
+  await row(2).locator('.sh-end').fill('18:00');
   await page.click('#btn-confirm-shift'); await wait(); await wait();
   if ((await page.textContent('#shift-error')) !== '確定済み') throw new Error('確定の知らせ: ' + (await page.textContent('#shift-error')));
 
@@ -218,9 +222,9 @@ html = html.replace('<head>', '<head><script>' + shim + '</script>');
   if ((await arow(2).locator('.cell-work').textContent()) !== '4時間') throw new Error('実績の実働がその場で変わらない');
   await page.click('#actual-table tr.actual-shift-row[data-day="2"] .btn-as-planned');
   const a2 = [await arow(2).locator('.sh-start').inputValue(), await arow(2).locator('.sh-end').inputValue()].join('〜');
-  if (a2 !== '09:00〜18:15') throw new Error('予定どおりで写らない: ' + a2);
-  if ((await arow(2).locator('.cell-work').textContent()) !== '8時間15分') throw new Error('予定どおり後の実働');
-  if (!(await page.textContent('#actual-table .month-total')).includes('20時間15分')) throw new Error('実績の合計: ' + (await page.textContent('#actual-table .month-total')));
+  if (a2 !== '09:00〜18:00') throw new Error('予定どおりで写らない: ' + a2);
+  if ((await arow(2).locator('.cell-work').textContent()) !== '8時間') throw new Error('予定どおり後の実働');
+  if (!(await page.textContent('#actual-table .month-total')).includes('20時間')) throw new Error('実績の合計: ' + (await page.textContent('#actual-table .month-total')));
   await page.click('#btn-save-actual'); await wait(); await wait();
   await page.click('#btn-confirm-actual'); await wait(); await wait();
   if (!(await page.textContent('#actual-error')).includes('確定済み')) throw new Error('実績の確認: ' + (await page.textContent('#actual-error')));

@@ -128,7 +128,10 @@ test('長期休業を登録すると、学生の評価に反映される（8時�
   const list = ok(w.api('api_adminListHolidays', w.admin));
   assert.equal(list.length, 1);
   ok(w.api('api_adminDeleteHoliday', w.admin, list[0].holidayId));
-  ok(w.api('api_confirm', w.st.token, '2026-12', { '25': [sh('09:00', '18:15')] }, 0));
+  // 長期休業を消すと、その日は普通の日の1日8時間超（OVER_8H）になる（2026-10-01 成人も確定を止める）
+  const r2 = w.api('api_confirm', w.st.token, '2026-12', { '25': [sh('09:00', '18:15')] }, 0);
+  assert.ok(r2.details.codes.some((c) => c.code === 'OVER_8H'));
+  assert.equal(r2.details.codes.some((c) => c.code === 'OVER_8H_HOLIDAY'), false);
 });
 
 test('長期休業の開始日が終了日より後なら BAD_REQUEST', () => {

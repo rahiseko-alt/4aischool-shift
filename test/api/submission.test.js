@@ -103,11 +103,12 @@ test('確定: 28時間を超えていれば VALIDATION_FAILED（details.codes �
   assert.deepEqual(Object.keys(m.shifts), ['1']);
 });
 
-test('確定: 注意（warn）だけなら確定できる（成人の8時間超 LABOR_HOURS）', () => {
+test('確定: 成人でも1日8時間超（OVER_8H）は確定できない。途中保存はできる（2026-10-01）', () => {
   const w = world();
-  const r = ok(w.api('api_confirm', w.st.token, YM, { '1': [sh('09:00', '18:15')] }, 0));
-  assert.equal(r.status, '確定済');
-  assert.ok(r.evaluation.codes.some((c) => c.code === 'LABOR_HOURS'));
+  ok(w.api('api_saveDraft', w.st.token, YM, { '1': [sh('09:00', '18:15')] }, 0));
+  const r = w.api('api_confirm', w.st.token, YM, { '1': [sh('09:00', '18:15')] }, 1);
+  assert.equal(r.error, 'VALIDATION_FAILED');
+  assert.ok(r.details.codes.some((c) => c.code === 'OVER_8H' && c.date === YM + '-01'));
 });
 
 test('勤務なし: シフト0件のまま確定できる（確定済・合計0分）', () => {
