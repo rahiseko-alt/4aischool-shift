@@ -17,7 +17,7 @@ const REQUIRED_API = [
   'api_adminCreateAdmin', 'api_adminVerifyWorkplace', 'api_adminGrantUnlock', 'api_adminSchoolConfirm', 'api_adminQuarterCheck',
   'api_adminSetDeadline', 'api_adminSetHoliday', 'api_adminDeleteHoliday', 'api_adminListHolidays',
   'api_adminSetMinimumWage', 'api_adminListMinimumWages', 'api_adminGetSettings', 'api_adminSetSettings',
-  'api_adminPrintHtml', 'api_adminPurgeExpired',
+  'api_adminPrintHtml', 'api_adminPurgeExpired', 'api_adminSeedDemo',
 ];
 const OTHER_PUBLIC = ['doGet', 'setupInitial', 'backupMonthly', 'installTriggers', 'evaluateMonth'];
 

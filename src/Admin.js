@@ -1197,3 +1197,72 @@ function api_adminPurgeExpired(token) {
     return { ok: false, error: 'INTERNAL' };
   }
 }
+
+// 試用データの一括投入（管理画面の「試用データを入れる」）。何度押しても重複しない。
+// 本物の学生・本物の締切とは混ざらないよう、クラス名を「DEMO」に固定する。
+// 最低賃金は、まだ1件も無い都道府県にだけ「仮の金額 1,000円」を入れる（実在の金額ではない）。
+var DEMO_CLASS_ = 'DEMO';
+var DEMO_STUDENTS_ = [
+  { studentId: 'DEMO-JA', name: '試用 日本語', language: 'ja' },
+  { studentId: 'DEMO-NE', name: '試用 ネパール語', language: 'ne' },
+  { studentId: 'DEMO-VI', name: '試用 ベトナム語', language: 'vi' }
+];
+
+function api_adminSeedDemo(token) {
+  try {
+    var auth = auth_verifySession_(token, 'admin');
+    if (!auth.ok) return auth;
+
+    // 1. 最低賃金（無い都道府県だけ）
+    var hasWage = {};
+    db_readAllRows_('MINIMUM_WAGES').forEach(function (m) { hasWage[m.prefecture] = true; });
+    for (var i = 0; i < PREFECTURES_.length; i++) {
+      if (hasWage[PREFECTURES_[i]]) continue;
+      var w = api_adminSetMinimumWage(token, { prefecture: PREFECTURES_[i], amount: 1000, effectiveFrom: '2020-01-01', effectiveTo: null });
+      if (!w.ok) return w;
+    }
+
+    // 2. 締切（DEMO クラス、今月の前後。期限は遠い先にして、いつでも試せるようにする）
+    var ym = util_currentYearMonth_();
+    for (var k = -1; k <= 12; k++) {
+      var target = admin_addMonths_(ym, k);
+      var d = api_adminSetDeadline(token, { yearMonth: target, className: DEMO_CLASS_, deadlineAt: '2099-12-31 23:59', actualDeadlineAt: '2099-12-31 23:59' });
+      if (!d.ok) return d;
+    }
+
+    // 3. 架空の学生と、確認済みの勤務先
+    var existing = {};
+    db_readAllRows_('STUDENTS').forEach(function (s) { existing[s.student_id] = true; });
+    var created = [];
+    for (var j = 0; j < DEMO_STUDENTS_.length; j++) {
+      var demo = DEMO_STUDENTS_[j];
+      if (existing[demo.studentId]) continue;
+      var res = api_adminUpsertStudent(token, {
+        studentId: demo.studentId, name: demo.name, className: DEMO_CLASS_, birthDate: '2003-04-01',
+        language: demo.language, enrollmentDate: '2025-04-01', graduationDate: null, withdrawalDate: null,
+        status: '在籍', workPermission: true, permissionExpires: '2099-12-31', permissionCheckedAt: '2025-04-01'
+      });
+      if (!res.ok) return res;
+      var now = util_nowJst_();
+      db_insertRow_('WORKPLACES', {
+        workplace_id: 'WP_' + util_uuid_().slice(0, 8), student_id: demo.studentId, name: '試用コンビニ',
+        prefecture: '愛知県', job_description: 'レジ・品出し', base_hourly_wage: '1200',
+        early_start: '', early_end: '', early_premium: '', verification_status: 'OK',
+        verified_by: auth.user.login_id, verified_at: now, created_at: now, active: 'true'
+      });
+      created.push({ studentId: demo.studentId, name: demo.name, loginId: res.data.loginId, initialPassword: res.data.initialPassword });
+    }
+
+    db_logAudit_('MASTER_UPDATE', auth.user.login_id, 'admin', '', '', null, { op: 'seed_demo', students: created.length });
+    return { ok: true, data: { className: DEMO_CLASS_, students: created } };
+  } catch (err) {
+    return { ok: false, error: 'INTERNAL' };
+  }
+}
+
+function admin_addMonths_(ym, n) {
+  var y = Number(ym.slice(0, 4)), m = Number(ym.slice(5, 7)) - 1 + n;
+  y += Math.floor(m / 12);
+  m = ((m % 12) + 12) % 12;
+  return y + '-' + (m + 1 < 10 ? '0' : '') + (m + 1);
+}

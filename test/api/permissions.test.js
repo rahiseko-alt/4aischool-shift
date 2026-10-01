@@ -27,6 +27,7 @@ const ADMIN_APIS = [
   ['api_adminPrintHtml', { studentIds: ['251001'], yearMonths: ['2026-10'] }],
   ['api_adminPurgeExpired'],
   ['api_adminCreateAdmin'],
+  ['api_adminSeedDemo'],
 ];
 
 test('学生のトークンで管理者の窓口を呼ぶと、すべて FORBIDDEN', () => {

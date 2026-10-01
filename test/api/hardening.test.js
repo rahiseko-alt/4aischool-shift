@@ -118,3 +118,20 @@ test('発行するログインIDは重複しない（30人）', () => {
   }
   assert.equal(ids.size, 30);
 });
+
+test('試用データ: 押すと DEMO クラスの学生3人が入り、そのまま入力・確定まで試せる。2回押しても重複しない', () => {
+  const ctx = boot({ now: '2026-10-01 10:00' });
+  const first = ok(ctx.api('api_adminSeedDemo', ctx.admin));
+  assert.equal(first.className, 'DEMO');
+  assert.equal(first.students.length, 3);
+  const again = ok(ctx.api('api_adminSeedDemo', ctx.admin));
+  assert.equal(again.students.length, 0);
+  assert.equal(ok(ctx.api('api_adminListMinimumWages', ctx.admin)).length, 47);
+  const s = first.students[0];
+  const login = ok(ctx.api('api_login', s.loginId, s.initialPassword));
+  ok(ctx.api('api_changePassword', login.token, s.initialPassword, 'demo-password-1'));
+  const wp = ok(ctx.api('api_listWorkplaces', login.token))[0];
+  assert.equal(wp.verificationStatus, 'OK');
+  const r = ok(ctx.api('api_confirm', login.token, '2026-11', { '2': [{ workplace: wp.workplaceId, start: '09:00', end: '13:00' }] }, 0));
+  assert.equal(r.status, '確定済');
+});

@@ -885,6 +885,22 @@
     });
   });
 
+  // ---- 試用データ ----
+  el('btn-seed-demo').addEventListener('click', function () {
+    if (!confirm('試用データ（クラス DEMO の架空の学生3人・締切・仮の最低賃金）を入れます。本番で使う場合は押さないでください。')) return;
+    call('api_adminSeedDemo', [state.token]).then(function (res) {
+      if (!adminAlert(res)) return;
+      var html = '<p>クラス「DEMO」に入れました。学生のログイン情報（この画面を閉じると二度と表示されません）:</p>';
+      if (!res.data.students.length) html += '<p>試用の学生はすでに登録済みです（パスワードを忘れた場合は、学生詳細から再発行してください）。</p>';
+      res.data.students.forEach(function (s) {
+        html += '<p><strong>' + esc(s.name) + '</strong>（' + esc(s.studentId) + '）ログインID: <strong>' + esc(s.loginId) + '</strong> ／ 初期パスワード: <strong>' + esc(s.initialPassword) + '</strong></p>';
+      });
+      el('admin-class-filter').value = 'DEMO';
+      openDialog('試用データ', html);
+      loadAdminBoard();
+    });
+  });
+
   // ---- 印刷（50名ずつ。ポップアップを止められないよう、先に窓を開けてから中身を書く） ----
   function printPages(studentIds, months, firstWindow) {
     var chunks = [];
