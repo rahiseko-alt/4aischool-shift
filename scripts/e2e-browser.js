@@ -171,13 +171,17 @@ html = html.replace('<head>', '<head><script>' + shim + '</script>');
   if (!(await page.textContent('#shift-error')).includes('入力不足')) throw new Error('入力不足の案内');
   await row(5).locator('.sh-start').fill('');
 
-  step('言語切替（ネパール語・ベトナム語）');
-  await page.click('#student-screen .lang-switch button[data-lang="ne"]');
+  step('言語切替（ネパール語・ベトナム語・ベンガル語・ミャンマー語）');
+  await page.selectOption('#student-screen .lang-select', 'ne');
   if (!(await page.textContent('#btn-save-draft')).match(/[ऀ-ॿ]/)) throw new Error('ネパール語に変わらない');
-  await page.click('#student-screen .lang-switch button[data-lang="vi"]');
+  await page.selectOption('#student-screen .lang-select', 'vi');
   if ((await page.textContent('#shifts-table tr.day-row[data-day="1"] .day-dow')).indexOf('T5') < 0) throw new Error('ベトナム語の曜日');
   if (!(await totalText()).includes('Tổng giờ làm dự kiến')) throw new Error('ベトナム語の合計: ' + (await totalText()));
-  await page.click('#student-screen .lang-switch button[data-lang="ja"]');
+  await page.selectOption('#student-screen .lang-select', 'bn');
+  if (!(await page.textContent('#btn-save-draft')).match(/[\u0980-\u09FF]/)) throw new Error('ベンガル語に変わらない');
+  await page.selectOption('#student-screen .lang-select', 'my');
+  if (!(await page.textContent('#btn-save-draft')).match(/[\u1000-\u109F]/)) throw new Error('ミャンマー語に変わらない');
+  await page.selectOption('#student-screen .lang-select', 'ja');
 
   step('ページを読み込み直すとシフトが残っている（保存済みの内容）');
   await page.click('#btn-prev-month'); await wait(); await page.click('#btn-next-month'); await wait();

@@ -163,7 +163,7 @@ test('学生情報の入力検証: 日付の形式・在籍状態・言語', () 
   for (const bad of [
     studentRecord({ birthDate: '2000/04/01' }),
     studentRecord({ status: '在学' }),
-    studentRecord({ language: 'en' }),
+    studentRecord({ language: 'zh' }), // 2026-10-01 英語は対応言語になった
     studentRecord({ studentId: '' }),
     studentRecord({ className: '' }),
   ]) {

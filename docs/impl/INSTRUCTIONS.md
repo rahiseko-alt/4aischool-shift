@@ -53,7 +53,7 @@ src/
   Student.js        学生の窓口（api_getMonth など）
   Admin.js          管理者の窓口（api_admin* のうち印刷以外）
   Print.js          api_adminPrintHtml
-  I18n.js           3言語の辞書 I18N
+  I18n.js           7言語の辞書 I18N（ja・ne・vi・en・my・si・bn）
   Backup.js         backupMonthly・installTriggers（DriveApp と ScriptApp はここでだけ使う）
   index.html        画面の骨組み
   client_css.html   画面の CSS
@@ -417,5 +417,5 @@ AuditLog スプレッドシートの `AUDIT_LOG` シートは、**この列・�
 3. Drive にバックアップ用フォルダを作り、そのIDを Script Properties の `BACKUP_FOLDER_ID` に入れて、`installTriggers` を実行する。
 4. 「ウェブアプリとしてデプロイ」（次のユーザーとして実行: 自分、アクセス: 全員）。
 5. 管理画面で、長期休業・締切・学生を登録する。
-6. 実機確認（iOS Safari と Android Chrome）: ログイン → パスワード変更 → 31日分の入力 → 22:00〜02:00 の入力 → 途中保存 → 確定 → 3言語の切替、の順に確かめる項目の一覧。
+6. 実機確認（iOS Safari と Android Chrome）: ログイン → パスワード変更 → 31日分の入力 → 22:00〜02:00 の入力 → 途中保存 → 確定 → 言語の切替、の順に確かめる項目の一覧。
 7. 締切前の負荷確認: 30人程度が同時に保存したときに「混雑中」以外のエラーが出ないか確かめる手順。

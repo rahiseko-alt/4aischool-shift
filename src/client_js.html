@@ -40,7 +40,9 @@
   }
   function daysInMonth(ym) { return new Date(Date.UTC(+ym.slice(0, 4), +ym.slice(5, 7), 0)).getUTCDate(); }
   // 曜日は日付から計算する（2026-10-01 は木曜）
-  var DOW = { ja: ['日', '月', '火', '水', '木', '金', '土'], ne: ['आइत', 'सोम', 'मंगल', 'बुध', 'बिही', 'शुक्र', 'शनि'], vi: ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'] };
+  var DOW = { ja: ['日', '月', '火', '水', '木', '金', '土'], ne: ['आइत', 'सोम', 'मंगल', 'बुध', 'बिही', 'शुक्र', 'शनि'], vi: ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'],
+    en: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'], my: ['နွေ', 'လာ', 'ဂါ', 'ဟူး', 'တေး', 'ကြာ', 'နေ'],
+    si: ['ඉරු', 'සඳු', 'අඟ', 'බදා', 'බ්‍රහ', 'සිකු', 'සෙන'], bn: ['রবি', 'সোম', 'মঙ্গল', 'বুধ', 'বৃহঃ', 'শুক্র', 'শনি'] };
   function dowIndex(dateStr) { return new Date(Date.UTC(+dateStr.slice(0, 4), +dateStr.slice(5, 7) - 1, +dateStr.slice(8, 10))).getUTCDay(); }
   function hm(min) { min = +min || 0; return Math.floor(min / 60) + ':' + pad2(min % 60); }
 
@@ -108,14 +110,12 @@
       var v = t(e.getAttribute('data-i18n'));
       if (v) e.textContent = v;
     });
-    document.querySelectorAll('.lang-switch button').forEach(function (btn) {
-      btn.classList.toggle('active', btn.getAttribute('data-lang') === currentLang);
-    });
+    document.querySelectorAll('.lang-select').forEach(function (sel) { sel.value = currentLang; });
     if (state.monthData && !el('student-screen').hidden) renderStudent();
     if (lastHistory && !el('student-screen').hidden) renderHistory(lastHistory);
   }
-  document.querySelectorAll('.lang-switch button').forEach(function (btn) {
-    btn.addEventListener('click', function () { currentLang = btn.getAttribute('data-lang'); applyLang(); });
+  document.querySelectorAll('.lang-select').forEach(function (sel) {
+    sel.addEventListener('change', function () { currentLang = sel.value; applyLang(); });
   });
 
   // ---- ログイン・パスワード変更・ログアウト ----
@@ -651,7 +651,7 @@
       { key: 'name', label: '氏名', type: 'text', value: s.name, required: true },
       { key: 'className', label: 'クラス', type: 'text', value: s.className, required: true },
       { key: 'birthDate', label: '生年月日', type: 'date', value: s.birthDate, required: true },
-      { key: 'language', label: '言語', type: 'select', value: s.language || 'ja', options: [{ value: 'ja', label: '日本語' }, { value: 'ne', label: 'ネパール語' }, { value: 'vi', label: 'ベトナム語' }] },
+      { key: 'language', label: '言語', type: 'select', value: s.language || 'ja', options: [{ value: 'ja', label: '日本語' }, { value: 'en', label: '英語' }, { value: 'ne', label: 'ネパール語' }, { value: 'vi', label: 'ベトナム語' }, { value: 'my', label: 'ミャンマー語' }, { value: 'si', label: 'シンハラ語（スリランカ）' }, { value: 'bn', label: 'ベンガル語（バングラデシュ）' }] },
       { key: 'enrollmentDate', label: '入学日', type: 'date', value: s.enrollmentDate, required: true },
       { key: 'graduationDate', label: '卒業日', type: 'date', value: s.graduationDate },
       { key: 'withdrawalDate', label: '退学日', type: 'date', value: s.withdrawalDate },

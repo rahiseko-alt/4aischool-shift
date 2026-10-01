@@ -11,7 +11,7 @@ function admin_isValidStudent_(st) {
     var d = optionalDates[i];
     if (d !== null && d !== undefined && d !== '' && !util_isDate_(d)) return false;
   }
-  if (['ja', 'ne', 'vi'].indexOf(st.language) < 0) return false;
+  if (['ja', 'ne', 'vi', 'en', 'my', 'si', 'bn'].indexOf(st.language) < 0) return false;
   if (['在籍', '休学', '卒業', '退学'].indexOf(st.status) < 0) return false;
   if (typeof st.workPermission !== 'boolean') return false;
   return true;

@@ -173,3 +173,11 @@ test('古い版で作った表に、今は使わない列（estimated_salary）�
   const row = sheet.getRange(2, 1, 1, header.length).getValues()[0];
   assert.equal(row[at], '');
 });
+
+test('学生の言語: ja・ne・vi・en・my・si・bn を登録でき、それ以外は BAD_REQUEST（2026-10-01 4言語を追加）', () => {
+  const ctx = boot();
+  ['ja', 'ne', 'vi', 'en', 'my', 'si', 'bn'].forEach((lang, i) => {
+    ok(ctx.api('api_adminUpsertStudent', ctx.admin, studentRecord({ studentId: 'L' + i, language: lang })));
+  });
+  assert.equal(ctx.api('api_adminUpsertStudent', ctx.admin, studentRecord({ studentId: 'LX', language: 'zh' })).error, 'BAD_REQUEST');
+});
