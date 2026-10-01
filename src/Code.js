@@ -9,6 +9,8 @@ function doGet() {
   return output;
 }
 
+// 部品のファイルも <?!= ... ?> を含むので、テンプレートとして評価してから埋め込む
+// （createHtmlOutputFromFile だと埋め込み記号がそのまま残り、画面の JavaScript が動かない）。
 function include_(filename) {
-  return HtmlService.createHtmlOutputFromFile(filename).getContent();
+  return HtmlService.createTemplateFromFile(filename).evaluate().getContent();
 }
