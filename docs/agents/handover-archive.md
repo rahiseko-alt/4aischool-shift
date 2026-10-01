@@ -4,6 +4,27 @@ handover.md の保存上限（5 件）を超えて押し出された古いメモ
 会話開始時には読み込まれない。過去の経緯を掘り返すときだけ開く。新しいものを一番上に来るよう足す。
 
 ---
+## 2026-10-01 試用版を個人の Google アカウントに公開し、管理者ログインまで確認
+
+**決めたこと**
+
+- 公開先は aibisiness.kyouin@gmail.com（個人アカウント。架空データでの試用に限る）。送り込みは clasp
+- Apps Script のプロジェクト: https://script.google.com/d/1DilT1riEfEt9GmY2eiO425EOrC3OTdyx6DLxlAEip9V0sROG556dyshN/edit
+- アプリの URL: https://script.google.com/macros/s/AKfycbzloK9Wgxf_aQnaXZ2k_MOz-VbQK7HFhUXQVTS0VH2Ug6T2wd5-Eoq0fgebtq0nQ-HR/exec（ブラウザに複数アカウントがあると開けないので、シークレットウィンドウで開く）
+- 本物の GAS で見つかった2件を修正: パスワードのハッシュを JavaScript で計算（Utilities の1万回呼び出しは数分かかる）、画面部品をテンプレートとして読み込む（ログインボタンが無反応だった）
+
+**次にやること**
+
+- 管理画面で最低賃金・締切・架空の学生を登録し、学生としてシフト入力から確定まで試す
+- 修正を main に取り込む（rahiseko-alt/4aischool-shift#3）
+- 次の会話で再公開するときは clasp の再ログインが要る（作業環境が消えると許可も消える）。更新は同じ公開先（AKfycbzloK9…）に上書きする
+
+**未解決の問題**
+
+- 最初の setupInitial が作った ShiftDB・AuditLog 以外に、重複の表は作られていない（確認済み）が、本物のシート上での ' の扱いはまだ目視していない
+- ネパール語・ベトナム語の訳は話者の確認が必要
+- 個人アカウントで本物の学生情報を扱うと、元の仕様書の方針（個人 Gmail 禁止）に反する
+
 ## 2026-09-30 Gemini の実装を点検し、重大な問題を修正
 
 **決めたこと**
