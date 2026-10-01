@@ -187,13 +187,6 @@ function api_adminPrintHtml(token, params) {
           try { pShifts = JSON.parse(sub.shift_json); } catch (e) {}
         }
 
-        var aShifts = {};
-        if (sub && sub.actual_json) {
-          try { aShifts = JSON.parse(sub.actual_json); } catch (e) {}
-        } else if (sub && sub.actual_status === '予定どおり') {
-          aShifts = pShifts;
-        }
-
         // 検算の実行（心臓部 evaluateMonth）
         var pEval = null;
         if (Object.keys(pShifts).length > 0) {
@@ -212,50 +205,9 @@ function api_adminPrintHtml(token, params) {
           } catch (e) {}
         }
 
-        var aEval = null;
-        if (Object.keys(aShifts).length > 0) {
-          try {
-            aEval = evaluateMonth({
-              yearMonth: ym,
-              mode: 'actual',
-              student: studentPayload,
-              shifts: aShifts,
-              prevMonthDaily: {},
-              prevMonthSource: 'confirmed',
-              nextMonthDaily: {},
-              holidays: allHolidays,
-              settings: { allowLeaveOfAbsence: allowLeaveOfAbsence }
-            });
-          } catch (e) {}
-        }
-
-        // 実績の超過日の判定
-        var overDays = {};
-        if (aEval && aEval.codes) {
-          for (var ci = 0; ci < aEval.codes.length; ci++) {
-            var cObj = aEval.codes[ci];
-            var code = cObj.code;
-            if (code === 'OVER_8H_HOLIDAY' || code === 'MINOR_NIGHT' || code === 'MINOR_OVER' || code === 'OVER_28H') {
-              if (code === 'OVER_28H' || code === 'MINOR_OVER') {
-                if (cObj.date) {
-                  for (var step = 0; step < 7; step++) {
-                    var wDate = core_addDays_(cObj.date, step);
-                    if (aEval.daily && aEval.daily[wDate] > 0) {
-                      overDays[wDate] = true;
-                    }
-                  }
-                  overDays[cObj.date] = true;
-                }
-              } else if (cObj.date) {
-                overDays[cObj.date] = true;
-              }
-            }
-          }
-        }
-
+        // 1人1か月で A4 縦1枚。紙の予定表と同じく予定だけを載せる（実績は載せない。2026-10-01）
         var daysInMonth = core_getDaysInMonth_(ym);
         var planTotalMonth = 0;
-        var actualTotalMonth = 0;
         var rowsHtml = [];
         var publicHolidays = util_jpHolidaysOfMonth_(ym);
 
@@ -264,51 +216,33 @@ function api_adminPrintHtml(token, params) {
           var dateStr = core_buildDateStr_(ym, d);
           var dow = print_getDayOfWeek_(dateStr);
           var isHoliday = core_isHoliday_(allHolidays, dateStr);
-          var isOverDay = !!overDays[dateStr];
           var phName = publicHolidays[dateStr] || '';
 
           var dayPShifts = (pEval && pEval.shifts && pEval.shifts[dayStr]) || pShifts[dayStr] || [];
-          var dayAShifts = (aEval && aEval.shifts && aEval.shifts[dayStr]) || aShifts[dayStr] || [];
-
           var pCell = print_formatShiftsCell_(dayPShifts);
-          var aCell = print_formatShiftsCell_(dayAShifts);
-
           planTotalMonth += pCell.totalMinutes;
-          actualTotalMonth += aCell.totalMinutes;
-
-          var trClasses = [];
-          if (isOverDay) trClasses.push('exceeded');
-          if (isHoliday) trClasses.push('holiday-row');
-          var trClassAttr = trClasses.length > 0 ? ' class="' + trClasses.join(' ') + '"' : '';
-          var trStyleAttr = isOverDay ? ' style="background-color: #e0e0e0;"' : '';
 
           var remarks = [];
           if (isOutOfScope) {
             remarks.push('対象外');
           } else {
-            if (isOverDay) remarks.push('<span class="warn-badge">超過</span>');
             if (isHoliday) remarks.push('長期休暇');
             if (phName) remarks.push(phName);
           }
+          var red = phName || dow === '日';
 
           rowsHtml.push(
-            '<tr' + trClassAttr + trStyleAttr + '>' +
-              '<td' + (phName || dow === '日' ? ' style="color: #c00;"' : '') + '>' + d + '(' + dow + ')</td>' +
+            '<tr' + (isHoliday ? ' class="holiday-row"' : '') + '>' +
+              '<td class="c-date"' + (red ? ' style="color: #c00;"' : (dow === '土' ? ' style="color: #1d4ed8;"' : '')) + '>' + d + '(' + dow + ')</td>' +
               '<td>' + pCell.times + '</td>' +
               '<td>' + pCell.breaks + '</td>' +
               '<td>' + pCell.workMinutes + '</td>' +
-              '<td>' + aCell.times + '</td>' +
-              '<td>' + aCell.breaks + '</td>' +
-              '<td>' + aCell.workMinutes + '</td>' +
-              '<td>' + remarks.join(' ') + '</td>' +
+              '<td class="c-note">' + remarks.join(' ') + '</td>' +
             '</tr>'
           );
         }
 
-        var statusDisplayHtml = isOutOfScope
-          ? '<span class="badge out-of-scope">対象外</span>'
-          : '<span class="badge">' + print_escapeHtml_(displayStatus) + '</span>';
-
+        var statusText = isOutOfScope ? '対象外' : displayStatus;
         var outOfScopeNotice = isOutOfScope
           ? '<div class="out-of-scope-banner">※ この月は学校確定により「対象外」として処理されています。</div>'
           : '';
@@ -316,49 +250,30 @@ function api_adminPrintHtml(token, params) {
         var pageHtml =
           '<section class="student-page">' +
             '<div class="page-header">' +
-              '<div class="header-main">' +
-                '<h1 class="page-title">アルバイト就業予定・実績表</h1>' +
-                '<div class="header-ym">' + print_escapeHtml_(ym) + ' 分</div>' +
-              '</div>' +
-              '<div class="student-card">' +
-                '<div class="student-item"><span class="item-label">学籍番号:</span> ' + print_escapeHtml_(student.student_id) + '</div>' +
-                '<div class="student-item"><span class="item-label">氏名:</span> ' + print_escapeHtml_(student.name) + '</div>' +
-                '<div class="student-item"><span class="item-label">クラス:</span> ' + print_escapeHtml_(student.class) + '</div>' +
-                '<div class="student-item"><span class="item-label">状態:</span> ' + statusDisplayHtml + '</div>' +
-                '<div class="student-item"><span class="item-label">勤務予定時間合計:</span> ' + print_formatMinutes_(planTotalMonth) + '</div>' +
-                '<div class="student-item"><span class="item-label">勤務実績時間合計:</span> ' + print_formatMinutes_(actualTotalMonth) + '</div>' +
-              '</div>' +
+              '<h1 class="page-title">アルバイトシフト予定表</h1>' +
+              '<div class="header-ym">' + print_escapeHtml_(ym.slice(0, 4)) + '年' + Number(ym.slice(5, 7)) + '月分</div>' +
             '</div>' +
+            '<table class="info-table"><tbody><tr>' +
+              '<th>学籍番号</th><td>' + print_escapeHtml_(student.student_id) + '</td>' +
+              '<th>氏名</th><td>' + print_escapeHtml_(student.name) + '</td>' +
+              '<th>クラス</th><td>' + print_escapeHtml_(student.class) + '</td>' +
+              '<th>状態</th><td>' + print_escapeHtml_(statusText) + '</td>' +
+            '</tr></tbody></table>' +
             outOfScopeNotice +
             '<table class="print-table">' +
-              '<thead>' +
-                '<tr>' +
-                  '<th rowspan="2" style="width: 60px;">日付(曜日)</th>' +
-                  '<th colspan="3">予定</th>' +
-                  '<th colspan="3">実績</th>' +
-                  '<th rowspan="2" style="width: 80px;">備考</th>' +
-                '</tr>' +
-                '<tr>' +
-                  '<th style="width: 120px;">勤務予定時間</th>' +
-                  '<th style="width: 60px;">休憩時間</th>' +
-                  '<th style="width: 75px;">実働(合計)時間</th>' +
-                  '<th style="width: 120px;">勤務時間</th>' +
-                  '<th style="width: 60px;">休憩時間</th>' +
-                  '<th style="width: 75px;">実働(合計)時間</th>' +
-                '</tr>' +
-              '</thead>' +
-              '<tbody>' +
-                rowsHtml.join('\n') +
-              '</tbody>' +
-              '<tfoot>' +
-                '<tr class="total-row">' +
-                  '<td style="text-align: right; font-weight: bold;">合計</td>' +
-                  '<td colspan="3" style="font-weight: bold;">勤務予定時間合計: ' + print_formatMinutes_(planTotalMonth) + '</td>' +
-                  '<td colspan="3" style="font-weight: bold;">勤務実績時間合計: ' + print_formatMinutes_(actualTotalMonth) + '</td>' +
-                  '<td>' + (isOutOfScope ? '対象外' : '') + '</td>' +
-                '</tr>' +
-              '</tfoot>' +
+              '<thead><tr>' +
+                '<th style="width: 16%;">日付(曜日)</th>' +
+                '<th style="width: 30%;">勤務予定時間</th>' +
+                '<th style="width: 14%;">休憩時間</th>' +
+                '<th style="width: 16%;">実働(合計)時間</th>' +
+                '<th>備考</th>' +
+              '</tr></thead>' +
+              '<tbody>' + rowsHtml.join('\n') + '</tbody>' +
             '</table>' +
+            '<div class="page-foot">' +
+              '<div class="total">勤務予定時間合計: <strong>' + print_formatMinutes_(planTotalMonth) + '</strong></div>' +
+              '<div class="sign">署名 <span class="sign-line"></span></div>' +
+            '</div>' +
           '</section>';
 
         pagesHtml.push(pageHtml);
@@ -370,126 +285,28 @@ function api_adminPrintHtml(token, params) {
       '<html lang="ja">\n' +
       '<head>\n' +
       '<meta charset="utf-8">\n' +
-      '<title>アルバイト就業予定・実績表</title>\n' +
+      '<title>アルバイトシフト予定表</title>\n' +
       '<style>\n' +
-      '@page { size: A4 landscape; }\n' +
-      '.student-page { break-after: page; }\n' +
+      '@page { size: A4 portrait; margin: 10mm; }\n' +
       '* { box-sizing: border-box; }\n' +
-      'body {\n' +
-      '  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Hiragino Kaku Gothic ProN", "BIZ UDPGothic", Meiryo, sans-serif;\n' +
-      '  margin: 0;\n' +
-      '  padding: 0;\n' +
-      '  background-color: #fff;\n' +
-      '  color: #222;\n' +
-      '}\n' +
-      '.student-page {\n' +
-      '  width: 297mm;\n' +
-      '  min-height: 210mm;\n' +
-      '  padding: 8mm 10mm;\n' +
-      '  margin: 0 auto;\n' +
-      '  page-break-after: always;\n' +
-      '  break-after: page;\n' +
-      '  background: #fff;\n' +
-      '}\n' +
-      '.page-header {\n' +
-      '  margin-bottom: 6px;\n' +
-      '  border-bottom: 2px solid #2b3a4a;\n' +
-      '  padding-bottom: 4px;\n' +
-      '}\n' +
-      '.header-main {\n' +
-      '  display: flex;\n' +
-      '  justify-content: space-between;\n' +
-      '  align-items: baseline;\n' +
-      '  margin-bottom: 4px;\n' +
-      '}\n' +
-      '.page-title {\n' +
-      '  font-size: 16px;\n' +
-      '  margin: 0;\n' +
-      '  font-weight: bold;\n' +
-      '  color: #1a252f;\n' +
-      '}\n' +
-      '.header-ym {\n' +
-      '  font-size: 14px;\n' +
-      '  font-weight: bold;\n' +
-      '  color: #2b3a4a;\n' +
-      '}\n' +
-      '.student-card {\n' +
-      '  display: flex;\n' +
-      '  flex-wrap: wrap;\n' +
-      '  gap: 12px;\n' +
-      '  font-size: 11px;\n' +
-      '  background: #f8fafc;\n' +
-      '  padding: 4px 8px;\n' +
-      '  border: 1px solid #e2e8f0;\n' +
-      '  border-radius: 3px;\n' +
-      '}\n' +
-      '.student-item {\n' +
-      '  display: inline-flex;\n' +
-      '  align-items: center;\n' +
-      '}\n' +
-      '.item-label {\n' +
-      '  font-weight: bold;\n' +
-      '  color: #4a5568;\n' +
-      '  margin-right: 4px;\n' +
-      '}\n' +
-      '.badge {\n' +
-      '  display: inline-block;\n' +
-      '  padding: 1px 5px;\n' +
-      '  border-radius: 3px;\n' +
-      '  background: #edf2f7;\n' +
-      '  color: #2d3748;\n' +
-      '  font-size: 10px;\n' +
-      '}\n' +
-      '.badge.out-of-scope {\n' +
-      '  background: #cbd5e0;\n' +
-      '  color: #1a202c;\n' +
-      '  font-weight: bold;\n' +
-      '}\n' +
-      '.out-of-scope-banner {\n' +
-      '  margin: 4px 0;\n' +
-      '  padding: 4px 8px;\n' +
-      '  background: #edf2f7;\n' +
-      '  border: 1px solid #cbd5e0;\n' +
-      '  border-radius: 3px;\n' +
-      '  font-size: 11px;\n' +
-      '  font-weight: bold;\n' +
-      '  color: #4a5568;\n' +
-      '}\n' +
-      '.print-table {\n' +
-      '  width: 100%;\n' +
-      '  border-collapse: collapse;\n' +
-      '  font-size: 10px;\n' +
-      '  line-height: 1.2;\n' +
-      '}\n' +
-      '.print-table th, .print-table td {\n' +
-      '  border: 1px solid #a0aec0;\n' +
-      '  padding: 2px 4px;\n' +
-      '  text-align: center;\n' +
-      '  vertical-align: middle;\n' +
-      '}\n' +
-      '.print-table th {\n' +
-      '  background: #edf2f7;\n' +
-      '  color: #2d3748;\n' +
-      '  font-weight: bold;\n' +
-      '}\n' +
-      '.print-table tr.holiday-row td:nth-child(1) {\n' +
-      '  background-color: #fff5f5;\n' +
-      '  color: #c53030;\n' +
-      '}\n' +
-      '.print-table tr.exceeded, .print-table td.exceeded {\n' +
-      '  background-color: #e0e0e0 !important;\n' +
-      '  background-image: repeating-linear-gradient(45deg, transparent, transparent 3px, rgba(0, 0, 0, 0.08) 3px, rgba(0, 0, 0, 0.08) 6px) !important;\n' +
-      '  -webkit-print-color-adjust: exact;\n' +
-      '  print-color-adjust: exact;\n' +
-      '}\n' +
-      '.warn-badge {\n' +
-      '  color: #c53030;\n' +
-      '  font-weight: bold;\n' +
-      '}\n' +
-      '.total-row td {\n' +
-      '  background: #f7fafc;\n' +
-      '  font-weight: bold;\n' +
-      '}\n' +
+      'body { font-family: "Hiragino Kaku Gothic ProN", "BIZ UDPGothic", Meiryo, sans-serif; margin: 0; color: #222; background: #fff; }\n' +
+      '.student-page { width: 190mm; height: 275mm; margin: 0 auto; overflow: hidden; break-after: page; page-break-after: always; }\n' +
+      '.student-page:last-child { break-after: auto; page-break-after: auto; }\n' +
+      '.page-header { display: flex; justify-content: space-between; align-items: baseline; border-bottom: 2px solid #222; padding-bottom: 2mm; margin-bottom: 3mm; }\n' +
+      '.page-title { font-size: 18px; margin: 0; }\n' +
+      '.header-ym { font-size: 15px; font-weight: bold; }\n' +
+      '.info-table { width: 100%; border-collapse: collapse; font-size: 11px; margin-bottom: 3mm; }\n' +
+      '.info-table th, .info-table td { border: 1px solid #888; padding: 1.5mm 2mm; text-align: left; }\n' +
+      '.info-table th { background: #f0f0f0; white-space: nowrap; width: 1%; }\n' +
+      '.out-of-scope-banner { margin-bottom: 2mm; padding: 1.5mm 2mm; border: 1px solid #888; font-size: 11px; font-weight: bold; }\n' +
+      '.print-table { width: 100%; border-collapse: collapse; font-size: 11px; table-layout: fixed; }\n' +
+      '.print-table th, .print-table td { border: 1px solid #888; height: 6.6mm; padding: 0 2mm; text-align: center; vertical-align: middle; }\n' +
+      '.print-table th { background: #f0f0f0; font-weight: bold; }\n' +
+      '.print-table td.c-date { text-align: left; }\n' +
+      '.print-table td.c-note { text-align: left; font-size: 10px; }\n' +
+      '.print-table tr.holiday-row td { background: #f6f6f6; -webkit-print-color-adjust: exact; print-color-adjust: exact; }\n' +
+      '.page-foot { display: flex; justify-content: space-between; align-items: flex-end; margin-top: 4mm; font-size: 13px; }\n' +
+      '.sign-line { display: inline-block; width: 60mm; border-bottom: 1px solid #222; margin-left: 2mm; }\n' +
       '</style>\n' +
       '</head>\n' +
       '<body>\n' +

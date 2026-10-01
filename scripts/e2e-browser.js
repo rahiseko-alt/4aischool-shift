@@ -245,6 +245,7 @@ html = html.replace('<head>', '<head><script>' + shim + '</script>');
   await popup.waitForFunction(() => document.querySelectorAll('.student-page').length === 1, null, { timeout: 5000 });
   const printed = await popup.textContent('body');
   if (!printed.includes('勤務予定時間合計') || !printed.includes('実働(合計)時間')) throw new Error('印刷に紙の予定表の欄が無い');
+  if (printed.includes('実績')) throw new Error('印刷に実績が残っている');
   if (/勤務先|時給|給与|¥/.test(printed)) throw new Error('印刷に勤務先・お金の欄が残っている');
   await popup.close();
 

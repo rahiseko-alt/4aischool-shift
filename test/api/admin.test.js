@@ -184,11 +184,21 @@ test('管理者の追加: 新しい管理者は初回にパスワード変更を
 
 // ---- 印刷 ----
 
-test('印刷: 学生×月の数だけ student-page があり、A4横の指定がある', () => {
+test('印刷: 学生×月の数だけ student-page（1人1か月で1枚）があり、A4縦の指定がある（2026-10-01 横から変更）', () => {
   const w = classroom();
   const r = ok(w.api('api_adminPrintHtml', w.admin, { studentIds: ['251001', '251002'], yearMonths: ['2026-09', '2026-10'] }));
   assert.equal((r.html.match(/class="student-page"/g) || []).length, 4);
-  assert.match(r.html, /@page\s*\{\s*size:\s*A4 landscape;?\s*\}/);
+  assert.match(r.html, /@page\s*\{\s*size:\s*A4 portrait;?/);
+});
+
+test('印刷: 予定だけを載せ、実績の欄は無い（2026-10-01 シフト管理だけにする）', () => {
+  const w = world();
+  w.at('2026-11-02 10:00');
+  const m = ok(w.api('api_getMonth', w.st.token, YM));
+  ok(w.api('api_saveActual', w.st.token, YM, { '1': [sh('09:00', '12:00')] }, m.version));
+  const r = ok(w.api('api_adminPrintHtml', w.admin, { studentIds: [w.st.studentId], yearMonths: [YM] }));
+  assert.ok(r.html.includes('勤務予定時間合計'));
+  assert.equal(/実績/.test(r.html), false);
 });
 
 test('印刷: 学校確定の月は「対象外」と表示される', () => {
