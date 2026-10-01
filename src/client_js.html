@@ -338,10 +338,10 @@
     el('st-closed-notice').textContent = closed ? t('label.closed') : '';
     el('btn-save-draft').disabled = closed;
     el('btn-confirm-shift').disabled = closed;
-    // 月全体のコード（日付の無いもの）は表の上、日付のあるものはその日の行の下に出す
-    var visible = (ev.codes || []).filter(function (c) { return c.severity !== 'admin'; });
-    el('st-codes').innerHTML = (data.status === '確定済' ? '<div class="badge badge-confirmed">' + esc(t('label.confirmedDone')) + '</div>' : '') +
-      codesHtml(visible.filter(function (c) { return !c.date; }));
+    // 月全体のコード（日付の無いもの）は表の上、日付のあるものはその日の行の下に出す。
+    // 「確定済み」の札と「前月未確定」の注意は出さない（利用者の判断。確定済みかどうかは提出履歴で分かる）
+    var visible = (ev.codes || []).filter(function (c) { return c.severity !== 'admin' && c.code !== 'PREV_MONTH_DRAFT'; });
+    el('st-codes').innerHTML = codesHtml(visible.filter(function (c) { return !c.date; }));
 
     el('shifts-table').innerHTML = shiftTableHtml(data.yearMonth, data.shifts || {}, {
       rowClass: 'plan-row', timeLabel: 'label.planTime', totalLabel: 'label.planTotal',
