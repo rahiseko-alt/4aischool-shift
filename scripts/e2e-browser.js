@@ -221,25 +221,28 @@ html = html.replace('<head>', '<head><script>' + shim + '</script>');
   await page.click('#btn-confirm-actual'); await wait(); await wait();
   if (!(await page.textContent('#actual-codes')).includes('予定どおり')) throw new Error('実績の状態: ' + (await page.textContent('#actual-codes')));
 
-  step('管理者: 四半期確認・学校設定・印刷（ポップアップ）');
+  step('管理者: 学校設定・印刷（ポップアップ）');
   await page.click('#btn-logout-st');
   await page.fill('#inp-loginId', ADMIN.id); await page.fill('#inp-password', 'admin-pass-0001'); await page.click('#btn-login'); await wait();
-  await page.click('#btn-open-quarter');
-  await page.fill('[data-key="endYearMonth"]', '2026-10');
-  await page.click('[data-act="submit"]'); await wait();
-  if (!(await page.textContent('#admin-dialog-body')).includes('予定どおり')) throw new Error('四半期確認の表');
-  await page.click('#btn-dialog-close');
   await page.click('#btn-open-settings'); await wait();
   await page.fill('[data-key="retentionMonths"]', '1');
   await page.click('[data-act="submit"]'); await wait();
   if (!(await page.textContent('#admin-form-error')).includes('リクエスト')) throw new Error('範囲外の設定を止めない');
   await page.click('#btn-dialog-close');
-  const [popup] = await Promise.all([page.waitForEvent('popup'), page.click('.btn-admin-print')]);
+  const [popup] = await Promise.all([page.waitForEvent('popup'), page.click('#btn-print-board')]);
   await popup.waitForFunction(() => document.querySelectorAll('.student-page').length === 1, null, { timeout: 5000 });
   const printed = await popup.textContent('body');
   if (!printed.includes('勤務予定時間合計') || !printed.includes('実働(合計)時間')) throw new Error('印刷に紙の予定表の欄が無い');
   if (/勤務先|時給|給与|¥/.test(printed)) throw new Error('印刷に勤務先・お金の欄が残っている');
   await popup.close();
+
+  step('管理画面: 行を押すと詳細が開く・四半期確認と試用データのボタンは無い');
+  for (const id of ['#btn-open-quarter', '#btn-seed-demo', '#btn-print-all-class']) {
+    if (await page.$(id)) throw new Error('消したはずのボタンが残っている: ' + id);
+  }
+  await page.click('#admin-board tr.board-row td:nth-child(2)'); await wait();
+  if (await page.isHidden('#admin-dialog-overlay')) throw new Error('行を押しても詳細が開かない');
+  await page.click('#btn-dialog-close');
 
   step('生徒モード: 生徒B（ネパール語）に入り、管理者に戻る');
   await page.click('#btn-student-mode');

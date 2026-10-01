@@ -521,46 +521,52 @@
     });
   }
 
-  function kpi(label, value, cls) {
-    return '<div class="kpi-card ' + (cls || '') + '"><span class="kpi-label">' + esc(label) + '</span><span class="kpi-val">' + esc(value) + '</span></div>';
+  // 集計は1行の小さな札。状態の札を押すとその状態で絞り込む（もう一度押すと解除）。
+  function chip(label, value, status, cls) {
+    var active = status && el('admin-status-filter').value === status;
+    var inner = esc(label) + ' <strong>' + esc(value) + '</strong>';
+    if (!status) return '<span class="adm-chip ' + (cls || '') + '">' + inner + '</span>';
+    return '<button type="button" class="adm-chip ' + (cls || '') + (active ? ' is-active' : '') + '" data-status="' + esc(status) + '">' + inner + '</button>';
   }
 
   function renderAdminBoard(data) {
     var c = data.counts;
-    el('admin-counts').innerHTML = '<div class="counts-grid">' +
-      kpi('学生数', c.students) + kpi('確定済', c.confirmed, 'kpi-confirmed') + kpi('下書き', c.draft, 'kpi-draft') +
-      kpi('未提出', c.notSubmitted, 'kpi-notsubmitted') + kpi('エラー', c.error, 'kpi-error') + kpi('対象外', c.outOfScope, 'kpi-outofscope') +
-      '</div><div class="kpi-banner"><span>実績未確認 ' + esc(data.actualUnconfirmed) + '件</span></div>';
+    el('admin-counts').innerHTML =
+      chip('学生', c.students) + chip('確定済', c.confirmed, '確定済') + chip('下書き', c.draft, '下書き') +
+      chip('未提出', c.notSubmitted, '未提出') + chip('エラー', c.error, null, c.error ? 'chip-error' : '') +
+      chip('対象外', c.outOfScope, '対象外') + chip('実績未確認', data.actualUnconfirmed, null, data.actualUnconfirmed ? 'chip-warn' : '');
 
-    var html = '<table class="admin-table"><thead><tr><th>学籍番号</th><th>氏名</th><th>クラス</th><th>状態</th><th>エラー</th><th>実績</th><th>更新</th><th>操作</th></tr></thead><tbody>';
+    var html = '<table class="admin-table"><thead><tr><th>学籍番号</th><th>氏名</th><th class="col-wide">クラス</th><th>状態</th><th>エラー</th>' +
+      '<th class="col-wide">実績</th><th class="col-wide">更新</th><th></th></tr></thead><tbody>';
     if (!data.rows.length) html += '<tr><td colspan="8">該当する学生はいません</td></tr>';
     data.rows.forEach(function (row) {
       var errs = (row.errorCodes || []).map(function (code) { return '<span class="badge badge-error">' + esc(tErr(code)) + '</span>'; }).join(' ');
-      html += '<tr' + (row.actualOver ? ' class="actual-over"' : '') + '>' +
-        '<td><strong>' + esc(row.studentId) + '</strong></td><td>' + esc(row.name) + '</td><td>' + esc(row.className) + '</td>' +
-        '<td>' + esc(row.displayStatus) + '</td><td>' + (errs || '—') + '</td>' +
-        '<td>' + esc(row.actualStatus) + (row.actualOver ? ' <span class="badge badge-error">実績超過</span>' : '') + '</td>' +
-        '<td>' + esc(row.updatedAt || '—') + '</td>' +
-        '<td><button type="button" class="btn-primary btn-sm btn-admin-detail" data-sid="' + esc(row.studentId) + '">詳細</button> ' +
-        '<button type="button" class="btn-secondary btn-sm btn-admin-print" data-sid="' + esc(row.studentId) + '">印刷</button></td></tr>';
+      html += '<tr class="board-row' + (row.actualOver ? ' actual-over' : '') + '" data-sid="' + esc(row.studentId) + '">' +
+        '<td class="nowrap"><strong>' + esc(row.studentId) + '</strong></td><td class="nowrap">' + esc(row.name) + '</td>' +
+        '<td class="col-wide nowrap">' + esc(row.className) + '</td>' +
+        '<td class="nowrap">' + esc(row.displayStatus) + '</td><td>' + (errs || '—') + '</td>' +
+        '<td class="col-wide nowrap">' + esc(row.actualStatus) + (row.actualOver ? ' <span class="badge badge-error">実績超過</span>' : '') + '</td>' +
+        '<td class="col-wide nowrap">' + esc(row.updatedAt || '—') + '</td>' +
+        '<td class="nowrap"><button type="button" class="btn-primary btn-sm btn-admin-detail" data-sid="' + esc(row.studentId) + '">詳細</button> ' +
+        '<button type="button" class="btn-outline btn-sm btn-admin-print" data-sid="' + esc(row.studentId) + '">印刷</button></td></tr>';
     });
     el('admin-board').innerHTML = html + '</tbody></table>';
   }
 
-  el('admin-board').addEventListener('click', function (ev) {
-    var d = ev.target.closest('.btn-admin-detail');
-    if (d) { openStudentDetail(d.getAttribute('data-sid')); return; }
-    var p = ev.target.closest('.btn-admin-print');
-    if (p) printPages([p.getAttribute('data-sid')], [state.yearMonth]);
+  el('admin-counts').addEventListener('click', function (ev) {
+    var b = ev.target.closest('[data-status]');
+    if (!b) return;
+    var st = b.getAttribute('data-status');
+    el('admin-status-filter').value = el('admin-status-filter').value === st ? '' : st;
+    loadAdminBoard();
   });
 
-  document.querySelectorAll('.admin-sidebar-nav .admin-nav-item').forEach(function (item) {
-    item.addEventListener('click', function () {
-      document.querySelectorAll('.admin-sidebar-nav .admin-nav-item').forEach(function (i) { i.classList.remove('active'); });
-      item.classList.add('active');
-      var target = el(item.getAttribute('data-target'));
-      if (target) target.scrollIntoView({ behavior: 'smooth' });
-    });
+  // 行のどこを押しても詳細を開く（「印刷」ボタンだけは印刷）
+  el('admin-board').addEventListener('click', function (ev) {
+    var p = ev.target.closest('.btn-admin-print');
+    if (p) { printPages([p.getAttribute('data-sid')], [state.yearMonth]); return; }
+    var r = ev.target.closest('tr[data-sid]');
+    if (r) openStudentDetail(r.getAttribute('data-sid'));
   });
 
   // ---- ダイアログ（学生詳細・入力フォーム・一覧を同じ枠で出す） ----
@@ -785,28 +791,6 @@
     });
   });
 
-  // ---- 四半期確認 ----
-  el('btn-open-quarter').addEventListener('click', function () {
-    var fields = [
-      { key: 'endYearMonth', label: '3か月の最後の月', type: 'ym', value: addMonth(todayYm(), -1), required: true },
-      { key: 'className', label: 'クラス（空欄なら全クラス）', type: 'text' }
-    ];
-    openForm('四半期確認', fields, '表示して確認を記録', function (v) {
-      call('api_adminQuarterCheck', [state.token, { className: v.className, endYearMonth: v.endYearMonth }]).then(function (r) {
-        if (!r.ok) { formError(r); return; }
-        var html = '<p>確認者と確認日時を監査ログに記録しました。</p><table class="admin-table"><thead><tr><th>学籍番号</th><th>氏名</th>' +
-          r.data.months.map(function (m) { return '<th>' + esc(m) + '</th>'; }).join('') + '</tr></thead><tbody>';
-        r.data.rows.forEach(function (row) {
-          html += '<tr' + (row.months.some(function (m) { return m.actualOver; }) ? ' class="actual-over"' : '') + '><td>' + esc(row.studentId) + '</td><td>' + esc(row.name) + '</td>' +
-            row.months.map(function (m) {
-              return '<td>' + esc(m.actualStatus) + (m.actualTotalMinutes !== null ? ' ' + esc(hm(m.actualTotalMinutes)) : '') + (m.actualOver ? ' <strong>実績超過</strong>' : '') + '</td>';
-            }).join('') + '</tr>';
-        });
-        openDialog('四半期確認 ' + r.data.months[0] + '〜' + r.data.months[2], html + '</tbody></table>');
-      });
-    });
-  });
-
   // ---- 管理者の追加・保存期限超過の削除 ----
   el('btn-create-admin').addEventListener('click', function () {
     if (!confirm('管理者のアカウントを1つ追加します。')) return;
@@ -870,22 +854,6 @@
     afterLogin();
   });
 
-  // ---- 試用データ ----
-  el('btn-seed-demo').addEventListener('click', function () {
-    if (!confirm('試用データ（クラス DEMO の架空の学生3人・締切）を入れます。本番で使う場合は押さないでください。')) return;
-    call('api_adminSeedDemo', [state.token]).then(function (res) {
-      if (!adminAlert(res)) return;
-      var html = '<p>クラス「DEMO」に入れました。学生のログイン情報（この画面を閉じると二度と表示されません）:</p>';
-      if (!res.data.students.length) html += '<p>試用の学生はすでに登録済みです（パスワードを忘れた場合は、学生詳細から再発行してください）。</p>';
-      res.data.students.forEach(function (s) {
-        html += '<p><strong>' + esc(s.name) + '</strong>（' + esc(s.studentId) + '）ログインID: <strong>' + esc(s.loginId) + '</strong> ／ 初期パスワード: <strong>' + esc(s.initialPassword) + '</strong></p>';
-      });
-      el('admin-class-filter').value = 'DEMO';
-      openDialog('試用データ', html);
-      loadAdminBoard();
-    });
-  });
-
   // ---- 印刷（50名ずつ。ポップアップを止められないよう、先に窓を開けてから中身を書く） ----
   function printPages(studentIds, months, firstWindow) {
     var chunks = [];
@@ -905,20 +873,6 @@
       });
     });
   }
-
-  // クラス一括: 絞り込み欄のクラス全員（対象外の学生も「対象外」と印刷する）。
-  // 学生一覧の取得を待つ間にポップアップが止められないよう、先に1枚目の窓を開けておく。
-  el('btn-print-all-class').addEventListener('click', function () {
-    var cls = el('admin-class-filter').value.trim();
-    if (!cls) { alert('上の絞り込み欄にクラスを入れてください。'); return; }
-    var first = window.open('', '_blank');
-    call('api_adminBoard', [state.token, state.yearMonth, { className: cls }]).then(function (res) {
-      if (!adminAlert(res)) { if (first) first.close(); return; }
-      var sids = res.data.rows.map(function (r) { return r.studentId; });
-      if (!sids.length) { if (first) first.close(); alert('印刷する学生がいません。'); return; }
-      printPages(sids, [state.yearMonth], first);
-    });
-  });
 
   el('btn-print-board').addEventListener('click', function () {
     var sids = state.admin.boardRows.map(function (r) { return r.studentId; });

@@ -1,5 +1,5 @@
 'use strict';
-// 管理ボード・マスタ・四半期確認・印刷・保存期限。
+// 管理ボード・マスタ・印刷・保存期限。
 // 実装役はこのファイルを変更してはならない。
 
 const test = require('node:test');
@@ -164,24 +164,6 @@ test('管理者の追加: 新しい管理者は初回にパスワード変更を
   const login = ok(w.api('api_login', a.loginId, a.initialPassword));
   assert.equal(login.role, 'admin');
   assert.equal(login.mustChangePassword, true);
-});
-
-// ---- 四半期確認 ----
-
-test('四半期確認: 終わりの月を含む3か月分の実績を返し、監査ログに QUARTER_CHECK を1行残す', () => {
-  const w = world();
-  w.at('2026-11-02 10:00');
-  const m = ok(w.api('api_getMonth', w.st.token, YM));
-  const saved = ok(w.api('api_saveActual', w.st.token, YM, { '1': [sh('09:00', '12:00')] }, m.version));
-  ok(w.api('api_confirmActual', w.st.token, YM, saved.version));
-  const q = ok(w.api('api_adminQuarterCheck', w.admin, { className: null, endYearMonth: '2026-10' }));
-  assert.deepEqual(q.months, ['2026-08', '2026-09', '2026-10']);
-  const row = q.rows.find((r) => r.studentId === '251001');
-  const oct = row.months.find((x) => x.yearMonth === '2026-10');
-  assert.equal(oct.actualStatus, '修正あり');
-  assert.equal(oct.actualTotalMinutes, 180);
-  assert.equal(oct.actualOver, false);
-  assert.equal(auditRows(w).filter((r) => r.action === 'QUARTER_CHECK').length, 1);
 });
 
 // ---- 印刷 ----

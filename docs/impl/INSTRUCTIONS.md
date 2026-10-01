@@ -225,7 +225,6 @@ src/
 | `api_adminGrantUnlock` | `token, studentId, yearMonth, until` | `null`（行が無ければ未入力の行を作る。version は変えない） |
 | `api_adminSchoolConfirm` | `token, studentId, yearMonth` | `null` |
 | `api_adminBoard` | `token, yearMonth, { className?, status?, query? }` | 下記 |
-| `api_adminQuarterCheck` | `token, { className: string\|null, endYearMonth }` | `{ months: [3か月、古い順], rows: [{ studentId, name, className, months: [{ yearMonth, displayStatus, actualStatus, actualTotalMinutes: number\|null, actualOver }] }] }` |
 | `api_adminSetDeadline` | `token, { yearMonth, className, deadlineAt, actualDeadlineAt\|null }` | `null`（年月＋クラスで上書き） |
 | `api_adminSetHoliday` | `token, { holidayId?, name, startDate, endDate, schoolYear }` | `{ holidayId }`（開始＞終了は `BAD_REQUEST`） |
 | `api_adminDeleteHoliday` | `token, holidayId` | `null` |
@@ -307,7 +306,7 @@ AuditLog スプレッドシートの `AUDIT_LOG` シートは、**この列・�
 `timestamp, user_id, role, action, student_id, year_month, version, details`
 
 - `timestamp` は `"YYYY-MM-DD HH:MM"`、`user_id` は操作した人のログインID、`role` は `student`／`admin`。
-- `action` は次のどれか: `SAVE_DRAFT`・`CONFIRM`・`ACTUAL_SAVE`・`ACTUAL_CONFIRM`・`LOGIN_OK`・`LOGIN_FAIL`・`PASSWORD_CHANGE`・`PASSWORD_RESET`・`LOGIN_UNLOCK`・`ADMIN_UNLOCK`・`SCHOOL_CONFIRM`・`QUARTER_CHECK`・`MASTER_UPDATE`・`PURGE`。
+- `action` は次のどれか: `SAVE_DRAFT`・`CONFIRM`・`ACTUAL_SAVE`・`ACTUAL_CONFIRM`・`LOGIN_OK`・`LOGIN_FAIL`・`PASSWORD_CHANGE`・`PASSWORD_RESET`・`LOGIN_UNLOCK`・`ADMIN_UNLOCK`・`SCHOOL_CONFIRM`・`MASTER_UPDATE`・`PURGE`。
 - 保存・確定・学校確定の行には、書き込み後の `version` を入れる。
 - パスワード・トークン・秘密鍵を、どのシートにもログにも書かない（テストが全セルを検査する）。
 
@@ -353,7 +352,7 @@ AuditLog スプレッドシートの `AUDIT_LOG` シートは、**この列・�
 - 対象月・クラス・状態・検索、件数（学生数・確定済・下書き・未提出・エラー・対象外）、実績未確認。
 - 学生一覧（学籍番号・氏名・クラス・状態・エラー・実績・更新日・印刷）。実績超過の学生は赤。
 - 学生詳細（学生情報の編集、修正許可、学校確定、パスワード再発行、ロック解除、2年間一括印刷）。
-- 四半期確認、締切の設定、長期休業の設定、学校設定、学生の追加、保存期限超過データの削除、クラス一括印刷（50名ずつ）、表示中を一括印刷。
+- 締切の設定、長期休業の設定、学校設定、学生の追加、保存期限超過データの削除、クラス一括印刷（50名ずつ）、表示中を一括印刷。
 - 印刷は `api_adminPrintHtml` の HTML を新しいウィンドウに書いて `print()` を呼ぶ。
 
 ### 9.4 画面見本（mockup-v1.webp）について
@@ -372,7 +371,7 @@ AuditLog スプレッドシートの `AUDIT_LOG` シートは、**この列・�
 | 1 | `appsscript.json`、`Core.js`（evaluateMonth） | `node --test "test/core/*.test.js"` | `段階1: 計算の心臓部` |
 | 2 | `Util.js`・`Db.js`・`Auth.js`（setupInitial・ログイン・ログアウト・パスワード変更）、`api_adminUpsertStudent`・`api_adminResetPassword`・`api_adminUnlockLogin`・`api_getMonth`（読むだけ）、**第6章の公開関数すべての「入口」**（下記） | `node --test test/api/auth.test.js` | `段階2: 認証` |
 | 3 | 学生の窓口の残り（保存・確定・実績・履歴）、管理者の `api_adminSetDeadline`・`api_adminGetSettings`・`api_adminSetSettings`・`api_adminGrantUnlock`・`api_adminSchoolConfirm` | `node --test test/api/submission.test.js test/api/actual.test.js test/api/permissions.test.js` | `段階3: 学生の窓口` |
-| 4 | 管理者の窓口の残り（ボード・学生詳細・四半期確認・長期休業・管理者の追加・保存期限）、`Print.js` | `node --test test/api/admin.test.js` | `段階4: 管理者の窓口` |
+| 4 | 管理者の窓口の残り（ボード・学生詳細・長期休業・管理者の追加・保存期限）、`Print.js` | `node --test test/api/admin.test.js` | `段階4: 管理者の窓口` |
 | 5 | `I18n.js`、`Code.js`、`Backup.js` | `npm test`（全部） | `段階5: 辞書と公開関数` |
 | 6 | `index.html`・`client_css.html`・`client_js.html` | `npm test`（全部。画面を足しても落ちないこと） | `段階6: 画面` |
 | 7 | `docs/impl/REPORT.md`（第11章と第12章） | `npm test` と `npm run check-locked` | `段階7: 完了報告` |

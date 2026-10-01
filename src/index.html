@@ -128,89 +128,55 @@
 
   <!-- 管理者画面 -->
   <div id="admin-screen" hidden>
-    <div class="admin-layout">
-      <!-- サイドバー -->
-      <aside class="admin-sidebar">
-        <div class="admin-sidebar-header">
-          <div class="admin-sidebar-brand">
-            <div class="brand-logo-mark">AI</div>
-            <span>留学生管理ポータル</span>
-          </div>
-        </div>
-        <nav class="admin-sidebar-nav">
-          <div class="admin-nav-item active" data-target="admin-section-board">📊 ダッシュボード</div>
-          <div class="admin-nav-item" data-target="admin-section-masters">⚙️ マスタ設定</div>
-          <div class="admin-nav-item" data-target="admin-section-print">🖨️ 一括印刷</div>
-        </nav>
-        <div class="admin-sidebar-footer">
-          <button id="btn-logout-admin" class="btn-outline btn-sm" style="color:#ffffff; border-color:rgba(255,255,255,0.3); width:100%;">ログアウト</button>
-        </div>
-      </aside>
-
-      <!-- メインエリア -->
-      <div class="admin-main">
-        <header class="admin-topbar">
-          <div class="month-nav">
-            <button id="btn-admin-prev-month" aria-label="前月">&lt;</button>
-            <span id="admin-year-month" class="month-nav-title" style="color:var(--navy);"></span>
-            <button id="btn-admin-next-month" aria-label="翌月">&gt;</button>
-          </div>
-          <div>
-            <span class="user-badge" style="color:var(--navy); background:var(--navy-subtle); border-color:#d4e2f2;">管理者モード</span>
-          </div>
-        </header>
-
-        <main class="admin-content">
-          <!-- 統計・ボードセクション -->
-          <div id="admin-section-board">
-            <div id="admin-counts"></div>
-
-            <div class="filter-bar">
-              <input type="text" id="admin-class-filter" placeholder="クラス検索 (例: 1A)">
-              <select id="admin-status-filter">
-                <option value="">全状態</option>
-                <option value="確定済">確定済</option>
-                <option value="下書き">下書き</option>
-                <option value="未提出">未提出</option>
-                <option value="対象外">対象外</option>
-              </select>
-              <input type="text" id="admin-query" placeholder="学籍番号 または 氏名">
-              <button id="btn-admin-search" class="btn-primary">検索</button>
-            </div>
-
-            <div class="table-responsive card" style="padding:0; margin-bottom:1.5rem;">
-              <div id="admin-board"></div>
-            </div>
-          </div>
-
-          <!-- 各種マスタ設定セクション -->
-          <div id="admin-section-masters" class="card">
-            <h2 class="card-title">マスタ設定・管理機能</h2>
-            <div class="master-grid">
-              <button id="btn-open-student-form">👤 学生を追加</button>
-              <button id="btn-open-quarter">📋 四半期確認</button>
-              <button id="btn-open-deadline">📅 締切設定</button>
-              <button id="btn-open-holiday">🏖️ 長期休業設定</button>
-              <button id="btn-open-settings">🏫 学校基本設定</button>
-              <button id="btn-create-admin">🔑 管理者を追加</button>
-              <button id="btn-student-mode">🎓 生徒モード</button>
-              <button id="btn-seed-demo">🧪 試用データを入れる</button>
-              <button id="btn-purge-expired" class="btn-danger" style="color:#ffffff;">🗑️ 保存期限超過データを削除</button>
-            </div>
-          </div>
-
-          <!-- 一括印刷セクション -->
-          <div id="admin-section-print" class="card">
-            <h2 class="card-title">一括印刷出力</h2>
-            <p style="font-size:0.88rem; color:var(--text-sub); margin-bottom:1rem;">指定した条件の学生シフト表を50名単位でブラウザの印刷用画面に展開します。</p>
-            <div style="display:flex; gap:0.75rem; flex-wrap:wrap;">
-              <button id="btn-print-all-class" class="btn-primary">🖨️ クラス一括印刷 (50名ごと)</button>
-              <button id="btn-print-board" class="btn-gold">🖨️ 表示中を一括印刷</button>
-            </div>
-          </div>
-        </main>
+    <!-- 上の帯: 名前・月の切替・ログアウト -->
+    <header class="adm-bar">
+      <div class="adm-brand"><div class="brand-logo-mark">AI</div><span>アルバイト申告 管理</span></div>
+      <div class="month-nav adm-month">
+        <button id="btn-admin-prev-month" aria-label="前月">&lt;</button>
+        <span id="admin-year-month" class="month-nav-title"></span>
+        <button id="btn-admin-next-month" aria-label="翌月">&gt;</button>
       </div>
-    </div>
+      <button id="btn-logout-admin" class="btn-outline btn-sm adm-logout">ログアウト</button>
+    </header>
+
+    <main class="adm-main">
+      <!-- 集計（押すとその状態で絞り込む） -->
+      <div id="admin-counts" class="adm-counts"></div>
+
+      <!-- 絞り込みと印刷 -->
+      <div class="adm-toolbar">
+        <input type="text" id="admin-class-filter" placeholder="クラス">
+        <select id="admin-status-filter">
+          <option value="">全状態</option>
+          <option value="確定済">確定済</option>
+          <option value="下書き">下書き</option>
+          <option value="未提出">未提出</option>
+          <option value="対象外">対象外</option>
+        </select>
+        <input type="text" id="admin-query" placeholder="学籍番号・氏名">
+        <button id="btn-admin-search" class="btn-primary btn-sm">検索</button>
+        <button id="btn-print-board" class="btn-outline btn-sm">🖨️ 表示中を印刷</button>
+      </div>
+
+      <!-- 学生一覧（行を押すと詳細） -->
+      <div class="adm-table-wrap">
+        <div id="admin-board"></div>
+      </div>
+
+      <!-- 設定・管理 -->
+      <section class="adm-tools">
+        <h2 class="adm-tools-title">設定・管理</h2>
+        <div class="adm-tools-row">
+          <button id="btn-open-student-form" class="btn-outline btn-sm">👤 学生を追加</button>
+          <button id="btn-open-deadline" class="btn-outline btn-sm">📅 締切</button>
+          <button id="btn-open-holiday" class="btn-outline btn-sm">🏖️ 長期休業</button>
+          <button id="btn-open-settings" class="btn-outline btn-sm">🏫 学校設定</button>
+          <button id="btn-create-admin" class="btn-outline btn-sm">🔑 管理者を追加</button>
+          <button id="btn-student-mode" class="btn-outline btn-sm">🎓 生徒モード</button>
+          <button id="btn-purge-expired" class="btn-outline btn-sm adm-danger">🗑️ 保存期限を過ぎたデータを削除</button>
+        </div>
+      </section>
+    </main>
 
     <!-- 管理者詳細ダイアログ -->
     <div id="admin-dialog-overlay" hidden>
