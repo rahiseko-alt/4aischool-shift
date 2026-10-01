@@ -210,6 +210,17 @@ html = html.replace('<head>', '<head><script>' + shim + '</script>');
   await popup.waitForFunction(() => document.querySelectorAll('.student-page').length === 1, null, { timeout: 5000 });
   await popup.close();
 
+  step('生徒モード: 生徒B（ネパール語）に入り、管理者に戻る');
+  await page.click('#btn-student-mode');
+  await page.click('[data-act="actas"][data-id="DEMO-B"]'); await wait(); await wait();
+  if (!dialogs.some((m) => m.includes('生徒A') && m.includes('パスワード'))) throw new Error('試用の生徒のログイン情報が出ない');
+  await page.waitForSelector('#student-screen:not([hidden])');
+  await page.waitForFunction(() => document.getElementById('st-name').textContent.includes('DEMO-B'));
+  if (await page.isHidden('#btn-back-admin')) throw new Error('管理者に戻るボタンが無い');
+  await page.click('#btn-back-admin'); await wait();
+  await page.waitForSelector('#admin-screen:not([hidden])');
+  if (!(await page.isHidden('#btn-back-admin'))) throw new Error('管理者に戻った後もボタンが残る');
+
   await browser.close();
   if (errors.length) { console.log(errors.join('\n')); process.exit(1); }
   console.log('✅ 画面の通し確認: すべて成功（ブラウザのエラー 0件）');

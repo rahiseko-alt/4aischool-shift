@@ -16,7 +16,7 @@
 
   // ---- アプリの状態（トークンはこの変数にだけ持つ） ----
   var state = {
-    token: null, role: null, studentId: null,
+    token: null, role: null, studentId: null, adminToken: null,
     yearMonth: null, monthData: null, workplaces: [],
     admin: { settings: null, boardRows: [] }
   };
@@ -99,8 +99,9 @@
     });
   }
   function resetState() {
-    state.token = null; state.role = null; state.studentId = null;
+    state.token = null; state.role = null; state.studentId = null; state.adminToken = null;
     state.monthData = null; state.workplaces = [];
+    el('btn-back-admin').hidden = true;
   }
 
   // ---- 言語 ----
@@ -160,6 +161,7 @@
 
   function doLogout() {
     if (state.token) callServer('api_logout', [state.token]);
+    if (state.adminToken) callServer('api_logout', [state.adminToken]);
     resetState();
     showScreen('login-screen');
   }
@@ -883,6 +885,51 @@
         if (adminAlert(r, r.ok ? r.data.deletedRows + '件を削除しました。' : '')) loadAdminBoard();
       });
     });
+  });
+
+  // ---- 生徒モード（試用の学生 DEMO の画面に入る。管理者のトークンは手元に残し、「管理者に戻る」で戻す） ----
+  var DEMO_PICK = [['DEMO-A', '生徒A（日本語）'], ['DEMO-B', '生徒B（ネパール語）'], ['DEMO-C', '生徒C（ベトナム語）']];
+  el('btn-student-mode').addEventListener('click', function () {
+    var html = '<p>試用の生徒（クラス DEMO）の画面に入ります。初めてのときは、試用の生徒・勤務先・締切・仮の最低賃金が自動で入ります。</p>';
+    DEMO_PICK.forEach(function (d) {
+      html += '<p><button data-act="actas" data-id="' + esc(d[0]) + '">' + esc(d[1]) + '</button></p>';
+    });
+    openDialog('生徒モード', html);
+    dialogHandlers.actas = function (b) {
+      var studentId = b.getAttribute('data-id');
+      call('api_adminActAsDemoStudent', [state.token, studentId]).then(function (res) {
+        if (!adminAlert(res)) return;
+        closeDialog();
+        if (res.data.newStudents.length) {
+          var msg = '試用の生徒を作りました。スマホなどから直接ログインするときは次を使ってください（この表示は一度だけです）:\n';
+          res.data.newStudents.forEach(function (s) {
+            msg += '\n' + s.name + '  ID: ' + s.loginId + '  パスワード: ' + s.initialPassword;
+          });
+          alert(msg);
+        }
+        state.adminToken = state.token;
+        state.token = res.data.token;
+        state.role = 'student';
+        state.studentId = res.data.studentId;
+        state.yearMonth = todayYm();
+        currentLang = res.data.language;
+        applyLang();
+        el('btn-back-admin').hidden = false;
+        showScreen('student-screen');
+        loadStudentMonth();
+      });
+    };
+  });
+  el('btn-back-admin').addEventListener('click', function () {
+    if (!state.adminToken) return;
+    callServer('api_logout', [state.token]);
+    state.token = state.adminToken;
+    state.adminToken = null;
+    state.role = 'admin';
+    state.studentId = null;
+    state.monthData = null; state.workplaces = [];
+    el('btn-back-admin').hidden = true;
+    afterLogin();
   });
 
   // ---- 試用データ ----

@@ -135,3 +135,35 @@ test('試用データ: 押すと DEMO クラスの学生3人が入り、その�
   const r = ok(ctx.api('api_confirm', login.token, '2026-11', { '2': [{ workplace: wp.workplaceId, start: '09:00', end: '13:00' }] }, 0));
   assert.equal(r.status, '確定済');
 });
+
+test('生徒モード: 管理者は試用の学生（DEMO）の画面にパスワード無しで入れる。試用データが無ければ自動で入る', () => {
+  const ctx = boot({ now: '2026-10-01 10:00' });
+  const r = ok(ctx.api('api_adminActAsDemoStudent', ctx.admin, 'DEMO-B'));
+  assert.equal(r.role, 'student');
+  assert.equal(r.studentId, 'DEMO-B');
+  assert.equal(r.language, 'ne');
+  assert.equal(r.mustChangePassword, false);
+  assert.equal(r.newStudents.length, 3);
+  const wp = ok(ctx.api('api_listWorkplaces', r.token))[0];
+  ok(ctx.api('api_confirm', r.token, '2026-11', { '2': [{ workplace: wp.workplaceId, start: '09:00', end: '13:00' }] }, 0));
+  // 管理者のトークンはそのまま使える（「管理者に戻る」）
+  ok(ctx.api('api_adminGetSettings', ctx.admin));
+  // 2回目は試用データを作り直さない
+  assert.equal(ok(ctx.api('api_adminActAsDemoStudent', ctx.admin, 'DEMO-A')).newStudents.length, 0);
+});
+
+test('生徒モード: 試用の学生は、配られたIDとパスワードでそのままログインでき、初回のパスワード変更を求められない', () => {
+  const ctx = boot({ now: '2026-10-01 10:00' });
+  const s = ok(ctx.api('api_adminSeedDemo', ctx.admin)).students[2];
+  const login = ok(ctx.api('api_login', s.loginId, s.initialPassword));
+  assert.equal(login.mustChangePassword, false);
+  ok(ctx.api('api_getMonth', login.token, '2026-10'));
+});
+
+test('生徒モード: DEMO 以外の学生には入れない（FORBIDDEN）。知らない学籍番号は NOT_FOUND', () => {
+  const ctx = boot({ now: '2026-10-01 10:00' });
+  const st = addStudent(ctx);
+  assert.equal(ctx.api('api_adminActAsDemoStudent', ctx.admin, st.studentId).error, 'FORBIDDEN');
+  assert.equal(ctx.api('api_adminActAsDemoStudent', ctx.admin, 'no-such').error, 'NOT_FOUND');
+  assert.equal(ctx.api('api_adminActAsDemoStudent', ctx.admin, '').error, 'BAD_REQUEST');
+});

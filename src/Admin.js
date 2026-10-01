@@ -1203,9 +1203,9 @@ function api_adminPurgeExpired(token) {
 // 最低賃金は、まだ1件も無い都道府県にだけ「仮の金額 1,000円」を入れる（実在の金額ではない）。
 var DEMO_CLASS_ = 'DEMO';
 var DEMO_STUDENTS_ = [
-  { studentId: 'DEMO-JA', name: '試用 日本語', language: 'ja' },
-  { studentId: 'DEMO-NE', name: '試用 ネパール語', language: 'ne' },
-  { studentId: 'DEMO-VI', name: '試用 ベトナム語', language: 'vi' }
+  { studentId: 'DEMO-A', name: '生徒A', language: 'ja' },
+  { studentId: 'DEMO-B', name: '生徒B', language: 'ne' },
+  { studentId: 'DEMO-C', name: '生徒C', language: 'vi' }
 ];
 
 function api_adminSeedDemo(token) {
@@ -1243,6 +1243,14 @@ function api_adminSeedDemo(token) {
         status: '在籍', workPermission: true, permissionExpires: '2099-12-31', permissionCheckedAt: '2025-04-01'
       });
       if (!res.ok) return res;
+      // 試用の学生は、初回のパスワード変更を求めない（スマホからすぐ試せるように）。
+      var users = db_readAllRows_('USERS');
+      for (var u = 0; u < users.length; u++) {
+        if (users[u].student_id === demo.studentId) {
+          users[u].force_password_change = 'false';
+          db_updateRow_('USERS', users[u]._rowNum, users[u]);
+        }
+      }
       var now = util_nowJst_();
       db_insertRow_('WORKPLACES', {
         workplace_id: 'WP_' + util_uuid_().slice(0, 8), student_id: demo.studentId, name: '試用コンビニ',
@@ -1255,6 +1263,51 @@ function api_adminSeedDemo(token) {
 
     db_logAudit_('MASTER_UPDATE', auth.user.login_id, 'admin', '', '', null, { op: 'seed_demo', students: created.length });
     return { ok: true, data: { className: DEMO_CLASS_, students: created } };
+  } catch (err) {
+    return { ok: false, error: 'INTERNAL' };
+  }
+}
+
+// 生徒モード: 管理者が、試用の学生（クラス DEMO）の画面にパスワード無しで入る。
+// DEMO 以外の学生には入れない。試用データがまだ無ければ先に入れる。
+function api_adminActAsDemoStudent(token, studentId) {
+  try {
+    var auth = auth_verifySession_(token, 'admin');
+    if (!auth.ok) return auth;
+    if (!studentId || typeof studentId !== 'string') return { ok: false, error: 'BAD_REQUEST' };
+
+    var seeded = api_adminSeedDemo(token);
+    if (!seeded.ok) return seeded;
+
+    var student = null;
+    db_readAllRows_('STUDENTS').forEach(function (s) { if (s.student_id === studentId) student = s; });
+    if (!student) return { ok: false, error: 'NOT_FOUND' };
+    if (student.class !== DEMO_CLASS_) return { ok: false, error: 'FORBIDDEN' };
+
+    var user = null;
+    db_readAllRows_('USERS').forEach(function (x) { if (x.student_id === studentId && x.role === 'student') user = x; });
+    if (!user) return { ok: false, error: 'NOT_FOUND' };
+
+    var now = util_nowJst_();
+    var newToken = util_generateToken_();
+    db_insertRow_('SESSIONS', {
+      token_hash: util_sha256Hex_(newToken),
+      login_id: user.login_id,
+      role: 'student',
+      expires_at: util_addMinutesToJst_(now, auth_sessionTtlMinutes_()),
+      created_at: now
+    });
+    db_logAudit_('LOGIN_OK', auth.user.login_id, 'admin', studentId, '', null, { via: 'demo_student_mode' });
+
+    return {
+      ok: true,
+      data: {
+        token: newToken, role: 'student', studentId: studentId, name: student.name,
+        language: student.language || 'ja', loginId: user.login_id,
+        mustChangePassword: user.force_password_change === 'true',
+        newStudents: seeded.data.students
+      }
+    };
   } catch (err) {
     return { ok: false, error: 'INTERNAL' };
   }
