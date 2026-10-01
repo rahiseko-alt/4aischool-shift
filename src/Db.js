@@ -46,16 +46,23 @@ var DB_AUDIT_LOG_HEADERS_ = [
   'timestamp', 'user_id', 'role', 'action', 'student_id', 'year_month', 'version', 'details'
 ];
 
+// 本物の GAS では openById が1回ごとに時間がかかるので、1回の実行の中では開いたものを使い回す。
+var db_openCache_ = {};
+function db_openById_(id) {
+  if (!db_openCache_[id]) db_openCache_[id] = SpreadsheetApp.openById(id);
+  return db_openCache_[id];
+}
+
 function db_getShiftDb_() {
   var id = PropertiesService.getScriptProperties().getProperty('SHIFT_DB_ID');
   if (!id) throw new Error('SHIFT_DB_ID is not set in script properties');
-  return SpreadsheetApp.openById(id);
+  return db_openById_(id);
 }
 
 function db_getAuditLogDb_() {
   var id = PropertiesService.getScriptProperties().getProperty('AUDIT_LOG_ID');
   if (!id) throw new Error('AUDIT_LOG_ID is not set in script properties');
-  return SpreadsheetApp.openById(id);
+  return db_openById_(id);
 }
 
 function db_getSheet_(ss, sheetName) {
@@ -124,6 +131,18 @@ function db_insertRow_(sheetName, obj) {
   }
   sheet.appendRow(row);
   return obj;
+}
+
+// 複数行を1回の書き込みで足す（1行ずつ appendRow すると本物のシートでは遅い）。
+function db_insertRows_(sheetName, objs) {
+  if (!objs.length) return;
+  var sheet = db_getSheet_(db_getShiftDb_(), sheetName);
+  var headers = DB_TABLES_[sheetName];
+  if (!headers) throw new Error('Unknown table: ' + sheetName);
+  var rows = objs.map(function (obj) {
+    return headers.map(function (h) { return db_toCell_(obj[h]); });
+  });
+  sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, headers.length).setValues(rows);
 }
 
 function db_updateRow_(sheetName, rowNum, obj) {

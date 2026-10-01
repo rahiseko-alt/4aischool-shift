@@ -1213,24 +1213,33 @@ function api_adminSeedDemo(token) {
     var auth = auth_verifySession_(token, 'admin');
     if (!auth.ok) return auth;
 
-    // 1. 最低賃金（無い都道府県だけ）
-    var hasWage = {};
-    db_readAllRows_('MINIMUM_WAGES').forEach(function (m) { hasWage[m.prefecture] = true; });
-    for (var i = 0; i < PREFECTURES_.length; i++) {
-      if (hasWage[PREFECTURES_[i]]) continue;
-      var w = api_adminSetMinimumWage(token, { prefecture: PREFECTURES_[i], amount: 1000, effectiveFrom: '2020-01-01', effectiveTo: null });
-      if (!w.ok) return w;
+    // 1・2. 最低賃金（無い都道府県だけ）と DEMO クラスの締切（無い月だけ）を、まとめて1回で書く。
+    var lock = LockService.getScriptLock();
+    if (!lock.tryLock(5000)) return { ok: false, error: 'BUSY' };
+    try {
+      var hasWage = {};
+      db_readAllRows_('MINIMUM_WAGES').forEach(function (m) { hasWage[m.prefecture] = true; });
+      var wages = PREFECTURES_.filter(function (p) { return !hasWage[p]; }).map(function (p) {
+        return { prefecture: p, amount: '1000', effective_from: '2020-01-01', effective_to: '' };
+      });
+      db_insertRows_('MINIMUM_WAGES', wages);
+
+      // 期限は遠い先にして、いつでも試せるようにする
+      var hasDeadline = {};
+      db_readAllRows_('DEADLINES').forEach(function (d) { if (d.class === DEMO_CLASS_) hasDeadline[d.year_month] = true; });
+      var ym = util_currentYearMonth_();
+      var deadlines = [];
+      for (var k = -1; k <= 12; k++) {
+        var target = admin_addMonths_(ym, k);
+        if (hasDeadline[target]) continue;
+        deadlines.push({ year_month: target, class: DEMO_CLASS_, deadline_at: '2099-12-31 23:59', actual_deadline_at: '2099-12-31 23:59' });
+      }
+      db_insertRows_('DEADLINES', deadlines);
+    } finally {
+      lock.releaseLock();
     }
 
-    // 2. 締切（DEMO クラス、今月の前後。期限は遠い先にして、いつでも試せるようにする）
-    var ym = util_currentYearMonth_();
-    for (var k = -1; k <= 12; k++) {
-      var target = admin_addMonths_(ym, k);
-      var d = api_adminSetDeadline(token, { yearMonth: target, className: DEMO_CLASS_, deadlineAt: '2099-12-31 23:59', actualDeadlineAt: '2099-12-31 23:59' });
-      if (!d.ok) return d;
-    }
-
-    // 3. 架空の学生と、確認済みの勤務先
+    // 3. 架空の学生と、確認済みの勤務先（途中で止まっても、次に押せば足りない分だけ入る）
     var existing = {};
     db_readAllRows_('STUDENTS').forEach(function (s) { existing[s.student_id] = true; });
     var created = [];
@@ -1251,17 +1260,24 @@ function api_adminSeedDemo(token) {
           db_updateRow_('USERS', users[u]._rowNum, users[u]);
         }
       }
-      var now = util_nowJst_();
-      db_insertRow_('WORKPLACES', {
-        workplace_id: 'WP_' + util_uuid_().slice(0, 8), student_id: demo.studentId, name: '試用コンビニ',
-        prefecture: '愛知県', job_description: 'レジ・品出し', base_hourly_wage: '1200',
-        early_start: '', early_end: '', early_premium: '', verification_status: 'OK',
-        verified_by: auth.user.login_id, verified_at: now, created_at: now, active: 'true'
-      });
       created.push({ studentId: demo.studentId, name: demo.name, loginId: res.data.loginId, initialPassword: res.data.initialPassword });
     }
 
-    db_logAudit_('MASTER_UPDATE', auth.user.login_id, 'admin', '', '', null, { op: 'seed_demo', students: created.length });
+    var hasWorkplace = {};
+    db_readAllRows_('WORKPLACES').forEach(function (w) { hasWorkplace[w.student_id] = true; });
+    var now = util_nowJst_();
+    var workplaces = DEMO_STUDENTS_.filter(function (d) { return !hasWorkplace[d.studentId]; }).map(function (d) {
+      return {
+        workplace_id: 'WP_' + util_uuid_().slice(0, 8), student_id: d.studentId, name: '試用コンビニ',
+        prefecture: '愛知県', job_description: 'レジ・品出し', base_hourly_wage: '1200',
+        early_start: '', early_end: '', early_premium: '', verification_status: 'OK',
+        verified_by: auth.user.login_id, verified_at: now, created_at: now, active: 'true'
+      };
+    });
+    db_insertRows_('WORKPLACES', workplaces);
+
+    db_logAudit_('MASTER_UPDATE', auth.user.login_id, 'admin', '', '', null,
+      { op: 'seed_demo', students: created.length, minimumWages: wages.length, deadlines: deadlines.length });
     return { ok: true, data: { className: DEMO_CLASS_, students: created } };
   } catch (err) {
     return { ok: false, error: 'INTERNAL' };
@@ -1276,11 +1292,21 @@ function api_adminActAsDemoStudent(token, studentId) {
     if (!auth.ok) return auth;
     if (!studentId || typeof studentId !== 'string') return { ok: false, error: 'BAD_REQUEST' };
 
-    var seeded = api_adminSeedDemo(token);
-    if (!seeded.ok) return seeded;
+    // 試用の学生が揃っていなければ、先に試用データを入れる（揃っていれば何もしない）。
+    var students = db_readAllRows_('STUDENTS');
+    var newStudents = [];
+    var missing = DEMO_STUDENTS_.some(function (d) {
+      return !students.some(function (s) { return s.student_id === d.studentId; });
+    });
+    if (missing) {
+      var seeded = api_adminSeedDemo(token);
+      if (!seeded.ok) return seeded;
+      newStudents = seeded.data.students;
+      students = db_readAllRows_('STUDENTS');
+    }
 
     var student = null;
-    db_readAllRows_('STUDENTS').forEach(function (s) { if (s.student_id === studentId) student = s; });
+    students.forEach(function (s) { if (s.student_id === studentId) student = s; });
     if (!student) return { ok: false, error: 'NOT_FOUND' };
     if (student.class !== DEMO_CLASS_) return { ok: false, error: 'FORBIDDEN' };
 
@@ -1305,7 +1331,7 @@ function api_adminActAsDemoStudent(token, studentId) {
         token: newToken, role: 'student', studentId: studentId, name: student.name,
         language: student.language || 'ja', loginId: user.login_id,
         mustChangePassword: user.force_password_change === 'true',
-        newStudents: seeded.data.students
+        newStudents: newStudents
       }
     };
   } catch (err) {
