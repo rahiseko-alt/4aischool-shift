@@ -360,11 +360,23 @@
     return result;
   }
 
-  function handleSaveResult(res, errId, msgKey) {
+  // 止められた理由を「5日: 時刻の形が違います」のように日付つきで出し、その日の行を赤くする
+  function handleSaveResult(res, errId, msgKey, containerId) {
+    if (containerId) {
+      el(containerId).querySelectorAll('tr.row-error').forEach(function (r) { r.classList.remove('row-error'); });
+    }
     if (!res.ok) {
       var codes = res.details ? (res.details.inputErrors || []).concat(res.details.codes || []) : [];
-      showMsg(errId, tErr(res.error) + (codes.length ? '：' + codes.map(function (c) { return tErr(c.code); })
-        .filter(function (v, i, a) { return a.indexOf(v) === i; }).join('、') : ''), true);
+      var lines = [];
+      codes.forEach(function (c) {
+        var day = c.date ? Number(c.date.slice(8, 10)) : null;
+        var line = (day ? t('label.dayFmt').replace('{d}', day) + ': ' : '') + tErr(c.code);
+        if (lines.indexOf(line) < 0) lines.push(line);
+        if (day && containerId) {
+          el(containerId).querySelectorAll('tr.day-row[data-day="' + day + '"]').forEach(function (r) { r.classList.add('row-error'); });
+        }
+      });
+      showMsg(errId, tErr(res.error) + (lines.length ? '：' + lines.join('、') : ''), true);
       return false;
     }
     showMsg(errId, t(msgKey), false);
@@ -374,14 +386,14 @@
   el('btn-save-draft').addEventListener('click', function () {
     hideError('shift-error');
     call('api_saveDraft', [state.token, state.yearMonth, collectRows('shifts-table', 'plan-row'), state.monthData.version]).then(function (res) {
-      if (handleSaveResult(res, 'shift-error', 'label.saved')) reloadKeepMessage();
+      if (handleSaveResult(res, 'shift-error', 'label.saved', 'shifts-table')) reloadKeepMessage();
     });
   });
 
   el('btn-confirm-shift').addEventListener('click', function () {
     hideError('shift-error');
     call('api_confirm', [state.token, state.yearMonth, collectRows('shifts-table', 'plan-row'), state.monthData.version]).then(function (res) {
-      if (handleSaveResult(res, 'shift-error', 'label.confirmedDone')) reloadKeepMessage();
+      if (handleSaveResult(res, 'shift-error', 'label.confirmedDone', 'shifts-table')) reloadKeepMessage();
     });
   });
 
@@ -457,14 +469,14 @@
   el('btn-save-actual').addEventListener('click', function () {
     hideError('actual-error');
     call('api_saveActual', [state.token, state.yearMonth, collectRows('actual-table', 'actual-shift-row'), state.monthData.version]).then(function (res) {
-      if (handleSaveResult(res, 'actual-error', 'label.saved')) reloadKeepMessage();
+      if (handleSaveResult(res, 'actual-error', 'label.saved', 'actual-table')) reloadKeepMessage();
     });
   });
 
   el('btn-confirm-actual').addEventListener('click', function () {
     hideError('actual-error');
     call('api_confirmActual', [state.token, state.yearMonth, state.monthData.version]).then(function (res) {
-      if (handleSaveResult(res, 'actual-error', 'label.confirmedDone')) reloadKeepMessage();
+      if (handleSaveResult(res, 'actual-error', 'label.confirmedDone', 'actual-table')) reloadKeepMessage();
     });
   });
 
