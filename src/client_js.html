@@ -525,16 +525,16 @@
   function chip(label, value, status, cls) {
     var active = status && el('admin-status-filter').value === status;
     var inner = esc(label) + ' <strong>' + esc(value) + '</strong>';
-    if (!status) return '<span class="adm-chip ' + (cls || '') + '">' + inner + '</span>';
-    return '<button type="button" class="adm-chip ' + (cls || '') + (active ? ' is-active' : '') + '" data-status="' + esc(status) + '">' + inner + '</button>';
+    if (!status) return '<span class="adm-stat ' + (cls || '') + '">' + inner + '</span>';
+    return '<a href="#" class="adm-stat ' + (cls || '') + (active ? ' is-active' : '') + '" data-status="' + esc(status) + '">' + inner + '</a>';
   }
 
   function renderAdminBoard(data) {
     var c = data.counts;
     el('admin-counts').innerHTML =
       chip('学生', c.students) + chip('確定済', c.confirmed, '確定済') + chip('下書き', c.draft, '下書き') +
-      chip('未提出', c.notSubmitted, '未提出') + chip('エラー', c.error, null, c.error ? 'chip-error' : '') +
-      chip('対象外', c.outOfScope, '対象外') + chip('実績未確認', data.actualUnconfirmed, null, data.actualUnconfirmed ? 'chip-warn' : '');
+      chip('未提出', c.notSubmitted, '未提出') + chip('エラー', c.error, null, c.error ? 'stat-error' : '') +
+      chip('対象外', c.outOfScope, '対象外') + chip('実績未確認', data.actualUnconfirmed, null, data.actualUnconfirmed ? 'stat-warn' : '');
 
     var html = '<table class="admin-table"><thead><tr><th>学籍番号</th><th>氏名</th><th class="col-wide">クラス</th><th>状態</th><th>エラー</th>' +
       '<th class="col-wide">実績</th><th class="col-wide">更新</th><th></th></tr></thead><tbody>';
@@ -547,8 +547,8 @@
         '<td class="nowrap">' + esc(row.displayStatus) + '</td><td>' + (errs || '—') + '</td>' +
         '<td class="col-wide nowrap">' + esc(row.actualStatus) + (row.actualOver ? ' <span class="badge badge-error">実績超過</span>' : '') + '</td>' +
         '<td class="col-wide nowrap">' + esc(row.updatedAt || '—') + '</td>' +
-        '<td class="nowrap"><button type="button" class="btn-primary btn-sm btn-admin-detail" data-sid="' + esc(row.studentId) + '">詳細</button> ' +
-        '<button type="button" class="btn-outline btn-sm btn-admin-print" data-sid="' + esc(row.studentId) + '">印刷</button></td></tr>';
+        '<td class="nowrap adm-row-acts"><button type="button" class="adm-link btn-admin-detail" data-sid="' + esc(row.studentId) + '">詳細</button>' +
+        '<button type="button" class="adm-link btn-admin-print" data-sid="' + esc(row.studentId) + '">印刷</button></td></tr>';
     });
     el('admin-board').innerHTML = html + '</tbody></table>';
   }
@@ -556,6 +556,7 @@
   el('admin-counts').addEventListener('click', function (ev) {
     var b = ev.target.closest('[data-status]');
     if (!b) return;
+    ev.preventDefault();
     var st = b.getAttribute('data-status');
     el('admin-status-filter').value = el('admin-status-filter').value === st ? '' : st;
     loadAdminBoard();

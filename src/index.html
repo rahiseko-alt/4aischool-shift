@@ -40,7 +40,6 @@
   <div id="change-password-screen" hidden>
     <div class="login-card">
       <div class="login-brand">
-        <div class="login-emblem">🔐</div>
         <h2 id="lbl-change-password-title" style="font-size: 1.2rem; color: var(--navy); margin-bottom: 0.25rem;">パスワードの変更</h2>
         <p class="login-subtitle">初期パスワードを変更して利用を開始してください</p>
       </div>
@@ -154,8 +153,8 @@
           <option value="対象外">対象外</option>
         </select>
         <input type="text" id="admin-query" placeholder="学籍番号・氏名">
-        <button id="btn-admin-search" class="btn-primary btn-sm">検索</button>
-        <button id="btn-print-board" class="btn-outline btn-sm">🖨️ 表示中を印刷</button>
+        <button id="btn-admin-search" class="btn-primary btn-sm adm-btn">検索</button>
+        <button id="btn-print-board" class="btn-outline btn-sm adm-btn">表示中を印刷</button>
       </div>
 
       <!-- 学生一覧（行を押すと詳細） -->
@@ -167,13 +166,13 @@
       <section class="adm-tools">
         <h2 class="adm-tools-title">設定・管理</h2>
         <div class="adm-tools-row">
-          <button id="btn-open-student-form" class="btn-outline btn-sm">👤 学生を追加</button>
-          <button id="btn-open-deadline" class="btn-outline btn-sm">📅 締切</button>
-          <button id="btn-open-holiday" class="btn-outline btn-sm">🏖️ 長期休業</button>
-          <button id="btn-open-settings" class="btn-outline btn-sm">🏫 学校設定</button>
-          <button id="btn-create-admin" class="btn-outline btn-sm">🔑 管理者を追加</button>
-          <button id="btn-student-mode" class="btn-outline btn-sm">🎓 生徒モード</button>
-          <button id="btn-purge-expired" class="btn-outline btn-sm adm-danger">🗑️ 保存期限を過ぎたデータを削除</button>
+          <button id="btn-open-student-form" class="adm-link">学生を追加</button>
+          <button id="btn-open-deadline" class="adm-link">締切</button>
+          <button id="btn-open-holiday" class="adm-link">長期休業</button>
+          <button id="btn-open-settings" class="adm-link">学校設定</button>
+          <button id="btn-create-admin" class="adm-link">管理者を追加</button>
+          <button id="btn-student-mode" class="adm-link">生徒モード</button>
+          <button id="btn-purge-expired" class="adm-link adm-danger">保存期限を過ぎたデータを削除</button>
         </div>
       </section>
     </main>
@@ -183,7 +182,7 @@
       <div class="admin-dialog">
         <div class="dialog-header">
           <h3 id="admin-dialog-title" style="color:var(--navy); font-size:1.15rem;">学生詳細・操作</h3>
-          <button id="btn-dialog-close" class="btn-outline btn-sm">✕ 閉じる</button>
+          <button id="btn-dialog-close" class="btn-outline btn-sm">閉じる</button>
         </div>
         <div id="admin-dialog-body"></div>
       </div>

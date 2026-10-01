@@ -794,8 +794,8 @@ button:disabled {
 }
 .adm-month { margin: 0 auto; }
 .adm-month .month-nav-title { color: #ffffff; font-size: 1.1rem; }
-.adm-month button { color: #ffffff; border-color: rgba(255,255,255,0.35); background: transparent; }
-.adm-logout { color: #ffffff; border-color: rgba(255,255,255,0.4); white-space: nowrap; }
+.adm-month button { color: #ffffff; border: none; background: transparent; box-shadow: none; width: auto; }
+.adm-logout { color: #ffffff; border-color: rgba(255,255,255,0.4); background: transparent; border-radius: 3px; white-space: nowrap; width: auto; }
 
 .adm-main {
   max-width: 1100px;
@@ -806,27 +806,19 @@ button:disabled {
 .adm-counts {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.4rem;
+  gap: 0.25rem 1.25rem;
   margin-bottom: 0.6rem;
-}
-.adm-chip {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 0.35rem;
-  padding: 0.25rem 0.7rem;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--surface);
-  font-size: 0.85rem;
+  padding: 0.4rem 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.88rem;
   color: var(--text-sub);
-  width: auto;
 }
-.adm-chip strong { color: var(--text-main); font-size: 1rem; }
-button.adm-chip { cursor: pointer; }
-button.adm-chip:hover { border-color: var(--navy); }
-.adm-chip.is-active { border-color: var(--navy); background: var(--navy-subtle); }
-.adm-chip.chip-error strong { color: var(--danger); }
-.adm-chip.chip-warn strong { color: var(--warning); }
+.adm-stat { color: var(--text-sub); text-decoration: none; white-space: nowrap; }
+.adm-stat strong { color: var(--text-main); font-weight: 700; }
+a.adm-stat:hover { color: var(--navy); text-decoration: underline; }
+a.adm-stat.is-active { color: var(--navy); text-decoration: underline; font-weight: 600; }
+.adm-stat.stat-error strong { color: var(--danger); }
+.adm-stat.stat-warn strong { color: var(--warning); }
 
 .adm-toolbar {
   display: flex;
@@ -837,6 +829,7 @@ button.adm-chip:hover { border-color: var(--navy); }
 }
 .adm-toolbar input, .adm-toolbar select {
   width: auto;
+  border-radius: 3px;
   flex: 1 1 8rem;
   padding: 0.4rem 0.6rem;
   font-size: 0.9rem;
@@ -846,7 +839,7 @@ button.adm-chip:hover { border-color: var(--navy); }
 .adm-table-wrap {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: 3px;
   overflow-x: auto;
   margin-bottom: 1rem;
 }
@@ -886,10 +879,26 @@ button.adm-chip:hover { border-color: var(--navy); }
 .adm-tools-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.4rem;
+  gap: 0.4rem 1.4rem;
 }
-.adm-tools-row button, .adm-toolbar .btn-outline, .admin-table .btn-outline { width: auto; color: var(--navy); border-color: #cbd5e1; background: var(--surface); }
-.adm-tools-row .adm-danger { color: var(--danger); border-color: var(--danger-border); margin-left: auto; }
+.adm-btn { width: auto; border-radius: 3px; box-shadow: none; transform: none; }
+.adm-toolbar .btn-outline { color: var(--navy); border-color: #cbd5e1; background: var(--surface); }
+button.adm-link {
+  width: auto;
+  padding: 0.1rem 0;
+  border: none;
+  background: none;
+  box-shadow: none;
+  color: var(--navy);
+  font-size: 0.88rem;
+  font-weight: 500;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  border-radius: 0;
+}
+button.adm-link:hover { color: var(--navy-light); background: none; transform: none; }
+.adm-row-acts button.adm-link + button.adm-link { margin-left: 0.9rem; }
+.adm-tools-row .adm-danger { color: var(--danger); margin-left: auto; }
 
 @media (max-width: 600px) {
   .adm-bar { padding: 0.45rem 0.6rem; gap: 0.4rem; }
