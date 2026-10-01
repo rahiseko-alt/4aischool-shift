@@ -5,19 +5,12 @@ function evaluateMonth(input) {
   var yearMonth = input.yearMonth;
   var mode = input.mode || 'plan';
   var student = input.student || {};
-  var workplaces = input.workplaces || [];
   var rawShifts = input.shifts || {};
   var prevMonthDaily = input.prevMonthDaily || {};
   var prevMonthSource = input.prevMonthSource;
   var nextMonthDaily = input.nextMonthDaily || {};
   var holidays = input.holidays || [];
-  var minimumWages = input.minimumWages || [];
   var settings = input.settings || {};
-
-  var wpMap = {};
-  for (var i = 0; i < workplaces.length; i++) {
-    wpMap[workplaces[i].id] = workplaces[i];
-  }
 
   var daysInMonth = core_getDaysInMonth_(yearMonth);
   var daily = {};
@@ -46,8 +39,8 @@ function evaluateMonth(input) {
       var s = dayShifts[sIdx];
       var hasError = false;
 
-      // 欠落チェック
-      if (!s || !s.workplace || !s.start || !s.end || !wpMap[s.workplace]) {
+      // 欠落チェック (開始・終了のどちらかが無い)
+      if (!s || !s.start || !s.end) {
         inputErrors.push({ code: 'MISSING', date: dateStr, shiftIndex: sIdx });
         hasError = true;
       }
@@ -77,8 +70,7 @@ function evaluateMonth(input) {
       }
 
       if (!hasError) {
-        var wp = wpMap[s.workplace];
-        var calc = core_calcShift_(s, wp, startMin, endMin, bound);
+        var calc = core_calcShift_(s, startMin, endMin, bound);
         processedShiftsByDay[dayStr].push(calc);
 
         var absStart = (dayNum - 1) * 1440 + startMin;
@@ -89,7 +81,6 @@ function evaluateMonth(input) {
           dayNum: dayNum,
           shiftIndex: sIdx,
           shift: s,
-          wp: wp,
           calc: calc,
           absStart: absStart,
           absEnd: absEnd,
@@ -123,7 +114,6 @@ function evaluateMonth(input) {
 
   // 3. daily 実働時間・月次集計
   var totalMinutes = 0;
-  var estimatedSalaryYen = 0;
 
   for (var i = 0; i < validShiftsList.length; i++) {
     var vs = validShiftsList[i];
@@ -131,7 +121,6 @@ function evaluateMonth(input) {
     // inputErrors がある場合でも daily 計算は進める
     daily[vs.dateStr] = (daily[vs.dateStr] || 0) + vs.calc.workMinutes;
     totalMinutes += vs.calc.workMinutes;
-    estimatedSalaryYen += vs.calc.salaryYen;
   }
 
   // 4. 法令等の判定 (codes)
@@ -159,7 +148,6 @@ function evaluateMonth(input) {
     var vs = validShiftsList[i];
     var sDate = vs.dateStr;
     var sIdx = vs.shiftIndex;
-    var wp = vs.wp;
     var calc = vs.calc;
 
     // 在籍判定 (NOT_ENROLLED)
@@ -184,21 +172,6 @@ function evaluateMonth(input) {
       if (sDate > student.permissionExpires) {
         codes.push({ code: 'PERMIT_EXPIRED', severity: 'block', date: sDate, shiftIndex: sIdx });
       }
-    }
-
-    // 勤務先確認状態
-    if (wp.verificationStatus === '確認中') {
-      codes.push({ code: 'WORKPLACE_PENDING', severity: 'block', date: sDate, shiftIndex: sIdx });
-    } else if (wp.verificationStatus === '禁止') {
-      codes.push({ code: 'WORKPLACE_BANNED', severity: 'block', date: sDate, shiftIndex: sIdx });
-    }
-
-    // 最低賃金チェック
-    var matchingWage = core_findMinimumWage_(minimumWages, wp.prefecture, sDate);
-    if (!matchingWage) {
-      codes.push({ code: 'MINWAGE_MISSING', severity: 'block', date: sDate, shiftIndex: sIdx });
-    } else if (wp.baseHourlyWage < matchingWage.amount) {
-      codes.push({ code: 'WAGE_LOW', severity: 'block', date: sDate, shiftIndex: sIdx });
     }
 
     // 18歳未満の深夜勤務
@@ -303,7 +276,6 @@ function evaluateMonth(input) {
     daily: daily,
     totalMinutes: totalMinutes,
     maxRolling7Minutes: maxRolling7,
-    estimatedSalaryYen: estimatedSalaryYen,
     codes: codes,
     inputErrors: inputErrors,
   };
@@ -322,7 +294,7 @@ function core_minutesToTime_(m) {
   return (h < 10 ? '0' + h : String(h)) + ':' + (min < 10 ? '0' + min : String(min));
 }
 
-function core_calcShift_(shift, wp, startMin, endMin, bound) {
+function core_calcShift_(shift, startMin, endMin, bound) {
   var breakMinutes = 0;
   if (bound <= 360) {
     breakMinutes = 0;
@@ -347,13 +319,8 @@ function core_calcShift_(shift, wp, startMin, endMin, bound) {
 
   var workMinutes = bound - breakMinutes;
 
-  // 深夜分および早朝分の算出
+  // 深夜分の算出 (18歳未満の深夜勤務判定に使う)
   var nightMinutes = 0;
-  var earlyMinutes = 0;
-
-  var hasEarly = wp && wp.earlyStart && wp.earlyEnd && (wp.earlyPremium != null);
-  var earlyStartMin = hasEarly ? core_timeToMinutes_(wp.earlyStart) : 0;
-  var earlyEndMin = hasEarly ? core_timeToMinutes_(wp.earlyEnd) : 0;
 
   for (var m = startMin; m < endMin; m++) {
     // 休憩中か
@@ -365,25 +332,9 @@ function core_calcShift_(shift, wp, startMin, endMin, bound) {
     if ((m >= 0 && m < 300) || (m >= 1320 && m < 1740)) {
       nightMinutes++;
     }
-
-    // 早朝帯: 当日の早朝 [earlyStartMin, earlyEndMin) または 翌日の早朝 [1440 + earlyStartMin, 1440 + earlyEndMin)
-    if (hasEarly) {
-      if ((m >= earlyStartMin && m < earlyEndMin) ||
-          (m >= 1440 + earlyStartMin && m < 1440 + earlyEndMin)) {
-        earlyMinutes++;
-      }
-    }
   }
 
-  var hourlyWage = (wp && wp.baseHourlyWage) || 0;
-  var baseSalary = Math.floor(hourlyWage * workMinutes / 60);
-  var nightSalary = Math.floor(hourlyWage * nightMinutes / 240);
-  var earlyPremium = (wp && wp.earlyPremium) || 0;
-  var earlySalary = hasEarly ? Math.floor(earlyPremium * earlyMinutes / 60) : 0;
-  var salaryYen = baseSalary + nightSalary + earlySalary;
-
   return {
-    workplace: shift.workplace,
     start: shift.start,
     end: shift.end,
     breakMinutes: breakMinutes,
@@ -392,8 +343,6 @@ function core_calcShift_(shift, wp, startMin, endMin, bound) {
     boundMinutes: bound,
     workMinutes: workMinutes,
     nightMinutes: nightMinutes,
-    earlyMinutes: earlyMinutes,
-    salaryYen: salaryYen,
   };
 }
 
@@ -451,19 +400,4 @@ function core_isHoliday_(holidays, dateStr) {
     }
   }
   return false;
-}
-
-function core_findMinimumWage_(minimumWages, prefecture, dateStr) {
-  var best = null;
-  for (var i = 0; i < minimumWages.length; i++) {
-    var mw = minimumWages[i];
-    if (mw.prefecture !== prefecture) continue;
-    if (mw.effectiveFrom > dateStr) continue;
-    if (mw.effectiveTo && mw.effectiveTo < dateStr) continue;
-
-    if (!best || mw.effectiveFrom > best.effectiveFrom) {
-      best = mw;
-    }
-  }
-  return best;
 }

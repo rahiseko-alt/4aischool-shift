@@ -10,8 +10,8 @@ function setupInitial() {
   // 1. ShiftDB 作成（全シートを書式なしテキストにしてから見出しを書く）
   var shiftDb = SpreadsheetApp.create('ShiftDB');
   var tableNames = [
-    'STUDENTS', 'USERS', 'WORKPLACES', 'MONTHLY_SUBMISSIONS',
-    'SCHOOL_HOLIDAYS', 'DEADLINES', 'MINIMUM_WAGES', 'SETTINGS', 'SESSIONS'
+    'STUDENTS', 'USERS', 'MONTHLY_SUBMISSIONS',
+    'SCHOOL_HOLIDAYS', 'DEADLINES', 'SETTINGS', 'SESSIONS'
   ];
   for (var i = 0; i < tableNames.length; i++) {
     var tName = tableNames[i];

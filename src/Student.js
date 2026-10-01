@@ -1,26 +1,15 @@
 // 学生の窓口
 
-var PREFECTURES_ = [
-  '北海道', '青森県', '岩手県', '宮城県', '秋田県', '山形県', '福島県',
-  '茨城県', '栃木県', '群馬県', '埼玉県', '千葉県', '東京都', '神奈川県',
-  '新潟県', '富山県', '石川県', '福井県', '山梨県', '長野県', '岐阜県',
-  '静岡県', '愛知県', '三重県', '滋賀県', '京都府', '大阪府', '兵庫県',
-  '奈良県', '和歌山県', '鳥取県', '島根県', '岡山県', '広島県', '山口県',
-  '徳島県', '香川県', '愛媛県', '高知県', '福岡県', '佐賀県', '長崎県',
-  '熊本県', '大分県', '宮崎県', '鹿児島県', '沖縄県'
-];
-
 // 学校設定の項目と、受け付ける値の範囲。ここに無い項目は読みも書きもしない。
 var SETTINGS_RULES_ = {
   schoolName: { type: 'string', max: 100 },
   retentionMonths: { type: 'int', min: 24, max: 120 },
   sessionTtlMinutes: { type: 'int', min: 5, max: 720 },
-  workplaceSlaDays: { type: 'int', min: 1, max: 30 },
   allowLeaveOfAbsence: { type: 'bool' },
   actualConfirmDefaultDay: { type: 'int', min: 1, max: 28 }
 };
 var SETTINGS_DEFAULTS_ = {
-  schoolName: '', retentionMonths: 24, sessionTtlMinutes: 120, workplaceSlaDays: 3,
+  schoolName: '', retentionMonths: 24, sessionTtlMinutes: 120,
   allowLeaveOfAbsence: false, actualConfirmDefaultDay: 10
 };
 
@@ -67,7 +56,7 @@ function student_validateShiftsFormat_(shifts, yearMonth) {
   return true;
 }
 
-// 保存用に { workplace, start, end } だけに整え、空の日を消す
+// 保存用に { start, end } だけに整え、空の日を消す (それ以外の項目は捨てる)
 function student_cleanShifts_(shifts) {
   var clean = {};
   for (var dayStr in shifts) {
@@ -78,7 +67,6 @@ function student_cleanShifts_(shifts) {
     for (var i = 0; i < list.length; i++) {
       var s = list[i];
       cleanList.push({
-        workplace: s.workplace !== undefined ? String(s.workplace) : '',
         start: s.start !== undefined ? String(s.start) : '',
         end: s.end !== undefined ? String(s.end) : ''
       });
@@ -90,7 +78,7 @@ function student_cleanShifts_(shifts) {
   return clean;
 }
 
-function student_getAdjacentMonthData_(student, targetYm, isPrev, workplaces) {
+function student_getAdjacentMonthData_(student, targetYm, isPrev) {
   var parts = targetYm.split('-');
   var y = Number(parts[0]);
   var m = Number(parts[1]);
@@ -129,13 +117,11 @@ function student_getAdjacentMonthData_(student, targetYm, isPrev, workplaces) {
       yearMonth: adjYm,
       mode: 'actual',
       student: {},
-      workplaces: workplaces || [],
       shifts: aShifts,
       prevMonthDaily: {},
       prevMonthSource: 'confirmed',
       nextMonthDaily: {},
       holidays: [],
-      minimumWages: [],
       settings: {}
     });
     return { source: 'actual', daily: aEval.daily };
@@ -148,13 +134,11 @@ function student_getAdjacentMonthData_(student, targetYm, isPrev, workplaces) {
       yearMonth: adjYm,
       mode: 'plan',
       student: {},
-      workplaces: workplaces || [],
       shifts: pShifts,
       prevMonthDaily: {},
       prevMonthSource: 'confirmed',
       nextMonthDaily: {},
       holidays: [],
-      minimumWages: [],
       settings: {}
     });
     return { source: 'confirmed', daily: pEval.daily };
@@ -230,29 +214,6 @@ function api_getMonth(token, yearMonth) {
       }
     }
 
-    var workplaces = db_readAllRows_('WORKPLACES').filter(function(w) {
-      return w.student_id === studentId && w.active !== 'false';
-    }).map(function(w) {
-      return {
-        id: w.workplace_id,
-        prefecture: w.prefecture,
-        baseHourlyWage: Number(w.baseHourlyWage || w.base_hourly_wage) || 0,
-        earlyStart: w.early_start || null,
-        earlyEnd: w.early_end || null,
-        earlyPremium: w.early_premium ? Number(w.early_premium) : null,
-        verificationStatus: w.verification_status || '確認中'
-      };
-    });
-
-    var minimumWages = db_readAllRows_('MINIMUM_WAGES').map(function(m) {
-      return {
-        prefecture: m.prefecture,
-        amount: Number(m.amount) || 0,
-        effectiveFrom: m.effective_from,
-        effectiveTo: m.effective_to || null
-      };
-    });
-
     var studentPayload = {
       birthDate: student.birth_date,
       enrollmentDate: student.enrollment_date,
@@ -264,20 +225,18 @@ function api_getMonth(token, yearMonth) {
     };
 
     var settings = student_getSettings_();
-    var prevData = student_getAdjacentMonthData_(student, yearMonth, true, workplaces);
-    var nextData = student_getAdjacentMonthData_(student, yearMonth, false, workplaces);
+    var prevData = student_getAdjacentMonthData_(student, yearMonth, true);
+    var nextData = student_getAdjacentMonthData_(student, yearMonth, false);
 
     var evaluation = evaluateMonth({
       yearMonth: yearMonth,
       mode: 'plan',
       student: studentPayload,
-      workplaces: workplaces,
       shifts: shifts,
       prevMonthDaily: prevData.daily,
       prevMonthSource: prevData.source,
       nextMonthDaily: nextData.daily,
       holidays: holidays,
-      minimumWages: minimumWages,
       settings: settings
     });
 
@@ -302,13 +261,11 @@ function api_getMonth(token, yearMonth) {
       yearMonth: yearMonth,
       mode: 'actual',
       student: studentPayload,
-      workplaces: workplaces,
       shifts: actualShifts,
       prevMonthDaily: prevData.daily,
       prevMonthSource: prevData.source,
       nextMonthDaily: nextData.daily,
       holidays: holidays,
-      minimumWages: minimumWages,
       settings: settings
     }) : null;
 
@@ -410,36 +367,13 @@ function student_saveSubmission_(token, yearMonth, shifts, expectedVersion, acti
     }
 
     // 5. 検算 (ロックの外)
-    var workplaces = db_readAllRows_('WORKPLACES').filter(function(w) {
-      return w.student_id === studentId && w.active !== 'false';
-    }).map(function(w) {
-      return {
-        id: w.workplace_id,
-        prefecture: w.prefecture,
-        baseHourlyWage: Number(w.baseHourlyWage || w.base_hourly_wage) || 0,
-        earlyStart: w.early_start || null,
-        earlyEnd: w.early_end || null,
-        earlyPremium: w.early_premium ? Number(w.early_premium) : null,
-        verificationStatus: w.verification_status || '確認中'
-      };
-    });
-
-    var minimumWages = db_readAllRows_('MINIMUM_WAGES').map(function(m) {
-      return {
-        prefecture: m.prefecture,
-        amount: Number(m.amount) || 0,
-        effectiveFrom: m.effective_from,
-        effectiveTo: m.effective_to || null
-      };
-    });
-
     var holidays = db_readAllRows_('SCHOOL_HOLIDAYS').map(function(h) {
       return { startDate: h.start_date, endDate: h.end_date };
     });
 
     var settings = student_getSettings_();
-    var prevData = student_getAdjacentMonthData_(student, yearMonth, true, workplaces);
-    var nextData = student_getAdjacentMonthData_(student, yearMonth, false, workplaces);
+    var prevData = student_getAdjacentMonthData_(student, yearMonth, true);
+    var nextData = student_getAdjacentMonthData_(student, yearMonth, false);
 
     var studentPayload = {
       birthDate: student.birth_date,
@@ -457,13 +391,11 @@ function student_saveSubmission_(token, yearMonth, shifts, expectedVersion, acti
       yearMonth: yearMonth,
       mode: 'plan',
       student: studentPayload,
-      workplaces: workplaces,
       shifts: cleanedShifts,
       prevMonthDaily: prevData.daily,
       prevMonthSource: prevData.source,
       nextMonthDaily: nextData.daily,
       holidays: holidays,
-      minimumWages: minimumWages,
       settings: settings
     });
 
@@ -517,7 +449,6 @@ function student_saveSubmission_(token, yearMonth, shifts, expectedVersion, acti
         freshSub.shift_json = shiftJson;
         freshSub.total_minutes = String(evalResult.totalMinutes);
         freshSub.max_rolling7_minutes = String(evalResult.maxRolling7Minutes);
-        freshSub.estimated_salary = String(evalResult.estimatedSalaryYen);
         freshSub.validation_codes = valCodesJson;
         freshSub.version = String(newVersion);
         freshSub.updated_at = now;
@@ -534,7 +465,6 @@ function student_saveSubmission_(token, yearMonth, shifts, expectedVersion, acti
           actual_status: '未確認',
           total_minutes: String(evalResult.totalMinutes),
           max_rolling7_minutes: String(evalResult.maxRolling7Minutes),
-          estimated_salary: String(evalResult.estimatedSalaryYen),
           validation_codes: valCodesJson,
           actual_total_minutes: '0',
           actual_max_rolling7_minutes: '0',
@@ -641,35 +571,12 @@ function api_saveActual(token, yearMonth, shifts, expectedVersion) {
     }
 
     // 検算 (mode: 'actual')
-    var workplaces = db_readAllRows_('WORKPLACES').filter(function(w) {
-      return w.student_id === studentId && w.active !== 'false';
-    }).map(function(w) {
-      return {
-        id: w.workplace_id,
-        prefecture: w.prefecture,
-        baseHourlyWage: Number(w.baseHourlyWage || w.base_hourly_wage) || 0,
-        earlyStart: w.early_start || null,
-        earlyEnd: w.early_end || null,
-        earlyPremium: w.early_premium ? Number(w.early_premium) : null,
-        verificationStatus: w.verification_status || '確認中'
-      };
-    });
-
-    var minimumWages = db_readAllRows_('MINIMUM_WAGES').map(function(m) {
-      return {
-        prefecture: m.prefecture,
-        amount: Number(m.amount) || 0,
-        effectiveFrom: m.effective_from,
-        effectiveTo: m.effective_to || null
-      };
-    });
-
     var holidays = db_readAllRows_('SCHOOL_HOLIDAYS').map(function(h) {
       return { startDate: h.start_date, endDate: h.end_date };
     });
 
-    var prevData = student_getAdjacentMonthData_(student, yearMonth, true, workplaces);
-    var nextData = student_getAdjacentMonthData_(student, yearMonth, false, workplaces);
+    var prevData = student_getAdjacentMonthData_(student, yearMonth, true);
+    var nextData = student_getAdjacentMonthData_(student, yearMonth, false);
 
     var studentPayload = {
       birthDate: student.birth_date,
@@ -687,13 +594,11 @@ function api_saveActual(token, yearMonth, shifts, expectedVersion) {
       yearMonth: yearMonth,
       mode: 'actual',
       student: studentPayload,
-      workplaces: workplaces,
       shifts: cleanedShifts,
       prevMonthDaily: prevData.daily,
       prevMonthSource: prevData.source,
       nextMonthDaily: nextData.daily,
       holidays: holidays,
-      minimumWages: minimumWages,
       settings: settings
     });
 
@@ -747,7 +652,6 @@ function api_saveActual(token, yearMonth, shifts, expectedVersion) {
           actual_status: '未確認',
           total_minutes: '0',
           max_rolling7_minutes: '0',
-          estimated_salary: '0',
           validation_codes: '[]',
           actual_total_minutes: String(evalResult.totalMinutes),
           actual_max_rolling7_minutes: String(evalResult.maxRolling7Minutes),
@@ -919,151 +823,13 @@ function student_areShiftsEqual_(s1, s2) {
     var l2 = s2[k] || [];
     if (l1.length !== l2.length) return false;
 
-    var sorted1 = l1.map(function(x) { return x.workplace + '|' + x.start + '|' + x.end; }).sort();
-    var sorted2 = l2.map(function(x) { return x.workplace + '|' + x.start + '|' + x.end; }).sort();
+    var sorted1 = l1.map(function(x) { return x.start + '|' + x.end; }).sort();
+    var sorted2 = l2.map(function(x) { return x.start + '|' + x.end; }).sort();
     for (var j = 0; j < sorted1.length; j++) {
       if (sorted1[j] !== sorted2[j]) return false;
     }
   }
   return true;
-}
-
-function api_listWorkplaces(token) {
-  try {
-    var auth = auth_verifySession_(token, 'student');
-    if (!auth.ok) return auth;
-
-    var studentId = auth.user.student_id;
-    var rows = db_readAllRows_('WORKPLACES');
-    var list = [];
-    for (var i = 0; i < rows.length; i++) {
-      var r = rows[i];
-      if (r.student_id === studentId && r.active !== 'false') {
-        list.push({
-          workplaceId: r.workplace_id,
-          name: r.name,
-          prefecture: r.prefecture,
-          jobDescription: r.job_description,
-          baseHourlyWage: Number(r.baseHourlyWage || r.base_hourly_wage) || 0,
-          earlyStart: r.early_start || null,
-          earlyEnd: r.early_end || null,
-          earlyPremium: r.early_premium ? Number(r.early_premium) : null,
-          verificationStatus: r.verification_status || '確認中'
-        });
-      }
-    }
-    return { ok: true, data: list };
-  } catch (err) {
-    return { ok: false, error: 'INTERNAL' };
-  }
-}
-
-function api_saveWorkplace(token, workplace) {
-  try {
-    var auth = auth_verifySession_(token, 'student');
-    if (!auth.ok) return auth;
-
-    if (!workplace || typeof workplace !== 'object') return { ok: false, error: 'BAD_REQUEST' };
-    if (!workplace.name || typeof workplace.name !== 'string' || workplace.name.trim() === '') {
-      return { ok: false, error: 'BAD_REQUEST' };
-    }
-    if (!workplace.jobDescription || typeof workplace.jobDescription !== 'string' || workplace.jobDescription.trim() === '') {
-      return { ok: false, error: 'BAD_REQUEST' };
-    }
-    if (PREFECTURES_.indexOf(workplace.prefecture) === -1) {
-      return { ok: false, error: 'BAD_REQUEST' };
-    }
-    var wage = workplace.baseHourlyWage;
-    if (typeof wage !== 'number' || wage < 1 || wage % 1 !== 0) {
-      return { ok: false, error: 'BAD_REQUEST' };
-    }
-
-    var hasEarlyStart = workplace.earlyStart != null;
-    var hasEarlyEnd = workplace.earlyEnd != null;
-    var hasEarlyPrem = workplace.earlyPremium != null;
-
-    if (hasEarlyStart || hasEarlyEnd || hasEarlyPrem) {
-      if (!hasEarlyStart || !hasEarlyEnd || !hasEarlyPrem) {
-        return { ok: false, error: 'BAD_REQUEST' };
-      }
-      var TIME_REGEX = /^([01]\d|2[0-3]):(00|15|30|45)$/;
-      if (!TIME_REGEX.test(workplace.earlyStart) || !TIME_REGEX.test(workplace.earlyEnd)) {
-        return { ok: false, error: 'BAD_REQUEST' };
-      }
-      if (core_timeToMinutes_(workplace.earlyStart) >= core_timeToMinutes_(workplace.earlyEnd)) {
-        return { ok: false, error: 'BAD_REQUEST' };
-      }
-      if (typeof workplace.earlyPremium !== 'number' || workplace.earlyPremium < 0 || workplace.earlyPremium % 1 !== 0) {
-        return { ok: false, error: 'BAD_REQUEST' };
-      }
-    }
-
-    var studentId = auth.user.student_id;
-    var lock = LockService.getScriptLock();
-    if (!lock.tryLock(5000)) return { ok: false, error: 'BUSY' };
-
-    try {
-      var rows = db_readAllRows_('WORKPLACES');
-      var now = util_nowJst_();
-
-      if (workplace.workplaceId) {
-        var existing = null;
-        for (var i = 0; i < rows.length; i++) {
-          if (rows[i].workplace_id === workplace.workplaceId) {
-            existing = rows[i];
-            break;
-          }
-        }
-        if (!existing || existing.student_id !== studentId) {
-          return { ok: false, error: 'NOT_FOUND' };
-        }
-        if (existing.verification_status === '禁止') {
-          return { ok: false, error: 'FORBIDDEN' };
-        }
-
-        existing.name = workplace.name;
-        existing.prefecture = workplace.prefecture;
-        existing.job_description = workplace.jobDescription;
-        existing.base_hourly_wage = String(workplace.baseHourlyWage);
-        existing.early_start = workplace.earlyStart || '';
-        existing.early_end = workplace.earlyEnd || '';
-        existing.early_premium = workplace.earlyPremium != null ? String(workplace.earlyPremium) : '';
-        existing.verification_status = '確認中'; // 編集時は確認中に戻す
-        existing.verified_by = '';
-        existing.verified_at = '';
-        db_updateRow_('WORKPLACES', existing._rowNum, existing);
-        db_logAudit_('MASTER_UPDATE', auth.user.login_id, 'student', auth.user.student_id, '', null, { op: 'update_workplace', workplaceId: existing.workplace_id });
-
-        return { ok: true, data: { workplaceId: existing.workplace_id } };
-      } else {
-        var newId = 'WP_' + util_uuid_().slice(0, 8);
-        var newWp = {
-          workplace_id: newId,
-          student_id: studentId,
-          name: workplace.name,
-          prefecture: workplace.prefecture,
-          job_description: workplace.jobDescription,
-          base_hourly_wage: String(workplace.baseHourlyWage),
-          early_start: workplace.earlyStart || '',
-          early_end: workplace.earlyEnd || '',
-          early_premium: workplace.earlyPremium != null ? String(workplace.earlyPremium) : '',
-          verification_status: '確認中',
-          verified_by: '',
-          verified_at: '',
-          created_at: now,
-          active: 'true'
-        };
-        db_insertRow_('WORKPLACES', newWp);
-        db_logAudit_('MASTER_UPDATE', auth.user.login_id, 'student', auth.user.student_id, '', null, { op: 'create_workplace', workplaceId: newId });
-
-        return { ok: true, data: { workplaceId: newId } };
-      }
-    } finally {
-      lock.releaseLock();
-    }
-  } catch (err) {
-    return { ok: false, error: 'INTERNAL' };
-  }
 }
 
 function api_getHistory(token) {

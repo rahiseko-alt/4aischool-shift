@@ -201,44 +201,6 @@ function api_adminUnlockLogin(token, studentId) {
   }
 }
 
-function api_adminVerifyWorkplace(token, workplaceId, status) {
-  try {
-    var auth = auth_verifySession_(token, 'admin');
-    if (!auth.ok) return auth;
-
-    if (status !== 'OK' && status !== '禁止') return { ok: false, error: 'BAD_REQUEST' };
-
-    var lock = LockService.getScriptLock();
-    if (!lock.tryLock(5000)) return { ok: false, error: 'BUSY' };
-
-    try {
-      var rows = db_readAllRows_('WORKPLACES');
-      var wp = null;
-      for (var i = 0; i < rows.length; i++) {
-        if (rows[i].workplace_id === workplaceId) {
-          wp = rows[i];
-          break;
-        }
-      }
-      if (!wp) return { ok: false, error: 'NOT_FOUND' };
-
-      var now = util_nowJst_();
-      wp.verification_status = status;
-      wp.verified_by = auth.user.login_id;
-      wp.verified_at = now;
-      db_updateRow_('WORKPLACES', wp._rowNum, wp);
-
-      db_logAudit_('WORKPLACE_VERIFY', auth.user.login_id, 'admin', wp.student_id, '', null, { workplaceId: workplaceId, status: status });
-
-      return { ok: true, data: null };
-    } finally {
-      lock.releaseLock();
-    }
-  } catch (err) {
-    return { ok: false, error: 'INTERNAL' };
-  }
-}
-
 function api_adminGrantUnlock(token, studentId, yearMonth, until) {
   try {
     var auth = auth_verifySession_(token, 'admin');
@@ -280,7 +242,6 @@ function api_adminGrantUnlock(token, studentId, yearMonth, until) {
           actual_status: '未確認',
           total_minutes: '0',
           max_rolling7_minutes: '0',
-          estimated_salary: '0',
           validation_codes: '[]',
           actual_total_minutes: '0',
           actual_max_rolling7_minutes: '0',
@@ -361,7 +322,6 @@ function api_adminSchoolConfirm(token, studentId, yearMonth) {
           actual_status: '未確認',
           total_minutes: '0',
           max_rolling7_minutes: '0',
-          estimated_salary: '0',
           validation_codes: '[]',
           actual_total_minutes: '0',
           actual_max_rolling7_minutes: '0',
@@ -433,83 +393,6 @@ function api_adminSetDeadline(token, params) {
     } finally {
       lock.releaseLock();
     }
-  } catch (err) {
-    return { ok: false, error: 'INTERNAL' };
-  }
-}
-
-function api_adminSetMinimumWage(token, params) {
-  try {
-    var auth = auth_verifySession_(token, 'admin');
-    if (!auth.ok) return auth;
-
-    if (!params || typeof params !== 'object') return { ok: false, error: 'BAD_REQUEST' };
-    var prefecture = params.prefecture;
-    var amount = params.amount;
-    var effectiveFrom = params.effectiveFrom;
-    var effectiveTo = params.effectiveTo || null;
-
-    if (PREFECTURES_.indexOf(prefecture) < 0) return { ok: false, error: 'BAD_REQUEST' };
-    if (typeof amount !== 'number' || Math.floor(amount) !== amount || amount < 1 || amount > 10000) {
-      return { ok: false, error: 'BAD_REQUEST' };
-    }
-    if (!util_isDate_(effectiveFrom)) return { ok: false, error: 'BAD_REQUEST' };
-    if (effectiveTo !== null && (!util_isDate_(effectiveTo) || effectiveTo < effectiveFrom)) {
-      return { ok: false, error: 'BAD_REQUEST' };
-    }
-
-    var lock = LockService.getScriptLock();
-    if (!lock.tryLock(5000)) return { ok: false, error: 'BUSY' };
-
-    try {
-      var rows = db_readAllRows_('MINIMUM_WAGES');
-      var existing = null;
-      for (var i = 0; i < rows.length; i++) {
-        if (rows[i].prefecture === prefecture && rows[i].effective_from === effectiveFrom) {
-          existing = rows[i];
-          break;
-        }
-      }
-
-      if (existing) {
-        existing.amount = String(amount);
-        existing.effective_to = effectiveTo || '';
-        db_updateRow_('MINIMUM_WAGES', existing._rowNum, existing);
-      } else {
-        db_insertRow_('MINIMUM_WAGES', {
-          prefecture: prefecture,
-          amount: String(amount),
-          effective_from: effectiveFrom,
-          effective_to: effectiveTo || ''
-        });
-      }
-
-      db_logAudit_('MASTER_UPDATE', auth.user.login_id, 'admin', '', '', null, { op: 'set_min_wage', prefecture: prefecture, effectiveFrom: effectiveFrom });
-
-      return { ok: true, data: null };
-    } finally {
-      lock.releaseLock();
-    }
-  } catch (err) {
-    return { ok: false, error: 'INTERNAL' };
-  }
-}
-
-function api_adminListMinimumWages(token) {
-  try {
-    var auth = auth_verifySession_(token, 'admin');
-    if (!auth.ok) return auth;
-
-    var rows = db_readAllRows_('MINIMUM_WAGES');
-    var list = rows.map(function(r) {
-      return {
-        prefecture: r.prefecture,
-        amount: Number(r.amount) || 0,
-        effectiveFrom: r.effective_from,
-        effectiveTo: r.effective_to || null
-      };
-    });
-    return { ok: true, data: list };
   } catch (err) {
     return { ok: false, error: 'INTERNAL' };
   }
@@ -650,27 +533,6 @@ function api_adminStudentDetail(token, studentId) {
       permissionCheckedAt: targetStudent.permission_checked_at || null
     };
 
-    var wpRows = db_readAllRows_('WORKPLACES');
-    var workplacesList = [];
-    for (var j = 0; j < wpRows.length; j++) {
-      var wp = wpRows[j];
-      if (wp.student_id === studentId && wp.active !== 'false') {
-        workplacesList.push({
-          workplaceId: wp.workplace_id,
-          name: wp.name,
-          prefecture: wp.prefecture,
-          jobDescription: wp.job_description,
-          baseHourlyWage: Number(wp.baseHourlyWage || wp.base_hourly_wage) || 0,
-          earlyStart: wp.early_start || null,
-          earlyEnd: wp.early_end || null,
-          earlyPremium: wp.early_premium ? Number(wp.early_premium) : null,
-          verificationStatus: wp.verification_status || '確認中',
-          verifiedBy: wp.verified_by || null,
-          verifiedAt: wp.verified_at || null
-        });
-      }
-    }
-
     var subRows = db_readAllRows_('MONTHLY_SUBMISSIONS');
     var mySubs = [];
     for (var k = 0; k < subRows.length; k++) {
@@ -694,7 +556,6 @@ function api_adminStudentDetail(token, studentId) {
       ok: true,
       data: {
         student: studentData,
-        workplaces: workplacesList,
         months: monthsList
       }
     };
@@ -851,55 +712,8 @@ function api_adminBoard(token, yearMonth, filters) {
         errorCodes: errorCodes,
         actualStatus: actualStatus,
         actualOver: actualOver,
-        updatedAt: updatedAt,
-        pendingWorkplaces: 0
+        updatedAt: updatedAt
       });
-    }
-
-    // 勤務先の確認待ち集計
-    var allWorkplaces = db_readAllRows_('WORKPLACES');
-    // 画面で「どの学生の勤務先が確認待ちか」を探せるよう、行ごとの件数も返す
-    var pendingByStudent = {};
-    allWorkplaces.forEach(function (w) {
-      if (w.verification_status === '確認中' && w.active !== 'false') {
-        pendingByStudent[w.student_id] = (pendingByStudent[w.student_id] || 0) + 1;
-      }
-    });
-    allRows.forEach(function (r) { r.pendingWorkplaces = pendingByStudent[r.studentId] || 0; });
-    var holidays = db_readAllRows_('SCHOOL_HOLIDAYS').map(function(h) {
-      return { startDate: h.start_date, endDate: h.end_date };
-    });
-    var settings = student_getSettings_();
-    var slaDays = settings.workplaceSlaDays || 3;
-
-    var workplacesPending = 0;
-    var workplacesOverdue = 0;
-    var todayStr = util_todayJst_();
-
-    for (var wIdx = 0; wIdx < allWorkplaces.length; wIdx++) {
-      var wp = allWorkplaces[wIdx];
-      if (wp.active !== 'false' && wp.verification_status === '確認中') {
-        workplacesPending++;
-
-        // 営業日数計算: 登録日の翌日から今日まで
-        var createdDate = (wp.created_at || '').slice(0, 10);
-        if (createdDate && createdDate < todayStr) {
-          var busDays = 0;
-          var cur = core_addDays_(createdDate, 1);
-          while (cur <= todayStr) {
-            var parts = cur.split('-');
-            var dt = new Date(Date.UTC(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2])));
-            var dayOfWeek = dt.getUTCDay(); // 0: Sun, 6: Sat
-            if (dayOfWeek !== 0 && dayOfWeek !== 6 && !core_isHoliday_(holidays, cur)) {
-              busDays++;
-            }
-            cur = core_addDays_(cur, 1);
-          }
-          if (busDays > slaDays) {
-            workplacesOverdue++;
-          }
-        }
-      }
     }
 
     // rows の絞り込み（status, query）
@@ -924,8 +738,6 @@ function api_adminBoard(token, yearMonth, filters) {
       ok: true,
       data: {
         counts: counts,
-        workplacesPending: workplacesPending,
-        workplacesOverdue: workplacesOverdue,
         actualUnconfirmed: actualUnconfirmedCount,
         rows: filteredRows
       }
@@ -1200,7 +1012,6 @@ function api_adminPurgeExpired(token) {
 
 // 試用データの一括投入（管理画面の「試用データを入れる」）。何度押しても重複しない。
 // 本物の学生・本物の締切とは混ざらないよう、クラス名を「DEMO」に固定する。
-// 最低賃金は、まだ1件も無い都道府県にだけ「仮の金額 1,000円」を入れる（実在の金額ではない）。
 var DEMO_CLASS_ = 'DEMO';
 var DEMO_STUDENTS_ = [
   { studentId: 'DEMO-A', name: '生徒A', language: 'ja' },
@@ -1213,17 +1024,10 @@ function api_adminSeedDemo(token) {
     var auth = auth_verifySession_(token, 'admin');
     if (!auth.ok) return auth;
 
-    // 1・2. 最低賃金（無い都道府県だけ）と DEMO クラスの締切（無い月だけ）を、まとめて1回で書く。
+    // 1. DEMO クラスの締切（無い月だけ）を、まとめて1回で書く。
     var lock = LockService.getScriptLock();
     if (!lock.tryLock(5000)) return { ok: false, error: 'BUSY' };
     try {
-      var hasWage = {};
-      db_readAllRows_('MINIMUM_WAGES').forEach(function (m) { hasWage[m.prefecture] = true; });
-      var wages = PREFECTURES_.filter(function (p) { return !hasWage[p]; }).map(function (p) {
-        return { prefecture: p, amount: '1000', effective_from: '2020-01-01', effective_to: '' };
-      });
-      db_insertRows_('MINIMUM_WAGES', wages);
-
       // 期限は遠い先にして、いつでも試せるようにする
       var hasDeadline = {};
       db_readAllRows_('DEADLINES').forEach(function (d) { if (d.class === DEMO_CLASS_) hasDeadline[d.year_month] = true; });
@@ -1239,7 +1043,7 @@ function api_adminSeedDemo(token) {
       lock.releaseLock();
     }
 
-    // 3. 架空の学生と、確認済みの勤務先（途中で止まっても、次に押せば足りない分だけ入る）
+    // 2. 架空の学生（途中で止まっても、次に押せば足りない分だけ入る）
     var existing = {};
     db_readAllRows_('STUDENTS').forEach(function (s) { existing[s.student_id] = true; });
     var created = [];
@@ -1263,21 +1067,8 @@ function api_adminSeedDemo(token) {
       created.push({ studentId: demo.studentId, name: demo.name, loginId: res.data.loginId, initialPassword: res.data.initialPassword });
     }
 
-    var hasWorkplace = {};
-    db_readAllRows_('WORKPLACES').forEach(function (w) { hasWorkplace[w.student_id] = true; });
-    var now = util_nowJst_();
-    var workplaces = DEMO_STUDENTS_.filter(function (d) { return !hasWorkplace[d.studentId]; }).map(function (d) {
-      return {
-        workplace_id: 'WP_' + util_uuid_().slice(0, 8), student_id: d.studentId, name: '試用コンビニ',
-        prefecture: '愛知県', job_description: 'レジ・品出し', base_hourly_wage: '1200',
-        early_start: '', early_end: '', early_premium: '', verification_status: 'OK',
-        verified_by: auth.user.login_id, verified_at: now, created_at: now, active: 'true'
-      };
-    });
-    db_insertRows_('WORKPLACES', workplaces);
-
     db_logAudit_('MASTER_UPDATE', auth.user.login_id, 'admin', '', '', null,
-      { op: 'seed_demo', students: created.length, minimumWages: wages.length, deadlines: deadlines.length });
+      { op: 'seed_demo', students: created.length, deadlines: deadlines.length });
     return { ok: true, data: { className: DEMO_CLASS_, students: created } };
   } catch (err) {
     return { ok: false, error: 'INTERNAL' };

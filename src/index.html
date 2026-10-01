@@ -90,58 +90,16 @@
       </div>
       <div id="st-closed-notice" class="warn-bar" hidden></div>
 
-      <!-- 勤務先セクション -->
-      <section id="workplaces-section" class="card">
-        <div class="workplace-header">
-          <h2 id="lbl-workplace" class="card-title" data-i18n="label.workplace" style="margin-bottom:0; border-bottom:none;">勤務先</h2>
-          <button id="btn-add-workplace" class="btn-gold btn-sm" data-i18n="button.addWorkplace">＋ 勤務先を追加</button>
-        </div>
-        <div id="workplace-list" class="wp-grid"></div>
-        <div id="workplace-form" class="card" hidden style="background: #f8fafc; border: 1.5px solid var(--border);">
-          <h3 style="margin-bottom: 0.75rem; font-size: 1rem; color: var(--navy);">勤務先の登録</h3>
-          <div class="field">
-            <label data-i18n="label.name">名前（事業所名）</label>
-            <input type="text" id="wp-name" placeholder="例: セブンイレブン 〇〇店">
-          </div>
-          <div class="field">
-            <label data-i18n="label.prefecture">都道府県</label>
-            <select id="wp-pref"></select>
-          </div>
-          <div class="field">
-            <label data-i18n="label.jobDescription">仕事内容</label>
-            <input type="text" id="wp-job" placeholder="例: レジ・品出し">
-          </div>
-          <div class="field">
-            <label data-i18n="label.baseHourlyWage">時給（円）</label>
-            <input type="number" id="wp-wage" min="1" placeholder="例: 1150">
-          </div>
-          <div class="field">
-            <label>早朝割増手当（任意）</label>
-            <div style="display:flex; gap:0.5rem; align-items:center;">
-              <input type="time" id="wp-early-start" step="900" placeholder="開始">
-              <span class="shift-row-sep">〜</span>
-              <input type="time" id="wp-early-end" step="900" placeholder="終了">
-              <input type="number" id="wp-early-premium" min="0" placeholder="手当/時（円）">
-            </div>
-          </div>
-          <p id="wp-error" class="error-msg" hidden></p>
-          <div style="display:flex; gap:0.5rem; margin-top:0.75rem;">
-            <button id="btn-save-workplace" class="btn-primary" data-i18n="button.saveWorkplace">保存</button>
-            <button id="btn-cancel-workplace" class="btn-outline" data-i18n="button.cancel">キャンセル</button>
-          </div>
-        </div>
-      </section>
-
       <!-- シフト予定申告セクション -->
       <section id="shifts-section">
-        <div class="card">
+        <div class="card shift-card">
           <h2 class="card-title" data-i18n="label.shiftSection">シフト予定</h2>
           <div id="st-codes"></div>
-          <div id="shifts-table" class="shifts-grid"></div>
+          <div id="shifts-table" class="shift-table-wrap"></div>
           <p id="shift-error" class="error-msg" hidden></p>
         </div>
         <div id="shift-actions" class="actions-card">
-                    <div class="actions-buttons">
+          <div class="actions-buttons">
             <button id="btn-save-draft" class="btn-secondary" data-i18n="button.saveDraft">途中保存</button>
             <button id="btn-confirm-shift" class="btn-gold" data-i18n="button.confirm">確定</button>
           </div>
@@ -149,10 +107,10 @@
       </section>
 
       <!-- 実績確認セクション -->
-      <section id="actual-section" class="card" hidden>
+      <section id="actual-section" class="card shift-card" hidden>
         <h2 class="card-title" data-i18n="label.actualSection">実績確認</h2>
         <div id="actual-codes"></div>
-        <div id="actual-table" class="shifts-grid"></div>
+        <div id="actual-table" class="shift-table-wrap"></div>
         <p id="actual-error" class="error-msg" hidden></p>
         <div style="display:flex; gap:0.6rem; justify-content:flex-end; margin-top:1rem;">
           <button id="btn-save-actual" class="btn-secondary" data-i18n="button.saveActual">実績を保存</button>
@@ -233,7 +191,6 @@
               <button id="btn-open-quarter">📋 四半期確認</button>
               <button id="btn-open-deadline">📅 締切設定</button>
               <button id="btn-open-holiday">🏖️ 長期休業設定</button>
-              <button id="btn-open-wage">💴 最低賃金設定</button>
               <button id="btn-open-settings">🏫 学校基本設定</button>
               <button id="btn-create-admin">🔑 管理者を追加</button>
               <button id="btn-student-mode">🎓 生徒モード</button>

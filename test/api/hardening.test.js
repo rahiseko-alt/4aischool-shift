@@ -4,7 +4,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { boot, ok, world, addStudent, studentRecord, auditRows } = require('../helpers/api');
+const { boot, ok, world, addStudent, studentRecord, auditRows, sh } = require('../helpers/api');
 
 // 本物のスプレッドシートは = + - @ で始まる文字を数式として実行する。どのシートにもそのまま残してはならない。
 function formulaLikeCells(ctx) {
@@ -19,15 +19,13 @@ function formulaLikeCells(ctx) {
   return out;
 }
 
-test('数式のような勤務先名は、そのままの文字で保存・表示され、シートには数式として残らない', () => {
+test('数式のような氏名・クラス名は、そのままの文字で保存・表示され、シートには数式として残らない', () => {
   const w = world();
   const name = '=IMPORTRANGE("x","USERS!A1")';
-  const id = ok(w.api('api_saveWorkplace', w.st.token, {
-    name, prefecture: '愛知県', jobDescription: '+SUM(1)', baseHourlyWage: 1200, earlyStart: null, earlyEnd: null, earlyPremium: null,
-  })).workplaceId;
-  const wp = ok(w.api('api_listWorkplaces', w.st.token)).find((x) => x.workplaceId === id);
-  assert.equal(wp.name, name);
-  assert.equal(wp.jobDescription, '+SUM(1)');
+  ok(w.api('api_adminUpsertStudent', w.admin, studentRecord({ studentId: '251077', name, className: '+SUM(1)' })));
+  const d = ok(w.api('api_adminStudentDetail', w.admin, '251077'));
+  assert.equal(d.student.name, name);
+  assert.equal(d.student.className, '+SUM(1)');
   assert.deepEqual(formulaLikeCells(w), []);
 });
 
@@ -95,19 +93,10 @@ test('修正許可: 期限の形が違えば BAD_REQUEST、存在しない学生
   assert.equal(w.api('api_adminGrantUnlock', w.admin, 'no-such', '2026-10', '2026-10-02 18:00').error, 'NOT_FOUND');
 });
 
-test('締切・最低賃金・長期休業: 日付や金額の形が違えば BAD_REQUEST', () => {
+test('締切・長期休業: 日付や数の形が違えば BAD_REQUEST', () => {
   const ctx = boot();
   assert.equal(ctx.api('api_adminSetDeadline', ctx.admin, { yearMonth: '2026-10', className: 'A', deadlineAt: '2026-09-30', actualDeadlineAt: null }).error, 'BAD_REQUEST');
-  assert.equal(ctx.api('api_adminSetMinimumWage', ctx.admin, { prefecture: '愛知', amount: 1100, effectiveFrom: '2025-10-18', effectiveTo: null }).error, 'BAD_REQUEST');
-  assert.equal(ctx.api('api_adminSetMinimumWage', ctx.admin, { prefecture: '愛知県', amount: '1100', effectiveFrom: '2025-10-18', effectiveTo: null }).error, 'BAD_REQUEST');
   assert.equal(ctx.api('api_adminSetHoliday', ctx.admin, { name: '冬季休業', startDate: '2026-12-24', endDate: '2027-01-07', schoolYear: 'abc' }).error, 'BAD_REQUEST');
-});
-
-test('勤務先の登録・変更は監査ログに残る', () => {
-  const w = world();
-  const n = auditRows(w).filter((r) => r.action === 'MASTER_UPDATE' && r.role === 'student').length;
-  ok(w.api('api_saveWorkplace', w.st.token, { name: 'B', prefecture: '愛知県', jobDescription: '接客', baseHourlyWage: 1200, earlyStart: null, earlyEnd: null, earlyPremium: null }));
-  assert.equal(auditRows(w).filter((r) => r.action === 'MASTER_UPDATE' && r.role === 'student').length, n + 1);
 });
 
 test('発行するログインIDは重複しない（30人）', () => {
@@ -126,13 +115,13 @@ test('試用データ: 押すと DEMO クラスの学生3人が入り、その�
   assert.equal(first.students.length, 3);
   const again = ok(ctx.api('api_adminSeedDemo', ctx.admin));
   assert.equal(again.students.length, 0);
-  assert.equal(ok(ctx.api('api_adminListMinimumWages', ctx.admin)).length, 47);
+  const shiftDb = ctx.env.spreadsheets.get(ctx.env.properties.get('SHIFT_DB_ID'));
+  assert.equal(shiftDb.getSheetByName('WORKPLACES'), null, '勤務先の表は作らない');
+  assert.equal(shiftDb.getSheetByName('MINIMUM_WAGES'), null, '最低賃金の表は作らない');
   const s = first.students[0];
   const login = ok(ctx.api('api_login', s.loginId, s.initialPassword));
   ok(ctx.api('api_changePassword', login.token, s.initialPassword, 'demo-password-1'));
-  const wp = ok(ctx.api('api_listWorkplaces', login.token))[0];
-  assert.equal(wp.verificationStatus, 'OK');
-  const r = ok(ctx.api('api_confirm', login.token, '2026-11', { '2': [{ workplace: wp.workplaceId, start: '09:00', end: '13:00' }] }, 0));
+  const r = ok(ctx.api('api_confirm', login.token, '2026-11', { '2': [{ start: '09:00', end: '13:00' }] }, 0));
   assert.equal(r.status, '確定済');
 });
 
@@ -144,8 +133,7 @@ test('生徒モード: 管理者は試用の学生（DEMO）の画面にパス�
   assert.equal(r.language, 'ne');
   assert.equal(r.mustChangePassword, false);
   assert.equal(r.newStudents.length, 3);
-  const wp = ok(ctx.api('api_listWorkplaces', r.token))[0];
-  ok(ctx.api('api_confirm', r.token, '2026-11', { '2': [{ workplace: wp.workplaceId, start: '09:00', end: '13:00' }] }, 0));
+  ok(ctx.api('api_confirm', r.token, '2026-11', { '2': [{ start: '09:00', end: '13:00' }] }, 0));
   // 管理者のトークンはそのまま使える（「管理者に戻る」）
   ok(ctx.api('api_adminGetSettings', ctx.admin));
   // 2回目は試用データを作り直さない
@@ -166,4 +154,22 @@ test('生徒モード: DEMO 以外の学生には入れない（FORBIDDEN）。�
   assert.equal(ctx.api('api_adminActAsDemoStudent', ctx.admin, st.studentId).error, 'FORBIDDEN');
   assert.equal(ctx.api('api_adminActAsDemoStudent', ctx.admin, 'no-such').error, 'NOT_FOUND');
   assert.equal(ctx.api('api_adminActAsDemoStudent', ctx.admin, '').error, 'BAD_REQUEST');
+});
+
+test('古い版で作った表に、今は使わない列（estimated_salary）が残っていても、書き込みの列がずれない（2026-10-01 追加）', () => {
+  const w = world();
+  let sheet = null;
+  for (const ss of w.env.spreadsheets.values()) sheet = sheet || ss.getSheetByName('MONTHLY_SUBMISSIONS');
+  const header = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  const at = header.indexOf('max_rolling7_minutes') + 1;
+  header.splice(at, 0, 'estimated_salary');
+  sheet.getRange(1, 1, 1, header.length).setValues([header]);
+  ok(w.api('api_saveDraft', w.st.token, '2026-10', { '3': [sh('21:00', '06:00')] }, 0));
+  ok(w.api('api_saveDraft', w.st.token, '2026-10', { '3': [sh('09:00', '13:00')] }, 1));
+  const m = ok(w.api('api_getMonth', w.st.token, '2026-10'));
+  assert.equal(m.status, '下書き');
+  assert.equal(m.version, 2);
+  assert.deepEqual(m.shifts, { '3': [{ start: '09:00', end: '13:00' }] });
+  const row = sheet.getRange(2, 1, 1, header.length).getValues()[0];
+  assert.equal(row[at], '');
 });

@@ -1,7 +1,6 @@
 'use strict';
 // 計算の心臓部 evaluateMonth のテスト用の入力を組み立てる。テスト専用。
 // 実装役はこのファイルを変更してはならない。
-// 注意: 最低賃金の金額はテスト用の架空の値であり、実際の金額ではない。
 
 const { load } = require('./load');
 
@@ -24,18 +23,11 @@ function baseInput() {
       workPermission: true,
       permissionExpires: '2027-12-31',
     },
-    workplaces: [
-      { id: 'W01', prefecture: '愛知県', baseHourlyWage: 1200, earlyStart: null, earlyEnd: null, earlyPremium: null, verificationStatus: 'OK' },
-      { id: 'W02', prefecture: '愛知県', baseHourlyWage: 1150, earlyStart: null, earlyEnd: null, earlyPremium: null, verificationStatus: 'OK' },
-    ],
     shifts: {},
     prevMonthDaily: {},
     prevMonthSource: 'confirmed',
     nextMonthDaily: {},
     holidays: [],
-    minimumWages: [
-      { prefecture: '愛知県', amount: 1100, effectiveFrom: '2025-10-18', effectiveTo: null },
-    ],
     settings: { allowLeaveOfAbsence: false },
   };
 }
@@ -50,8 +42,8 @@ function input(overrides) {
   return out;
 }
 
-// 1シフトの略記: s('W01', '09:00', '18:00')
-function s(workplace, start, end) { return { workplace, start, end }; }
+// 1シフトの略記: s('09:00', '18:00')
+function s(start, end) { return { start, end }; }
 
 // 連続する日に同じシフトを入れる: everyDay(5, 11, s(...)) → { '5': [..], ..., '11': [..] }
 function everyDay(from, to, shift) {

@@ -14,7 +14,7 @@ function planConfirmed(w, shifts) {
 
 test('対象月が終わる前（10/31 23:59）は実績を保存できない（NOT_OPEN）', () => {
   const w = world();
-  planConfirmed(w, { '1': [sh(w.wp, '09:00', '12:00')] });
+  planConfirmed(w, { '1': [sh('09:00', '12:00')] });
   w.at('2026-10-31 23:59');
   const m = ok(w.api('api_getMonth', w.st.token, YM));
   assert.equal(m.actual.open, false);
@@ -23,20 +23,20 @@ test('対象月が終わる前（10/31 23:59）は実績を保存できない（
 
 test('11/1 00:00 から実績を保存でき、状態は未確認のまま。実績確認期限は 2026-11-10 23:59', () => {
   const w = world();
-  planConfirmed(w, { '1': [sh(w.wp, '09:00', '12:00')] });
+  planConfirmed(w, { '1': [sh('09:00', '12:00')] });
   w.at('2026-11-01 00:00');
   const m = ok(w.api('api_getMonth', w.st.token, YM));
   assert.equal(m.actual.open, true);
   assert.equal(m.actual.deadlineAt, '2026-11-10 23:59');
   assert.equal(m.actual.status, '未確認');
-  const r = ok(w.api('api_saveActual', w.st.token, YM, { '1': [sh(w.wp, '09:00', '12:00')] }, m.version));
+  const r = ok(w.api('api_saveActual', w.st.token, YM, { '1': [sh('09:00', '12:00')] }, m.version));
   assert.equal(r.actualStatus, '未確認');
   assert.equal(r.version, m.version + 1);
 });
 
 test('予定と同じ内容で実績を確認すると「予定どおり」', () => {
   const w = world();
-  const plan = { '1': [sh(w.wp, '09:00', '12:00')], '2': [sh(w.wp, '18:00', '22:00')] };
+  const plan = { '1': [sh('09:00', '12:00')], '2': [sh('18:00', '22:00')] };
   planConfirmed(w, plan);
   w.at('2026-11-02 10:00');
   const m = ok(w.api('api_getMonth', w.st.token, YM));
@@ -48,10 +48,10 @@ test('予定と同じ内容で実績を確認すると「予定どおり」', ()
 
 test('予定と違う内容なら「修正あり」', () => {
   const w = world();
-  planConfirmed(w, { '1': [sh(w.wp, '09:00', '12:00')] });
+  planConfirmed(w, { '1': [sh('09:00', '12:00')] });
   w.at('2026-11-02 10:00');
   const m = ok(w.api('api_getMonth', w.st.token, YM));
-  const saved = ok(w.api('api_saveActual', w.st.token, YM, { '1': [sh(w.wp, '09:00', '13:00')] }, m.version));
+  const saved = ok(w.api('api_saveActual', w.st.token, YM, { '1': [sh('09:00', '13:00')] }, m.version));
   assert.equal(ok(w.api('api_confirmActual', w.st.token, YM, saved.version)).actualStatus, '修正あり');
 });
 
@@ -67,7 +67,7 @@ test('予定を出していなかった月でも実績は入力・確認でき�
   const w = world();
   w.at('2026-11-02 10:00');
   const m = ok(w.api('api_getMonth', w.st.token, YM));
-  const saved = ok(w.api('api_saveActual', w.st.token, YM, { '3': [sh(w.wp, '09:00', '12:00')] }, m.version));
+  const saved = ok(w.api('api_saveActual', w.st.token, YM, { '3': [sh('09:00', '12:00')] }, m.version));
   assert.equal(ok(w.api('api_confirmActual', w.st.token, YM, saved.version)).actualStatus, '修正あり');
 });
 
@@ -76,7 +76,7 @@ test('実績は28時間を超えていても保存・確認でき、評価に AC
   planConfirmed(w, {});
   w.at('2026-11-02 10:00');
   const m = ok(w.api('api_getMonth', w.st.token, YM));
-  const saved = ok(w.api('api_saveActual', w.st.token, YM, everyDay(9, 13, sh(w.wp, '09:00', '18:00')), m.version));
+  const saved = ok(w.api('api_saveActual', w.st.token, YM, everyDay(9, 13, sh('09:00', '18:00')), m.version));
   assert.ok(saved.evaluation.codes.some((c) => c.code === 'ACTUAL_OVER'));
   assert.equal(saved.evaluation.codes.some((c) => c.severity === 'block'), false);
   ok(w.api('api_confirmActual', w.st.token, YM, saved.version));
@@ -87,7 +87,7 @@ test('実績でも入力エラー（16時間超）は保存しない（VALIDATIO
   planConfirmed(w, {});
   w.at('2026-11-02 10:00');
   const m = ok(w.api('api_getMonth', w.st.token, YM));
-  const r = w.api('api_saveActual', w.st.token, YM, { '1': [sh(w.wp, '06:00', '22:15')] }, m.version);
+  const r = w.api('api_saveActual', w.st.token, YM, { '1': [sh('06:00', '22:15')] }, m.version);
   assert.equal(r.error, 'VALIDATION_FAILED');
   assert.ok(r.details.inputErrors.some((e) => e.code === 'SHIFT_TOO_LONG'));
 });
@@ -135,13 +135,13 @@ test('実績の保存・確認は監査ログに ACTUAL_SAVE・ACTUAL_CONFIRM �
 
 test('実績を保存しても、予定の状態（確定済）とシフトは変わらない', () => {
   const w = world();
-  const plan = { '1': [sh(w.wp, '09:00', '12:00')] };
+  const plan = { '1': [sh('09:00', '12:00')] };
   planConfirmed(w, plan);
   w.at('2026-11-02 10:00');
   const m = ok(w.api('api_getMonth', w.st.token, YM));
-  ok(w.api('api_saveActual', w.st.token, YM, { '1': [sh(w.wp, '10:00', '12:00')] }, m.version));
+  ok(w.api('api_saveActual', w.st.token, YM, { '1': [sh('10:00', '12:00')] }, m.version));
   const after = ok(w.api('api_getMonth', w.st.token, YM));
   assert.equal(after.status, '確定済');
   assert.deepEqual(after.shifts, plan);
-  assert.deepEqual(after.actual.shifts, { '1': [sh(w.wp, '10:00', '12:00')] });
+  assert.deepEqual(after.actual.shifts, { '1': [sh('10:00', '12:00')] });
 });

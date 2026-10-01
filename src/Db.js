@@ -13,15 +13,10 @@ var DB_TABLES_ = {
     'hash_iterations', 'force_password_change', 'failed_login_count',
     'locked_until', 'created_at'
   ],
-  WORKPLACES: [
-    'workplace_id', 'student_id', 'name', 'prefecture', 'job_description',
-    'base_hourly_wage', 'early_start', 'early_end', 'early_premium',
-    'verification_status', 'verified_by', 'verified_at', 'created_at', 'active'
-  ],
   MONTHLY_SUBMISSIONS: [
     'submission_id', 'student_id', 'year_month', 'status', 'shift_json',
     'actual_json', 'actual_status', 'total_minutes', 'max_rolling7_minutes',
-    'estimated_salary', 'validation_codes', 'actual_total_minutes',
+    'validation_codes', 'actual_total_minutes',
     'actual_max_rolling7_minutes', 'actual_codes', 'version',
     'confirmed_at', 'updated_at', 'unlock_until'
   ],
@@ -30,9 +25,6 @@ var DB_TABLES_ = {
   ],
   DEADLINES: [
     'year_month', 'class', 'deadline_at', 'actual_deadline_at'
-  ],
-  MINIMUM_WAGES: [
-    'prefecture', 'amount', 'effective_from', 'effective_to'
   ],
   SETTINGS: [
     'key', 'value'
@@ -118,18 +110,31 @@ function db_readAllRows_(sheetName) {
   return rows;
 }
 
-function db_insertRow_(sheetName, obj) {
-  var ss = db_getShiftDb_();
-  var sheet = db_getSheet_(ss, sheetName);
-  var headers = DB_TABLES_[sheetName];
-  if (!headers) throw new Error('Unknown table: ' + sheetName);
-
-  var row = [];
-  for (var i = 0; i < headers.length; i++) {
-    var h = headers[i];
-    row.push(db_toCell_(obj[h]));
+// 書き込みは、シートの1行目の見出しの順に合わせる（読み出しも見出しで行う）。
+// 古い版で作ったシートに、今は使わない列（例: estimated_salary）が残っていても列がずれない。
+// 足りない列は、見出しを右端に足してから書く。
+function db_columns_(sheet, sheetName) {
+  var schema = DB_TABLES_[sheetName];
+  if (!schema) throw new Error('Unknown table: ' + sheetName);
+  var lastCol = sheet.getLastColumn();
+  var cols = lastCol > 0 ? sheet.getRange(1, 1, 1, lastCol).getValues()[0].map(db_fromCell_) : [];
+  while (cols.length && cols[cols.length - 1] === '') cols.pop();
+  if (!cols.length) return schema.slice();
+  var missing = schema.filter(function (h) { return cols.indexOf(h) < 0; });
+  if (missing.length) {
+    sheet.getRange(1, cols.length + 1, 1, missing.length).setValues([missing.map(db_toCell_)]);
+    cols = cols.concat(missing);
   }
-  sheet.appendRow(row);
+  return cols;
+}
+
+function db_rowValues_(cols, obj) {
+  return cols.map(function (h) { return db_toCell_(obj[h]); });
+}
+
+function db_insertRow_(sheetName, obj) {
+  var sheet = db_getSheet_(db_getShiftDb_(), sheetName);
+  sheet.appendRow(db_rowValues_(db_columns_(sheet, sheetName), obj));
   return obj;
 }
 
@@ -137,25 +142,15 @@ function db_insertRow_(sheetName, obj) {
 function db_insertRows_(sheetName, objs) {
   if (!objs.length) return;
   var sheet = db_getSheet_(db_getShiftDb_(), sheetName);
-  var headers = DB_TABLES_[sheetName];
-  if (!headers) throw new Error('Unknown table: ' + sheetName);
-  var rows = objs.map(function (obj) {
-    return headers.map(function (h) { return db_toCell_(obj[h]); });
-  });
-  sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, headers.length).setValues(rows);
+  var cols = db_columns_(sheet, sheetName);
+  var rows = objs.map(function (obj) { return db_rowValues_(cols, obj); });
+  sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, cols.length).setValues(rows);
 }
 
+// obj は db_readAllRows_ で読んだ行を書き換えたもの。今は使わない列も読んだ値のまま書き戻す。
 function db_updateRow_(sheetName, rowNum, obj) {
-  var ss = db_getShiftDb_();
-  var sheet = db_getSheet_(ss, sheetName);
-  var headers = DB_TABLES_[sheetName];
-  if (!headers) throw new Error('Unknown table: ' + sheetName);
-
-  var row = [];
-  for (var i = 0; i < headers.length; i++) {
-    var h = headers[i];
-    row.push(db_toCell_(obj[h]));
-  }
+  var sheet = db_getSheet_(db_getShiftDb_(), sheetName);
+  var row = db_rowValues_(db_columns_(sheet, sheetName), obj);
   sheet.getRange(rowNum, 1, 1, row.length).setValues([row]);
   return obj;
 }

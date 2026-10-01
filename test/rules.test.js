@@ -12,11 +12,10 @@ const { load, SRC_DIR } = require('./helpers/load');
 const REQUIRED_API = [
   'api_login', 'api_logout', 'api_changePassword',
   'api_getMonth', 'api_saveDraft', 'api_confirm', 'api_saveActual', 'api_confirmActual', 'api_getHistory',
-  'api_saveWorkplace', 'api_listWorkplaces',
   'api_adminBoard', 'api_adminStudentDetail', 'api_adminUpsertStudent', 'api_adminResetPassword', 'api_adminUnlockLogin',
-  'api_adminCreateAdmin', 'api_adminVerifyWorkplace', 'api_adminGrantUnlock', 'api_adminSchoolConfirm', 'api_adminQuarterCheck',
+  'api_adminCreateAdmin', 'api_adminGrantUnlock', 'api_adminSchoolConfirm', 'api_adminQuarterCheck',
   'api_adminSetDeadline', 'api_adminSetHoliday', 'api_adminDeleteHoliday', 'api_adminListHolidays',
-  'api_adminSetMinimumWage', 'api_adminListMinimumWages', 'api_adminGetSettings', 'api_adminSetSettings',
+  'api_adminGetSettings', 'api_adminSetSettings',
   'api_adminPrintHtml', 'api_adminPurgeExpired', 'api_adminSeedDemo', 'api_adminActAsDemoStudent',
 ];
 const OTHER_PUBLIC = ['doGet', 'setupInitial', 'backupMonthly', 'installTriggers', 'evaluateMonth'];

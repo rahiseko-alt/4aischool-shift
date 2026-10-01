@@ -21,48 +21,51 @@ function print_getDayOfWeek_(dateStr) {
   return days[dt.getUTCDay()];
 }
 
+// 分を「8時間」「45分」「7時間30分」の形にする（紙の予定表と同じ書き方）
 function print_formatMinutes_(min) {
-  if (!min || min <= 0) return '0:00';
-  var h = Math.floor(min / 60);
-  var m = min % 60;
-  return h + ':' + (m < 10 ? '0' + m : String(m));
+  var total = Number(min) || 0;
+  if (total <= 0) return '0時間';
+  var h = Math.floor(total / 60);
+  var m = total % 60;
+  if (h === 0) return m + '分';
+  return h + '時間' + (m > 0 ? m + '分' : '');
 }
 
-function print_formatShiftsCell_(shifts, workplaceMap) {
+// 1日分のシフトを、勤務時間・休憩・実働の3つの欄にする
+function print_formatShiftsCell_(shifts) {
   if (!shifts || shifts.length === 0) {
     return {
-      workplaces: '-',
       times: '-',
+      breaks: '-',
       workMinutes: '-',
       totalMinutes: 0
     };
   }
 
-  var wpNames = [];
   var timeRanges = [];
+  var breakTimes = [];
   var workTimes = [];
   var totalWork = 0;
 
   for (var i = 0; i < shifts.length; i++) {
     var s = shifts[i];
-    var wpObj = workplaceMap[s.workplace];
-    var wName = wpObj ? wpObj.name : (s.workplace || '');
-    wpNames.push(print_escapeHtml_(wName));
-
     var tRange = (s.start || '') + '〜' + (s.end || '');
     timeRanges.push(print_escapeHtml_(tRange));
 
     var wMin = 0;
+    var bMin = 0;
     if (s.workMinutes !== undefined) {
       wMin = Number(s.workMinutes) || 0;
+      bMin = Number(s.breakMinutes) || 0;
     } else if (s.start && s.end) {
       var sMin = core_timeToMinutes_(s.start);
       var eMin = core_timeToMinutes_(s.end);
       var bound = eMin <= sMin ? eMin + 1440 - sMin : eMin - sMin;
-      var brk = bound <= 360 ? 0 : (bound <= 480 ? 45 : 60);
-      wMin = bound - brk;
+      bMin = bound <= 360 ? 0 : (bound <= 480 ? 45 : 60);
+      wMin = bound - bMin;
     }
     totalWork += wMin;
+    breakTimes.push(bMin > 0 ? print_formatMinutes_(bMin) : '0分');
     workTimes.push(print_formatMinutes_(wMin));
   }
 
@@ -72,8 +75,8 @@ function print_formatShiftsCell_(shifts, workplaceMap) {
   }
 
   return {
-    workplaces: wpNames.join('<br>'),
     times: timeRanges.join('<br>'),
+    breaks: breakTimes.join('<br>'),
     workMinutes: workHtml,
     totalMinutes: totalWork
   };
@@ -119,12 +122,6 @@ function api_adminPrintHtml(token, params) {
       studentMap[allStudents[si].student_id] = allStudents[si];
     }
 
-    var allWorkplaces = db_readAllRows_('WORKPLACES');
-    var workplaceMap = {};
-    for (var wi = 0; wi < allWorkplaces.length; wi++) {
-      workplaceMap[allWorkplaces[wi].workplace_id] = allWorkplaces[wi];
-    }
-
     var allSubmissions = db_readAllRows_('MONTHLY_SUBMISSIONS');
     var subMap = {};
     for (var mi = 0; mi < allSubmissions.length; mi++) {
@@ -134,15 +131,6 @@ function api_adminPrintHtml(token, params) {
 
     var allHolidays = db_readAllRows_('SCHOOL_HOLIDAYS').map(function(h) {
       return { startDate: h.start_date, endDate: h.end_date };
-    });
-
-    var allMinWages = db_readAllRows_('MINIMUM_WAGES').map(function(m) {
-      return {
-        prefecture: m.prefecture,
-        amount: Number(m.amount) || 0,
-        effectiveFrom: m.effective_from,
-        effectiveTo: m.effective_to || null
-      };
     });
 
     var settingsRows = db_readAllRows_('SETTINGS');
@@ -171,23 +159,6 @@ function api_adminPrintHtml(token, params) {
         work_permission: 'false',
         permission_expires: ''
       };
-
-      // 学生に紐づく勤務先一覧
-      var studentWpList = [];
-      for (var wKey in workplaceMap) {
-        if (workplaceMap[wKey].student_id === sId) {
-          studentWpList.push({
-            id: workplaceMap[wKey].workplace_id,
-            name: workplaceMap[wKey].name,
-            prefecture: workplaceMap[wKey].prefecture,
-            baseHourlyWage: Number(workplaceMap[wKey].base_hourly_wage || workplaceMap[wKey].baseHourlyWage) || 0,
-            earlyStart: workplaceMap[wKey].early_start || null,
-            earlyEnd: workplaceMap[wKey].early_end || null,
-            earlyPremium: workplaceMap[wKey].early_premium ? Number(workplaceMap[wKey].early_premium) : null,
-            verificationStatus: workplaceMap[wKey].verification_status || '確認中'
-          });
-        }
-      }
 
       var studentPayload = {
         birthDate: student.birth_date,
@@ -231,13 +202,11 @@ function api_adminPrintHtml(token, params) {
               yearMonth: ym,
               mode: 'plan',
               student: studentPayload,
-              workplaces: studentWpList,
               shifts: pShifts,
               prevMonthDaily: {},
               prevMonthSource: 'confirmed',
               nextMonthDaily: {},
               holidays: allHolidays,
-              minimumWages: allMinWages,
               settings: { allowLeaveOfAbsence: allowLeaveOfAbsence }
             });
           } catch (e) {}
@@ -250,13 +219,11 @@ function api_adminPrintHtml(token, params) {
               yearMonth: ym,
               mode: 'actual',
               student: studentPayload,
-              workplaces: studentWpList,
               shifts: aShifts,
               prevMonthDaily: {},
               prevMonthSource: 'confirmed',
               nextMonthDaily: {},
               holidays: allHolidays,
-              minimumWages: allMinWages,
               settings: { allowLeaveOfAbsence: allowLeaveOfAbsence }
             });
           } catch (e) {}
@@ -301,8 +268,8 @@ function api_adminPrintHtml(token, params) {
           var dayPShifts = (pEval && pEval.shifts && pEval.shifts[dayStr]) || pShifts[dayStr] || [];
           var dayAShifts = (aEval && aEval.shifts && aEval.shifts[dayStr]) || aShifts[dayStr] || [];
 
-          var pCell = print_formatShiftsCell_(dayPShifts, workplaceMap);
-          var aCell = print_formatShiftsCell_(dayAShifts, workplaceMap);
+          var pCell = print_formatShiftsCell_(dayPShifts);
+          var aCell = print_formatShiftsCell_(dayAShifts);
 
           planTotalMonth += pCell.totalMinutes;
           actualTotalMonth += aCell.totalMinutes;
@@ -323,14 +290,12 @@ function api_adminPrintHtml(token, params) {
 
           rowsHtml.push(
             '<tr' + trClassAttr + trStyleAttr + '>' +
-              '<td>' + d + '</td>' +
-              '<td>' + dow + '</td>' +
-              '<td>' + (isHoliday ? '長期休暇' : '') + '</td>' +
-              '<td>' + pCell.workplaces + '</td>' +
+              '<td>' + d + '(' + dow + ')</td>' +
               '<td>' + pCell.times + '</td>' +
+              '<td>' + pCell.breaks + '</td>' +
               '<td>' + pCell.workMinutes + '</td>' +
-              '<td>' + aCell.workplaces + '</td>' +
               '<td>' + aCell.times + '</td>' +
+              '<td>' + aCell.breaks + '</td>' +
               '<td>' + aCell.workMinutes + '</td>' +
               '<td>' + remarks.join(' ') + '</td>' +
             '</tr>'
@@ -357,28 +322,26 @@ function api_adminPrintHtml(token, params) {
                 '<div class="student-item"><span class="item-label">氏名:</span> ' + print_escapeHtml_(student.name) + '</div>' +
                 '<div class="student-item"><span class="item-label">クラス:</span> ' + print_escapeHtml_(student.class) + '</div>' +
                 '<div class="student-item"><span class="item-label">状態:</span> ' + statusDisplayHtml + '</div>' +
-                '<div class="student-item"><span class="item-label">予定合計:</span> ' + print_formatMinutes_(planTotalMonth) + '</div>' +
-                '<div class="student-item"><span class="item-label">実績合計:</span> ' + print_formatMinutes_(actualTotalMonth) + '</div>' +
+                '<div class="student-item"><span class="item-label">勤務予定時間合計:</span> ' + print_formatMinutes_(planTotalMonth) + '</div>' +
+                '<div class="student-item"><span class="item-label">勤務実績時間合計:</span> ' + print_formatMinutes_(actualTotalMonth) + '</div>' +
               '</div>' +
             '</div>' +
             outOfScopeNotice +
             '<table class="print-table">' +
               '<thead>' +
                 '<tr>' +
-                  '<th rowspan="2" style="width: 35px;">日</th>' +
-                  '<th rowspan="2" style="width: 35px;">曜</th>' +
-                  '<th rowspan="2" style="width: 70px;">区分</th>' +
-                  '<th colspan="3">予定シフト</th>' +
-                  '<th colspan="3">実績シフト</th>' +
+                  '<th rowspan="2" style="width: 60px;">日付(曜日)</th>' +
+                  '<th colspan="3">予定</th>' +
+                  '<th colspan="3">実績</th>' +
                   '<th rowspan="2" style="width: 80px;">備考</th>' +
                 '</tr>' +
                 '<tr>' +
-                  '<th style="width: 130px;">勤務先</th>' +
-                  '<th style="width: 100px;">時間帯</th>' +
-                  '<th style="width: 65px;">実働</th>' +
-                  '<th style="width: 130px;">勤務先</th>' +
-                  '<th style="width: 100px;">時間帯</th>' +
-                  '<th style="width: 65px;">実働</th>' +
+                  '<th style="width: 120px;">勤務予定時間</th>' +
+                  '<th style="width: 60px;">休憩時間</th>' +
+                  '<th style="width: 75px;">実働(合計)時間</th>' +
+                  '<th style="width: 120px;">勤務時間</th>' +
+                  '<th style="width: 60px;">休憩時間</th>' +
+                  '<th style="width: 75px;">実働(合計)時間</th>' +
                 '</tr>' +
               '</thead>' +
               '<tbody>' +
@@ -386,11 +349,9 @@ function api_adminPrintHtml(token, params) {
               '</tbody>' +
               '<tfoot>' +
                 '<tr class="total-row">' +
-                  '<td colspan="3" style="text-align: right; font-weight: bold;">合計</td>' +
-                  '<td colspan="2"></td>' +
-                  '<td style="font-weight: bold;">' + print_formatMinutes_(planTotalMonth) + '</td>' +
-                  '<td colspan="2"></td>' +
-                  '<td style="font-weight: bold;">' + print_formatMinutes_(actualTotalMonth) + '</td>' +
+                  '<td style="text-align: right; font-weight: bold;">合計</td>' +
+                  '<td colspan="3" style="font-weight: bold;">勤務予定時間合計: ' + print_formatMinutes_(planTotalMonth) + '</td>' +
+                  '<td colspan="3" style="font-weight: bold;">勤務実績時間合計: ' + print_formatMinutes_(actualTotalMonth) + '</td>' +
                   '<td>' + (isOutOfScope ? '対象外' : '') + '</td>' +
                 '</tr>' +
               '</tfoot>' +
@@ -508,9 +469,7 @@ function api_adminPrintHtml(token, params) {
       '  color: #2d3748;\n' +
       '  font-weight: bold;\n' +
       '}\n' +
-      '.print-table tr.holiday-row td:nth-child(1),\n' +
-      '.print-table tr.holiday-row td:nth-child(2),\n' +
-      '.print-table tr.holiday-row td:nth-child(3) {\n' +
+      '.print-table tr.holiday-row td:nth-child(1) {\n' +
       '  background-color: #fff5f5;\n' +
       '  color: #c53030;\n' +
       '}\n' +

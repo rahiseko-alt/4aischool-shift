@@ -1,7 +1,6 @@
 'use strict';
 // サーバの窓口（api_*）のテスト用の下準備。テスト専用。
 // 実装役はこのファイルを変更してはならない。
-// 注意: 最低賃金の金額はテスト用の架空の値であり、実際の金額ではない。
 
 const assert = require('node:assert/strict');
 const { load } = require('./load');
@@ -66,23 +65,8 @@ function addStudent(ctx, overrides) {
   return st;
 }
 
-// 勤務先を登録し、管理者が OK にする（verify: false なら確認中のまま）。
-function addWorkplace(ctx, student, overrides, verify) {
-  const wp = {
-    name: 'コンビニA', prefecture: '愛知県', jobDescription: 'レジ・品出し', baseHourlyWage: 1200,
-    earlyStart: null, earlyEnd: null, earlyPremium: null, ...(overrides || {}),
-  };
-  const res = ok(ctx.api('api_saveWorkplace', student.token, wp), 'api_saveWorkplace');
-  if (verify !== false) {
-    ok(ctx.api('api_adminVerifyWorkplace', ctx.admin, res.workplaceId, 'OK'), 'api_adminVerifyWorkplace');
-  }
-  return res.workplaceId;
-}
-
-// 標準の学校設定: 愛知県の最低賃金と、クラスAの 2026年9〜12月分の締切。
+// 標準の学校設定: クラスAの 2026年9〜12月分の締切。
 function standardMasters(ctx) {
-  ok(ctx.api('api_adminSetMinimumWage', ctx.admin,
-    { prefecture: '愛知県', amount: 1100, effectiveFrom: '2025-10-18', effectiveTo: null }), 'api_adminSetMinimumWage');
   const deadlines = [
     ['2026-09', '2026-08-31 23:59'], ['2026-10', '2026-09-30 23:59'],
     ['2026-11', '2026-10-31 23:59'], ['2026-12', '2026-11-30 23:59'],
@@ -92,16 +76,15 @@ function standardMasters(ctx) {
   }
 }
 
-// よく使う組み合わせ: 学校・学生1人・OKの勤務先1つ。
+// よく使う組み合わせ: 学校・締切・学生1人。
 function world(options) {
   const ctx = boot(options);
   standardMasters(ctx);
   const st = addStudent(ctx);
-  const wp = addWorkplace(ctx, st);
-  return Object.assign(ctx, { st, wp });
+  return Object.assign(ctx, { st });
 }
 
-const sh = (workplace, start, end) => ({ workplace, start, end });
+const sh = (start, end) => ({ start, end });
 
 function everyDay(from, to, shift) {
   const out = {};
@@ -130,4 +113,4 @@ function allCells(ctx) {
   return out;
 }
 
-module.exports = { boot, ok, studentRecord, addStudent, addWorkplace, standardMasters, world, sh, everyDay, auditRows, allCells };
+module.exports = { boot, ok, studentRecord, addStudent, standardMasters, world, sh, everyDay, auditRows, allCells };

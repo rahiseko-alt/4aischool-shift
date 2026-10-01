@@ -2,9 +2,8 @@
 (function () {
   'use strict';
 
-  // ---- 辞書・固定の一覧（サーバから埋め込み） ----
+  // ---- 辞書（サーバから埋め込み） ----
   var I18N_DATA = <?!= JSON.stringify(I18N) ?>;
-  var PREFECTURES = <?!= JSON.stringify(PREFECTURES_) ?>;
   var currentLang = 'ja';
 
   // 訳が無ければ日本語、日本語も無ければ空文字（キー名をそのまま画面に出さない）
@@ -17,7 +16,7 @@
   // ---- アプリの状態（トークンはこの変数にだけ持つ） ----
   var state = {
     token: null, role: null, studentId: null, adminToken: null,
-    yearMonth: null, monthData: null, workplaces: [],
+    yearMonth: null, monthData: null,
     admin: { settings: null, boardRows: [] }
   };
 
@@ -44,7 +43,6 @@
   var DOW = { ja: ['日', '月', '火', '水', '木', '金', '土'], ne: ['आइत', 'सोम', 'मंगल', 'बुध', 'बिही', 'शुक्र', 'शनि'], vi: ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'] };
   function dowIndex(dateStr) { return new Date(Date.UTC(+dateStr.slice(0, 4), +dateStr.slice(5, 7) - 1, +dateStr.slice(8, 10))).getUTCDay(); }
   function hm(min) { min = +min || 0; return Math.floor(min / 60) + ':' + pad2(min % 60); }
-  function yen(n) { return '¥' + (+n || 0).toLocaleString('ja-JP'); }
 
   function showScreen(name) {
     ['login-screen', 'change-password-screen', 'student-screen', 'admin-screen'].forEach(function (s) {
@@ -100,7 +98,7 @@
   }
   function resetState() {
     state.token = null; state.role = null; state.studentId = null; state.adminToken = null;
-    state.monthData = null; state.workplaces = [];
+    state.monthData = null;
     el('btn-back-admin').hidden = true;
   }
 
@@ -174,20 +172,13 @@
   el('btn-prev-month').addEventListener('click', function () { state.yearMonth = addMonth(state.yearMonth, -1); loadStudentMonth(); });
   el('btn-next-month').addEventListener('click', function () { state.yearMonth = addMonth(state.yearMonth, 1); loadStudentMonth(); });
 
-  // 勤務先と月のデータがそろってから描く（片方だけで描くと勤務先の選択肢が空になり、保存でシフトが消える）
   function loadStudentMonth() {
     el('st-year-month').textContent = state.yearMonth;
     hideError('shift-error');
     hideError('actual-error');
-    Promise.all([
-      call('api_getMonth', [state.token, state.yearMonth]),
-      call('api_listWorkplaces', [state.token])
-    ]).then(function (results) {
-      var month = results[0], wps = results[1];
+    call('api_getMonth', [state.token, state.yearMonth]).then(function (month) {
       if (!month.ok) { showError('shift-error', month.error); return; }
-      if (!wps.ok) { showError('shift-error', wps.error); return; }
       state.monthData = month.data;
-      state.workplaces = wps.data;
       if (month.data.student) {
         el('st-name').textContent = month.data.student.name + ' (' + month.data.student.studentId + ')';
       }
@@ -197,43 +188,34 @@
   }
 
   function renderStudent() {
-    renderWorkplaces();
     renderShifts();
     renderActual();
   }
 
-  function workplaceOptions(selected) {
-    var html = '<option value="">— ' + esc(t('label.selectWorkplace')) + ' —</option>';
-    state.workplaces.forEach(function (wp) {
-      html += '<option value="' + esc(wp.workplaceId) + '"' + (selected === wp.workplaceId ? ' selected' : '') + '>' + esc(wp.name) + '</option>';
-    });
-    return html;
+  // ---- 休憩・実働の計算（サーバと同じきまり。入力のたびに画面だけで計算する） ----
+  // 拘束6時間以下: 休憩0分、8時間以下: 45分、それより長い: 60分。終了が開始以前なら翌日の終了とみなす。
+  function toMin(hhmm) {
+    var m = /^(\d{2}):(\d{2})$/.exec(hhmm || '');
+    return m ? (+m[1]) * 60 + (+m[2]) : null;
   }
-
-  function shiftRowHtml(day, sh, calc, disabled, cls) {
-    var dis = disabled ? ' disabled' : '';
-    var html = '<div class="shift-row ' + (cls || '') + '" data-day="' + day + '">';
-    html += '<select class="wp-select"' + dis + '>' + workplaceOptions(sh.workplace) + '</select>';
-    html += '<div class="shift-row-inputs">';
-    html += '<input type="time" class="sh-start" step="900" value="' + esc(sh.start || '') + '"' + dis + '>';
-    html += '<span class="shift-row-sep">〜</span>';
-    html += '<input type="time" class="sh-end" step="900" value="' + esc(sh.end || '') + '"' + dis + '>';
-    html += '</div>';
-    html += '<div class="shift-row-calc">' + calcHtml(calc) + '</div>';
-    if (!disabled) {
-      html += '<div class="shift-row-footer"><button type="button" class="btn-del-row">' + esc(t('button.deleteRow')) + '</button></div>';
-    }
-    html += '</div>';
-    return html;
+  function calcShift(start, end) {
+    var s = toMin(start), e = toMin(end);
+    if (s === null || e === null) return null;
+    if (e <= s) e += 1440;
+    var bound = e - s;
+    var brk = bound <= 360 ? 0 : (bound <= 480 ? 45 : 60);
+    return { breakMinutes: brk, workMinutes: bound - brk };
   }
-
-  // 休憩・実働・深夜・予定給与（サーバの計算結果の表示だけ。入力を変えたら保存まで空欄）
-  function calcHtml(c) {
-    if (!c) return '';
-    return '<span>' + esc(t('label.break')) + ' ' + esc(c.breakMinutes) + '</span>' +
-      '<span>' + esc(t('label.workMinutes')) + ' ' + esc(hm(c.workMinutes)) + '</span>' +
-      '<span>' + esc(t('label.nightMinutes')) + ' ' + esc(hm(c.nightMinutes)) + '</span>' +
-      '<span>' + esc(t('label.estimatedSalary')) + ' ' + esc(yen(c.salaryYen)) + '</span>';
+  // 分を「8時間」「45分」「7時間30分」の形にする（ネパール語・ベトナム語は数字と単位の間を空ける）。
+  // zeroAsHours: 0 を「0時間」と書く（月の合計用）
+  function dur(min, zeroAsHours) {
+    min = +min || 0;
+    var sp = currentLang === 'ja' ? '' : ' ';
+    if (min === 0 && zeroAsHours) return '0' + sp + t('label.hours');
+    var h = Math.floor(min / 60), m = min % 60;
+    if (h && m) return h + sp + t('label.hours') + sp + m + sp + t('label.minutes');
+    if (h) return h + sp + t('label.hours');
+    return m + sp + t('label.minutes');
   }
 
   function codesHtml(codes) {
@@ -252,84 +234,108 @@
     return (codes || []).filter(function (c) { return c.date === dateStr; });
   }
 
+  // 1日1行の表（紙の予定表と同じ形）: 日付(曜日) | 開始〜終了 | 休憩 | 実働。最後の行に月の合計。
+  // 古いデータで同じ日に2件以上あれば、その日の行を件数分だけ並べる（黙って消さない）。
+  // opts: { rowClass, timeLabel, totalLabel, disabled, codes, holidays, planShifts(実績のときだけ) }
+  function shiftTableHtml(yearMonth, shifts, opts) {
+    var days = daysInMonth(yearMonth);
+    var html = '<table class="shift-table"><thead><tr>' +
+      '<th class="col-date">' + esc(t('label.date')) + '</th>' +
+      '<th class="col-time">' + esc(t(opts.timeLabel)) + '</th>' +
+      '<th class="col-break">' + esc(t('label.breakTime')) + '</th>' +
+      '<th class="col-work">' + esc(t('label.workTime')) + '</th></tr></thead><tbody>';
+    var dis = opts.disabled ? ' disabled' : '';
+    for (var d = 1; d <= days; d++) {
+      var dateStr = yearMonth + '-' + pad2(d);
+      var isHoliday = (opts.holidays || []).indexOf(dateStr) >= 0;
+      var di = dowIndex(dateStr);
+      var dowClass = di === 0 ? 'dow-sun' : (di === 6 ? 'dow-sat' : 'dow-weekday');
+      var list = shifts[String(d)] || [];
+      var rows = list.length ? list : [{}];
+      var codes = dayCodes(opts.codes, dateStr);
+      rows.forEach(function (sh, i) {
+        var cls = ['day-row', opts.rowClass, dowClass];
+        if (isHoliday) cls.push('holiday-day');
+        if (codes.length) cls.push('has-codes');
+        html += '<tr class="' + cls.join(' ') + '" data-day="' + d + '">';
+        html += '<td class="col-date">';
+        if (i === 0) {
+          html += '<span class="day-num">' + d + '</span><span class="day-dow ' + dowClass + '">(' + esc((DOW[currentLang] || DOW.ja)[di]) + ')</span>';
+          if (isHoliday) html += '<span class="badge badge-holiday hol-mark">' + esc(t('label.holiday')) + '</span>';
+        }
+        html += '</td>';
+        html += '<td class="col-time"><div class="time-pair">' +
+          '<input type="time" class="sh-start" step="900" value="' + esc(sh.start || '') + '"' + dis + '>' +
+          '<span class="shift-row-sep">〜</span>' +
+          '<input type="time" class="sh-end" step="900" value="' + esc(sh.end || '') + '"' + dis + '>' +
+          '</div>';
+        if (opts.planShifts && i === 0) {
+          var ps = opts.planShifts[String(d)] || [];
+          html += '<div class="plan-hint"><span>' + esc(t('label.plan')) + ': ' + esc(planText(ps)) + '</span>' +
+            '<button type="button" class="btn-as-planned" data-day="' + d + '">' + esc(t('button.asPlanned')) + '</button></div>';
+        }
+        html += '</td>';
+        html += '<td class="col-break cell-break"></td><td class="col-work cell-work"></td></tr>';
+      });
+      if (codes.length) {
+        html += '<tr class="day-codes-row" data-day="' + d + '"><td colspan="4">' + codesHtml(codes) + '</td></tr>';
+      }
+    }
+    html += '</tbody><tfoot><tr><td colspan="4" class="month-total">' + esc(t(opts.totalLabel)) +
+      ': <strong class="month-total-value"></strong></td></tr></tfoot></table>';
+    return html;
+  }
+
+  // 表の各行の休憩・実働と、月の合計を入力から計算し直す
+  function refreshTotals(containerId) {
+    var total = 0;
+    el(containerId).querySelectorAll('tr.day-row').forEach(function (row) {
+      var c = calcShift(row.querySelector('.sh-start').value, row.querySelector('.sh-end').value);
+      row.querySelector('.cell-break').textContent = c ? dur(c.breakMinutes) : '';
+      row.querySelector('.cell-work').textContent = c ? dur(c.workMinutes) : '';
+      if (c) total += c.workMinutes;
+    });
+    var out = el(containerId).querySelector('.month-total-value');
+    if (out) out.textContent = dur(total, true);
+  }
+  ['shifts-table', 'actual-table'].forEach(function (id) {
+    el(id).addEventListener('input', function () { refreshTotals(id); });
+    el(id).addEventListener('change', function () { refreshTotals(id); });
+  });
+
   function renderShifts() {
     var data = state.monthData;
     if (!data) return;
     var closed = !!data.closed || data.status === '学校確定';
-    var holidays = data.holidays || [];
-    var shifts = data.shifts || {};
     var ev = data.evaluation || { shifts: {}, codes: [] };
-    var days = daysInMonth(data.yearMonth);
 
     el('st-deadline-info').textContent = t('label.deadline') + ': ' + (data.deadlineAt || '—');
     el('st-closed-notice').hidden = !closed;
     el('st-closed-notice').textContent = closed ? t('label.closed') : '';
     el('btn-save-draft').disabled = closed;
     el('btn-confirm-shift').disabled = closed;
+    // 月全体のコード（日付の無いもの）は表の上、日付のあるものはその日の行の下に出す
+    var visible = (ev.codes || []).filter(function (c) { return c.severity !== 'admin'; });
     el('st-codes').innerHTML = (data.status === '確定済' ? '<div class="badge badge-confirmed">' + esc(t('label.confirmedDone')) + '</div>' : '') +
-      codesHtml((ev.codes || []).filter(function (c) { return c.severity !== 'admin'; }));
+      codesHtml(visible.filter(function (c) { return !c.date; }));
 
-    var html = '';
-    for (var d = 1; d <= days; d++) {
-      var dateStr = data.yearMonth + '-' + pad2(d);
-      var isHoliday = holidays.indexOf(dateStr) >= 0;
-      var di = dowIndex(dateStr);
-      var dowClass = di === 0 ? 'dow-sun' : (di === 6 ? 'dow-sat' : 'dow-weekday');
-      var list = shifts[String(d)] || [];
-      var calcs = (ev.shifts && ev.shifts[String(d)]) || [];
-
-      html += '<div class="day-card' + (isHoliday ? ' holiday-day' : '') + '" data-day="' + d + '">';
-      html += '<div class="day-header"><div class="day-title-group">';
-      html += '<span class="day-num">' + d + '</span>';
-      html += '<span class="day-dow ' + dowClass + '">(' + esc((DOW[currentLang] || DOW.ja)[di]) + ')</span>';
-      html += '</div>';
-      if (isHoliday) html += '<span class="badge badge-holiday">' + esc(t('label.holiday')) + '</span>';
-      html += '</div>';
-      html += codesHtml(dayCodes(ev.codes, dateStr).filter(function (c) { return c.severity !== 'admin'; }));
-      var rows = list.length ? list : (closed ? [] : [{}]);
-      rows.forEach(function (sh, i) { html += shiftRowHtml(d, sh, calcs[i], closed, 'plan-row'); });
-      if (!closed) {
-        html += '<div class="day-card-actions"><button type="button" class="btn-add-row" data-day="' + d + '">＋ ' + esc(t('button.addRow')) + '</button></div>';
-      }
-      html += '</div>';
-    }
-    el('shifts-table').innerHTML = html;
+    el('shifts-table').innerHTML = shiftTableHtml(data.yearMonth, data.shifts || {}, {
+      rowClass: 'plan-row', timeLabel: 'label.planTime', totalLabel: 'label.planTotal',
+      disabled: closed, codes: visible, holidays: data.holidays || []
+    });
+    refreshTotals('shifts-table');
   }
 
-  // 行の追加・削除と、入力を変えたときの計算欄の消去（予定・実績の両方）
-  function wireRows(containerId, rowClass) {
-    el(containerId).addEventListener('click', function (ev) {
-      var add = ev.target.closest('.btn-add-row');
-      if (add) {
-        var card = add.closest('.day-card');
-        if (card.querySelectorAll('.shift-row').length >= 10) return;
-        var tmp = document.createElement('div');
-        tmp.innerHTML = shiftRowHtml(add.getAttribute('data-day'), {}, null, false, rowClass);
-        add.parentElement.before(tmp.firstChild);
-        return;
-      }
-      var del = ev.target.closest('.btn-del-row');
-      if (del) { var row = del.closest('.shift-row'); if (row) row.remove(); }
-    });
-    el(containerId).addEventListener('input', function (ev) {
-      var row = ev.target.closest('.shift-row');
-      if (row) row.querySelector('.shift-row-calc').innerHTML = '';
-    });
-  }
-  wireRows('shifts-table', 'plan-row');
-  wireRows('actual-table', 'actual-shift-row');
-
-  // 入力途中の行（勤務先・開始・終了のどれかだけ入った行）もサーバへ送り、「入力不足」で止めてもらう。
-  // 何も入っていない行だけを捨てる。
+  // 開始・終了のどちらかだけ入った行もサーバへ送り、「入力不足」で止めてもらう。
+  // 両方とも空の行（その日は勤務なし）だけを捨てる。
   function collectRows(containerId, rowClass) {
     var result = {};
-    el(containerId).querySelectorAll('.' + rowClass).forEach(function (row) {
+    el(containerId).querySelectorAll('tr.' + rowClass).forEach(function (row) {
       var sh = {
-        workplace: row.querySelector('.wp-select').value,
         start: row.querySelector('.sh-start').value,
         end: row.querySelector('.sh-end').value
       };
-      if (!sh.workplace && !sh.start && !sh.end) return;
+      if (!sh.start && !sh.end) return;
       var day = row.getAttribute('data-day');
       (result[day] = result[day] || []).push(sh);
     });
@@ -361,7 +367,7 @@
     });
   });
 
-  // 保存後に読み直して、計算結果と version を最新にする（メッセージは残す）
+  // 保存後に読み直して、エラー表示と version を最新にする（メッセージは残す）
   function reloadKeepMessage() {
     call('api_getMonth', [state.token, state.yearMonth]).then(function (res) {
       if (!res.ok) return;
@@ -379,34 +385,17 @@
     el('actual-section').hidden = false;
     var actual = data.actual;
     var plan = data.shifts || {};
-    var base = actual.shifts || plan;
     var aev = actual.evaluation || { shifts: {}, codes: [] };
-    var days = daysInMonth(data.yearMonth);
 
     el('actual-codes').innerHTML = '<div class="badge badge-draft">' + esc(actualStatusText(actual.status)) + '</div>' +
-      codesHtml((aev.codes || []).filter(function (c) { return c.code !== 'ACTUAL_OVER'; }));
+      codesHtml((aev.codes || []).filter(function (c) { return c.code !== 'ACTUAL_OVER' && !c.date; }));
 
-    var html = '';
-    for (var d = 1; d <= days; d++) {
-      var dateStr = data.yearMonth + '-' + pad2(d);
-      var di = dowIndex(dateStr);
-      var ps = plan[String(d)] || [];
-      var rows = base[String(d)] || [];
-      var calcs = (actual.shifts && aev.shifts && aev.shifts[String(d)]) || [];
-      html += '<div class="day-card actual-day-card" data-day="' + d + '">';
-      html += '<div class="day-header"><div class="day-title-group">';
-      html += '<span class="day-num">' + d + '</span>';
-      html += '<span class="day-dow">(' + esc((DOW[currentLang] || DOW.ja)[di]) + ')</span>';
-      html += '</div></div>';
-      html += '<div class="actual-plan-preview"><span>' + esc(t('label.plan')) + ': ' + esc(planText(ps)) + '</span>';
-      html += '<button type="button" class="btn-as-planned" data-day="' + d + '">' + esc(t('button.asPlanned')) + '</button></div>';
-      html += '<div class="actual-rows">';
-      rows.forEach(function (sh, i) { html += shiftRowHtml(d, sh, calcs[i], false, 'actual-shift-row'); });
-      html += '</div>';
-      html += '<div class="day-card-actions"><button type="button" class="btn-add-row" data-day="' + d + '">＋ ' + esc(t('button.addRow')) + '</button></div>';
-      html += '</div>';
-    }
-    el('actual-table').innerHTML = html;
+    el('actual-table').innerHTML = shiftTableHtml(data.yearMonth, actual.shifts || plan, {
+      rowClass: 'actual-shift-row', timeLabel: 'label.actualTime', totalLabel: 'label.actualTotal',
+      disabled: false, codes: (aev.codes || []).filter(function (c) { return c.code !== 'ACTUAL_OVER'; }),
+      holidays: data.holidays || [], planShifts: plan
+    });
+    refreshTotals('actual-table');
   }
 
   function actualStatusText(s) {
@@ -417,20 +406,34 @@
 
   function planText(list) {
     if (!list.length) return t('label.noPlan');
-    return list.map(function (s) {
-      var wp = state.workplaces.filter(function (w) { return w.workplaceId === s.workplace; })[0];
-      return (wp ? wp.name : '') + ' ' + s.start + '〜' + s.end;
-    }).join(' / ');
+    return list.map(function (s) { return s.start + '〜' + s.end; }).join(' / ');
   }
 
-  // 「予定どおり」: その日の予定のシフトをすべて写す（予定が無い日は空にする）
+  // 「予定どおり」: その日の予定を写す（予定が無い日は空にする）。
+  // 予定が1日2件以上ある古いデータでも、件数分の行に写す。
   el('actual-table').addEventListener('click', function (ev) {
     var btn = ev.target.closest('.btn-as-planned');
     if (!btn) return;
     var day = btn.getAttribute('data-day');
     var ps = (state.monthData.shifts || {})[day] || [];
-    var box = btn.closest('.day-card').querySelector('.actual-rows');
-    box.innerHTML = ps.map(function (sh) { return shiftRowHtml(day, sh, null, false, 'actual-shift-row'); }).join('');
+    var dayRows = el('actual-table').querySelectorAll('tr.actual-shift-row[data-day="' + day + '"]');
+    var need = Math.max(ps.length, 1);
+    var last = dayRows[dayRows.length - 1];
+    for (var k = dayRows.length; k < need; k++) {
+      var copy = last.cloneNode(true);
+      copy.querySelector('.col-date').innerHTML = '';
+      var hint = copy.querySelector('.plan-hint');
+      if (hint) hint.remove();
+      last.after(copy);
+      last = copy;
+    }
+    dayRows = el('actual-table').querySelectorAll('tr.actual-shift-row[data-day="' + day + '"]');
+    dayRows.forEach(function (row, i) {
+      if (i >= need) { row.remove(); return; }
+      row.querySelector('.sh-start').value = ps[i] ? ps[i].start : '';
+      row.querySelector('.sh-end').value = ps[i] ? ps[i].end : '';
+    });
+    refreshTotals('actual-table');
   });
 
   el('btn-save-actual').addEventListener('click', function () {
@@ -444,53 +447,6 @@
     hideError('actual-error');
     call('api_confirmActual', [state.token, state.yearMonth, state.monthData.version]).then(function (res) {
       if (handleSaveResult(res, 'actual-error', 'label.confirmedDone')) reloadKeepMessage();
-    });
-  });
-
-  // ---- 勤務先 ----
-  function verificationText(s) {
-    if (s === 'OK') return { text: t('label.verificationStatus.approved'), cls: 'badge-confirmed' };
-    if (s === '禁止') return { text: t('error.WORKPLACE_BANNED'), cls: 'badge-error' };
-    return { text: t('error.WORKPLACE_PENDING'), cls: 'badge-draft' };
-  }
-
-  function renderWorkplaces() {
-    if (!state.workplaces.length) { el('workplace-list').innerHTML = ''; return; }
-    el('workplace-list').innerHTML = state.workplaces.map(function (wp) {
-      var v = verificationText(wp.verificationStatus);
-      var early = wp.earlyStart && wp.earlyEnd && wp.earlyPremium !== null
-        ? '<span>' + esc(wp.earlyStart) + '〜' + esc(wp.earlyEnd) + ' +' + esc(yen(wp.earlyPremium)) + '</span>' : '';
-      return '<div class="wp-item-card"><div class="wp-item-top">' +
-        '<span class="wp-name">' + esc(wp.name) + '</span><span class="badge ' + v.cls + '">' + esc(v.text) + '</span></div>' +
-        '<div class="wp-details"><span>' + esc(wp.prefecture) + '</span><span>' + esc(wp.jobDescription) + '</span>' +
-        '<span class="wp-wage-tag">' + esc(t('label.baseHourlyWage')) + ' ' + esc(yen(wp.baseHourlyWage)) + '</span>' + early + '</div></div>';
-    }).join('');
-  }
-
-  el('wp-pref').innerHTML = '<option value=""></option>' + PREFECTURES.map(function (p) {
-    return '<option value="' + esc(p) + '">' + esc(p) + '</option>';
-  }).join('');
-
-  el('btn-add-workplace').addEventListener('click', function () { el('workplace-form').hidden = false; });
-  el('btn-cancel-workplace').addEventListener('click', function () { el('workplace-form').hidden = true; hideError('wp-error'); });
-
-  el('btn-save-workplace').addEventListener('click', function () {
-    hideError('wp-error');
-    var premium = el('wp-early-premium').value;
-    var wp = {
-      name: el('wp-name').value.trim(),
-      prefecture: el('wp-pref').value,
-      jobDescription: el('wp-job').value.trim(),
-      baseHourlyWage: Number(el('wp-wage').value),
-      earlyStart: el('wp-early-start').value || null,
-      earlyEnd: el('wp-early-end').value || null,
-      earlyPremium: premium === '' ? null : Number(premium)
-    };
-    call('api_saveWorkplace', [state.token, wp]).then(function (res) {
-      if (!res.ok) { showError('wp-error', res.error); return; }
-      el('workplace-form').hidden = true;
-      ['wp-name', 'wp-pref', 'wp-job', 'wp-wage', 'wp-early-start', 'wp-early-end', 'wp-early-premium'].forEach(function (id) { el(id).value = ''; });
-      loadStudentMonth();
     });
   });
 
@@ -544,16 +500,14 @@
     el('admin-counts').innerHTML = '<div class="counts-grid">' +
       kpi('学生数', c.students) + kpi('確定済', c.confirmed, 'kpi-confirmed') + kpi('下書き', c.draft, 'kpi-draft') +
       kpi('未提出', c.notSubmitted, 'kpi-notsubmitted') + kpi('エラー', c.error, 'kpi-error') + kpi('対象外', c.outOfScope, 'kpi-outofscope') +
-      '</div><div class="kpi-banner"><span>勤務先 確認待ち ' + esc(data.workplacesPending) + '件（うち期限超え ' + esc(data.workplacesOverdue) + '件）</span>' +
-      '<span>実績未確認 ' + esc(data.actualUnconfirmed) + '件</span></div>';
+      '</div><div class="kpi-banner"><span>実績未確認 ' + esc(data.actualUnconfirmed) + '件</span></div>';
 
     var html = '<table class="admin-table"><thead><tr><th>学籍番号</th><th>氏名</th><th>クラス</th><th>状態</th><th>エラー</th><th>実績</th><th>更新</th><th>操作</th></tr></thead><tbody>';
     if (!data.rows.length) html += '<tr><td colspan="8">該当する学生はいません</td></tr>';
     data.rows.forEach(function (row) {
       var errs = (row.errorCodes || []).map(function (code) { return '<span class="badge badge-error">' + esc(tErr(code)) + '</span>'; }).join(' ');
-      var pending = row.pendingWorkplaces ? ' <span class="badge badge-draft">勤務先確認待ち ' + esc(row.pendingWorkplaces) + '</span>' : '';
       html += '<tr' + (row.actualOver ? ' class="actual-over"' : '') + '>' +
-        '<td><strong>' + esc(row.studentId) + '</strong></td><td>' + esc(row.name) + pending + '</td><td>' + esc(row.className) + '</td>' +
+        '<td><strong>' + esc(row.studentId) + '</strong></td><td>' + esc(row.name) + '</td><td>' + esc(row.className) + '</td>' +
         '<td>' + esc(row.displayStatus) + '</td><td>' + (errs || '—') + '</td>' +
         '<td>' + esc(row.actualStatus) + (row.actualOver ? ' <span class="badge badge-error">実績超過</span>' : '') + '</td>' +
         '<td>' + esc(row.updatedAt || '—') + '</td>' +
@@ -689,16 +643,6 @@
         (s.graduationDate ? ' ／ 卒業 ' + esc(s.graduationDate) : '') + (s.withdrawalDate ? ' ／ 退学 ' + esc(s.withdrawalDate) : '') + '</p>' +
         '<p>資格外活動許可: ' + (s.workPermission ? 'あり（期限 ' + esc(s.permissionExpires || '未登録') + '）' : 'なし') + ' ／ ログインID ' + esc(s.loginId || '') + '</p></div>';
 
-      html += '<h4>勤務先</h4>';
-      if (!d.workplaces.length) html += '<p>登録なし</p>';
-      d.workplaces.forEach(function (w) {
-        html += '<div class="month-row"><div><strong>' + esc(w.name) + '</strong> ' + esc(w.prefecture) + ' ／ ' + esc(w.jobDescription) +
-          ' ／ 時給 ' + esc(yen(w.baseHourlyWage)) + ' ／ <strong>' + esc(w.verificationStatus) + '</strong>' +
-          (w.verifiedBy ? '（' + esc(w.verifiedBy) + ' ' + esc(w.verifiedAt) + '）' : '') + '</div>' +
-          '<div><button type="button" class="btn-secondary btn-sm" data-act="wpok" data-id="' + esc(w.workplaceId) + '">OK</button> ' +
-          '<button type="button" class="btn-danger btn-sm" data-act="wpng" data-id="' + esc(w.workplaceId) + '">禁止</button></div></div>';
-      });
-
       html += '<h4>月ごとの申告</h4><div class="month-row"><div>月を指定: <input type="text" id="detail-ym" value="' + esc(state.yearMonth) + '" placeholder="YYYY-MM"></div>' +
         '<div><button type="button" class="btn-secondary btn-sm" data-act="schoolConfirm">学校確定</button> ' +
         '<button type="button" class="btn-outline btn-sm" data-act="unlock">修正許可</button> ' +
@@ -715,16 +659,7 @@
 
       openDialog('学生詳細', html);
       var ym = function () { return el('detail-ym').value.trim(); };
-      var verify = function (status) {
-        return function (b) {
-          call('api_adminVerifyWorkplace', [state.token, b.getAttribute('data-id'), status]).then(function (r) {
-            if (adminAlert(r)) { openStudentDetail(studentId); loadAdminBoard(); }
-          });
-        };
-      };
       dialogHandlers = {
-        wpok: verify('OK'),
-        wpng: verify('禁止'),
         schoolConfirm: function () {
           if (!confirm(ym() + ' を学校確定（対象外）にします。退学・休学・卒業の学生の未入力の月にだけ使えます。')) return;
           call('api_adminSchoolConfirm', [state.token, studentId, ym()]).then(function (r) {
@@ -800,32 +735,6 @@
   }
   el('btn-open-holiday').addEventListener('click', openHolidays);
 
-  // ---- 最低賃金（一覧・追加） ----
-  function openWages() {
-    call('api_adminListMinimumWages', [state.token]).then(function (res) {
-      if (!adminAlert(res)) return;
-      var fields = [
-        { key: 'prefecture', label: '都道府県', type: 'select', options: PREFECTURES, required: true },
-        { key: 'amount', label: '金額（円）', type: 'number', required: true },
-        { key: 'effectiveFrom', label: '発効日', type: 'date', required: true },
-        { key: 'effectiveTo', label: '終了日（新しい金額の発効日の前日。空欄なら無期限）', type: 'date' }
-      ];
-      var rows = res.data.slice().sort(function (a, b) { return a.prefecture === b.prefecture ? (a.effectiveFrom < b.effectiveFrom ? 1 : -1) : (a.prefecture < b.prefecture ? -1 : 1); });
-      var list = rows.map(function (m) {
-        return '<div class="month-row"><div>' + esc(m.prefecture) + ' ' + esc(yen(m.amount)) + ' ' + esc(m.effectiveFrom) + '〜' + esc(m.effectiveTo || '') + '</div></div>';
-      }).join('') || '<p>登録なし（登録するまで、学生はシフトを確定できません）</p>';
-      openDialog('最低賃金', '<p>厚生労働省「地域別最低賃金の全国一覧」の最新の金額と発効日を入力してください。同じ都道府県・同じ発効日で登録し直すと上書きされます。</p>' +
-        '<h4>登録済み</h4>' + list + '<h4>追加</h4>' + formHtml(fields) +
-        '<div class="dialog-actions"><button type="button" class="btn-primary" data-act="add">登録</button></div>');
-      dialogHandlers = {
-        add: function () {
-          call('api_adminSetMinimumWage', [state.token, formValues(fields)]).then(function (r) { if (r.ok) openWages(); else formError(r); });
-        }
-      };
-    });
-  }
-  el('btn-open-wage').addEventListener('click', openWages);
-
   // ---- 学校設定 ----
   el('btn-open-settings').addEventListener('click', function () {
     call('api_adminGetSettings', [state.token]).then(function (res) {
@@ -836,7 +745,6 @@
         { key: 'schoolName', label: '学校名', type: 'text', value: s.schoolName },
         { key: 'retentionMonths', label: '保存期間（月、24以上）', type: 'number', value: s.retentionMonths, required: true },
         { key: 'sessionTtlMinutes', label: 'ログインの有効時間（分）', type: 'number', value: s.sessionTtlMinutes, required: true },
-        { key: 'workplaceSlaDays', label: '勤務先確認の期限（営業日）', type: 'number', value: s.workplaceSlaDays, required: true },
         { key: 'actualConfirmDefaultDay', label: '実績確認の既定の期限日（翌月の何日、1〜28）', type: 'number', value: s.actualConfirmDefaultDay, required: true },
         { key: 'allowLeaveOfAbsence', label: '休学中でも確定できる', type: 'bool', value: s.allowLeaveOfAbsence }
       ];
@@ -890,7 +798,7 @@
   // ---- 生徒モード（試用の学生 DEMO の画面に入る。管理者のトークンは手元に残し、「管理者に戻る」で戻す） ----
   var DEMO_PICK = [['DEMO-A', '生徒A（日本語）'], ['DEMO-B', '生徒B（ネパール語）'], ['DEMO-C', '生徒C（ベトナム語）']];
   el('btn-student-mode').addEventListener('click', function () {
-    var html = '<p>試用の生徒（クラス DEMO）の画面に入ります。初めてのときは、試用の生徒・勤務先・締切・仮の最低賃金が自動で入ります。</p>';
+    var html = '<p>試用の生徒（クラス DEMO）の画面に入ります。初めてのときは、試用の生徒と締切が自動で入ります。</p>';
     DEMO_PICK.forEach(function (d) {
       html += '<p><button data-act="actas" data-id="' + esc(d[0]) + '">' + esc(d[1]) + '</button></p>';
     });
@@ -927,14 +835,14 @@
     state.adminToken = null;
     state.role = 'admin';
     state.studentId = null;
-    state.monthData = null; state.workplaces = [];
+    state.monthData = null;
     el('btn-back-admin').hidden = true;
     afterLogin();
   });
 
   // ---- 試用データ ----
   el('btn-seed-demo').addEventListener('click', function () {
-    if (!confirm('試用データ（クラス DEMO の架空の学生3人・締切・仮の最低賃金）を入れます。本番で使う場合は押さないでください。')) return;
+    if (!confirm('試用データ（クラス DEMO の架空の学生3人・締切）を入れます。本番で使う場合は押さないでください。')) return;
     call('api_adminSeedDemo', [state.token]).then(function (res) {
       if (!adminAlert(res)) return;
       var html = '<p>クラス「DEMO」に入れました。学生のログイン情報（この画面を閉じると二度と表示されません）:</p>';

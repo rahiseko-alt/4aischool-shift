@@ -6,10 +6,10 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { evaluateMonth, input, s, everyDay, has, codes } = require('../helpers/core-input');
 
-const FOUR_H = s('W01', '09:00', '13:00'); // 実働240
-const FOUR_H15 = s('W01', '09:00', '13:15'); // 実働255
-const EIGHT_H = s('W01', '09:00', '18:00'); // 実働480
-const EIGHT_H15 = s('W01', '09:00', '18:15'); // 実働495
+const FOUR_H = s('09:00', '13:00'); // 実働240
+const FOUR_H15 = s('09:00', '13:15'); // 実働255
+const EIGHT_H = s('09:00', '18:00'); // 実働480
+const EIGHT_H15 = s('09:00', '18:15'); // 実働495
 
 test('7日で28時間ちょうど（240分×7）は可。7日最大は1,680分', () => {
   const r = evaluateMonth(input({ shifts: everyDay(5, 11, FOUR_H) }));
@@ -36,11 +36,11 @@ test('月〜日の固定週では収まっても、どの曜日から数えて�
   assert.equal(r.maxRolling7Minutes, 2400);
 });
 
-test('複数の勤務先を合算して28時間を超えれば OVER_28H（1社ずつなら超えない）', () => {
+test('同じ日の複数のシフトを合算して28時間を超えれば OVER_28H（1件ずつなら超えない）', () => {
   const shifts = {};
-  for (let d = 5; d <= 11; d++) shifts[String(d)] = [s('W01', '09:00', '12:00'), s('W02', '18:00', '19:00')];
+  for (let d = 5; d <= 11; d++) shifts[String(d)] = [s('09:00', '12:00'), s('18:00', '19:00')];
   assert.equal(has(evaluateMonth(input({ shifts })), 'OVER_28H'), false);
-  shifts['11'] = [s('W01', '09:00', '12:00'), s('W02', '18:00', '19:15')];
+  shifts['11'] = [s('09:00', '12:00'), s('18:00', '19:15')];
   assert.ok(has(evaluateMonth(input({ shifts })), 'OVER_28H'));
 });
 
@@ -97,7 +97,7 @@ test('長期休業日: 8時間15分（495分）は OVER_8H_HOLIDAY（block）', 
 test('長期休業日: 同じ日の2シフトの合計で8時間を超えても OVER_8H_HOLIDAY', () => {
   const r = evaluateMonth(input({
     yearMonth: '2026-12', ...WINTER,
-    shifts: { '25': [s('W01', '09:00', '13:00'), s('W02', '14:00', '18:15')] },
+    shifts: { '25': [s('09:00', '13:00'), s('14:00', '18:15')] },
   }));
   assert.ok(has(r, 'OVER_8H_HOLIDAY', '2026-12-25'));
 });
