@@ -736,28 +736,37 @@
     call('api_adminStudentDetail', [state.token, studentId]).then(function (res) {
       if (!adminAlert(res)) return;
       var d = res.data, s = d.student;
-      var html = '<div class="dialog-student-meta"><h2>' + esc(s.name) + '（' + esc(s.studentId) + '）</h2>' +
-        '<p>クラス ' + esc(s.className) + ' ／ ' + esc(s.status) + ' ／ 生年月日 ' + esc(s.birthDate) + ' ／ 入学 ' + esc(s.enrollmentDate) +
-        (s.graduationDate ? ' ／ 卒業 ' + esc(s.graduationDate) : '') + (s.withdrawalDate ? ' ／ 退学 ' + esc(s.withdrawalDate) : '') + '</p>' +
-        '<p>資格外活動許可: ' + (s.workPermission ? 'あり（期限 ' + esc(s.permissionExpires || '未登録') + '）' : 'なし') + ' ／ ログインID ' + esc(s.loginId || '') + '</p></div>';
+      // 上: 学生情報（表）とその操作。下: 月を選んで申告の中身とその月の操作。操作はそれぞれの区切りの中に1列で並べる
+      var info = [
+        ['クラス', s.className], ['状態', s.status], ['生年月日', s.birthDate], ['入学', s.enrollmentDate],
+        s.graduationDate ? ['卒業', s.graduationDate] : null, s.withdrawalDate ? ['退学', s.withdrawalDate] : null,
+        ['資格外活動許可', s.workPermission ? 'あり（期限 ' + (s.permissionExpires || '未登録') + '）' : 'なし'],
+        ['ログインID', s.loginId || '']
+      ].filter(Boolean);
+      var html = '<div class="dt-head"><h2 class="dt-name">' + esc(s.name) + '</h2><span class="dt-id">' + esc(s.studentId) + '</span></div>' +
+        '<section class="dt-sec"><h3 class="dt-sec-title">学生情報</h3>' +
+        '<table class="dt-info"><tbody>' + info.map(function (r) { return '<tr><th>' + esc(r[0]) + '</th><td>' + esc(r[1]) + '</td></tr>'; }).join('') + '</tbody></table>' +
+        '<div class="dt-actions">' +
+        '<button type="button" class="btn-outline btn-sm adm-btn" data-act="edit">学生情報を編集</button>' +
+        '<button type="button" class="btn-outline btn-sm adm-btn" data-act="reset">パスワード再発行</button>' +
+        '<button type="button" class="btn-outline btn-sm adm-btn" data-act="unlockLogin">ログインのロック解除</button>' +
+        '</div></section>';
 
       // 月を選ぶと、その月に学生が入れた中身（予定・実績）を表で出す
       var yms = d.months.map(function (m) { return m.yearMonth; });
       if (yms.indexOf(state.yearMonth) < 0) yms.push(state.yearMonth);
       yms.sort().reverse();
-      html += '<h4>申告の中身</h4><div class="month-row"><div>月: <select id="detail-ym">' +
+      html += '<section class="dt-sec"><h3 class="dt-sec-title">申告の中身</h3>' +
+        '<div class="dt-month">対象月 <select id="detail-ym">' +
         yms.map(function (y) { return '<option value="' + esc(y) + '"' + (y === state.yearMonth ? ' selected' : '') + '>' + esc(y) + '</option>'; }).join('') +
         '</select></div>' +
-        '<div><button type="button" class="adm-link" data-act="schoolConfirm">学校確定</button> ' +
-        '<button type="button" class="adm-link" data-act="unlock">修正許可</button> ' +
-        '<button type="button" class="adm-link" data-act="printMonth">この月を印刷</button></div></div>' +
-        '<div id="detail-month"></div>';
-
-      html += '<div class="dialog-actions">' +
-        '<button type="button" class="btn-secondary" data-act="edit">学生情報を編集</button>' +
-        '<button type="button" class="btn-secondary" data-act="reset">パスワード再発行</button>' +
-        '<button type="button" class="btn-outline" data-act="unlockLogin">ロック解除</button>' +
-        '<button type="button" class="btn-gold" data-act="print2y">2年間一括印刷</button></div>';
+        '<div id="detail-month"></div>' +
+        '<div class="dt-actions">' +
+        '<button type="button" class="btn-outline btn-sm adm-btn" data-act="printMonth">この月を印刷</button>' +
+        '<button type="button" class="btn-outline btn-sm adm-btn" data-act="print2y">2年分を印刷</button>' +
+        '<button type="button" class="btn-outline btn-sm adm-btn" data-act="unlock">締切後の修正を許可</button>' +
+        '<button type="button" class="btn-outline btn-sm adm-btn" data-act="schoolConfirm">学校確定（対象外にする）</button>' +
+        '</div></section>';
 
       openDialog('学生詳細', html);
       var ym = function () { return el('detail-ym').value.trim(); };
