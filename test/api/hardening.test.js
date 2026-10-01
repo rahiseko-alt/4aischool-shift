@@ -108,11 +108,11 @@ test('発行するログインIDは重複しない（30人）', () => {
   assert.equal(ids.size, 30);
 });
 
-test('試用データ: 押すと DEMO クラスの学生3人が入り、そのまま入力・確定まで試せる。2回押しても重複しない', () => {
+test('試用データ: 押すと DEMO クラスの学生1人（生徒A）が入り、そのまま入力・確定まで試せる。2回押しても重複しない', () => {
   const ctx = boot({ now: '2026-10-01 10:00' });
   const first = ok(ctx.api('api_adminSeedDemo', ctx.admin));
   assert.equal(first.className, 'DEMO');
-  assert.equal(first.students.length, 3);
+  assert.deepEqual(first.students.map((s) => [s.studentId, s.name]), [['DEMO-A', '生徒A']]);
   const again = ok(ctx.api('api_adminSeedDemo', ctx.admin));
   assert.equal(again.students.length, 0);
   const shiftDb = ctx.env.spreadsheets.get(ctx.env.properties.get('SHIFT_DB_ID'));
@@ -127,12 +127,12 @@ test('試用データ: 押すと DEMO クラスの学生3人が入り、その�
 
 test('生徒モード: 管理者は試用の学生（DEMO）の画面にパスワード無しで入れる。試用データが無ければ自動で入る', () => {
   const ctx = boot({ now: '2026-10-01 10:00' });
-  const r = ok(ctx.api('api_adminActAsDemoStudent', ctx.admin, 'DEMO-B'));
+  const r = ok(ctx.api('api_adminActAsDemoStudent', ctx.admin, 'DEMO-A'));
   assert.equal(r.role, 'student');
-  assert.equal(r.studentId, 'DEMO-B');
-  assert.equal(r.language, 'ne');
+  assert.equal(r.studentId, 'DEMO-A');
+  assert.equal(r.language, 'ja');
   assert.equal(r.mustChangePassword, false);
-  assert.equal(r.newStudents.length, 3);
+  assert.equal(r.newStudents.length, 1);
   ok(ctx.api('api_confirm', r.token, '2026-11', { '2': [{ start: '09:00', end: '13:00' }] }, 0));
   // 管理者のトークンはそのまま使える（「管理者に戻る」）
   ok(ctx.api('api_adminGetSettings', ctx.admin));
@@ -142,7 +142,7 @@ test('生徒モード: 管理者は試用の学生（DEMO）の画面にパス�
 
 test('生徒モード: 試用の学生は、配られたIDとパスワードでそのままログインでき、初回のパスワード変更を求められない', () => {
   const ctx = boot({ now: '2026-10-01 10:00' });
-  const s = ok(ctx.api('api_adminSeedDemo', ctx.admin)).students[2];
+  const s = ok(ctx.api('api_adminSeedDemo', ctx.admin)).students[0];
   const login = ok(ctx.api('api_login', s.loginId, s.initialPassword));
   assert.equal(login.mustChangePassword, false);
   ok(ctx.api('api_getMonth', login.token, '2026-10'));

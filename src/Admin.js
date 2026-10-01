@@ -927,9 +927,7 @@ function api_adminPurgeExpired(token) {
 // 本物の学生・本物の締切とは混ざらないよう、クラス名を「DEMO」に固定する。
 var DEMO_CLASS_ = 'DEMO';
 var DEMO_STUDENTS_ = [
-  { studentId: 'DEMO-A', name: '生徒A', language: 'ja' },
-  { studentId: 'DEMO-B', name: '生徒B', language: 'ne' },
-  { studentId: 'DEMO-C', name: '生徒C', language: 'vi' }
+  { studentId: 'DEMO-A', name: '生徒A', language: 'ja' }
 ];
 
 function api_adminSeedDemo(token) {

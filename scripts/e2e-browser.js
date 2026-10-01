@@ -246,12 +246,11 @@ html = html.replace('<head>', '<head><script>' + shim + '</script>');
   if (!(await page.textContent('#detail-month')).includes('〜')) throw new Error('詳細に学生の入力した時間が出ない: ' + (await page.textContent('#detail-month')));
   await page.click('#btn-dialog-close');
 
-  step('生徒モード: 生徒B（ネパール語）に入り、管理者に戻る');
-  await page.click('#btn-student-mode');
-  await page.click('[data-act="actas"][data-id="DEMO-B"]'); await wait(); await wait();
+  step('生徒モード: ボタン1つで生徒Aの画面に入り、管理者に戻る');
+  await page.click('#btn-student-mode'); await wait(); await wait();
   if (!dialogs.some((m) => m.includes('生徒A') && m.includes('パスワード'))) throw new Error('試用の生徒のログイン情報が出ない');
   await page.waitForSelector('#student-screen:not([hidden])');
-  await page.waitForFunction(() => document.getElementById('st-name').textContent.includes('DEMO-B'));
+  await page.waitForFunction(() => document.getElementById('st-name').textContent.includes('DEMO-A'));
   if (await page.isHidden('#btn-back-admin')) throw new Error('管理者に戻るボタンが無い');
   await page.click('#btn-back-admin'); await wait();
   await page.waitForSelector('#admin-screen:not([hidden])');
