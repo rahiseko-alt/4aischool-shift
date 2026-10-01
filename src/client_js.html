@@ -1,0 +1,930 @@
+<script>
+(function () {
+  'use strict';
+
+  // ---- 辞書（サーバから埋め込み） ----
+  var I18N_DATA = <?!= JSON.stringify(I18N) ?>;
+  var currentLang = 'ja';
+
+  // 訳が無ければ日本語、日本語も無ければ空文字（キー名をそのまま画面に出さない）
+  function t(key) {
+    return (I18N_DATA[currentLang] && I18N_DATA[currentLang][key]) ||
+           (I18N_DATA.ja && I18N_DATA.ja[key]) || '';
+  }
+  function tErr(code) { return t('error.' + code) || t('error.INTERNAL'); }
+
+  // ---- アプリの状態（トークンはこの変数にだけ持つ） ----
+  var state = {
+    token: null, role: null, studentId: null, adminToken: null,
+    yearMonth: null, monthData: null,
+    admin: { settings: null, boardRows: [] }
+  };
+
+  // ---- 小道具 ----
+  function el(id) { return document.getElementById(id); }
+  function esc(s) {
+    return String(s === null || s === undefined ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+  function pad2(n) { return (n < 10 ? '0' : '') + n; }
+  function jstNow() {
+    var d = new Date(Date.now() + 9 * 3600 * 1000);
+    return d.getUTCFullYear() + '-' + pad2(d.getUTCMonth() + 1) + '-' + pad2(d.getUTCDate());
+  }
+  function todayYm() { return jstNow().slice(0, 7); }
+  function addMonth(ym, delta) {
+    var y = +ym.slice(0, 4), m = +ym.slice(5, 7) - 1 + delta;
+    y += Math.floor(m / 12); m = ((m % 12) + 12) % 12;
+    return y + '-' + pad2(m + 1);
+  }
+  function daysInMonth(ym) { return new Date(Date.UTC(+ym.slice(0, 4), +ym.slice(5, 7), 0)).getUTCDate(); }
+  // 曜日は日付から計算する（2026-10-01 は木曜）
+  var DOW = { ja: ['日', '月', '火', '水', '木', '金', '土'], ne: ['आइत', 'सोम', 'मंगल', 'बुध', 'बिही', 'शुक्र', 'शनि'], vi: ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'] };
+  function dowIndex(dateStr) { return new Date(Date.UTC(+dateStr.slice(0, 4), +dateStr.slice(5, 7) - 1, +dateStr.slice(8, 10))).getUTCDay(); }
+  function hm(min) { min = +min || 0; return Math.floor(min / 60) + ':' + pad2(min % 60); }
+
+  function showScreen(name) {
+    ['login-screen', 'change-password-screen', 'student-screen', 'admin-screen'].forEach(function (s) {
+      el(s).hidden = s !== name;
+    });
+  }
+  function showMsg(elId, text, isError) {
+    var target = el(elId);
+    if (!target) return;
+    target.textContent = text;
+    target.className = isError ? 'error-msg' : 'info-msg';
+    target.hidden = !text;
+  }
+  function showError(elId, code) { showMsg(elId, tErr(code), true); }
+  function hideError(elId) { var x = el(elId); if (x) x.hidden = true; }
+  function showSpinner() { el('global-spinner').hidden = false; }
+  function hideSpinner() { el('global-spinner').hidden = true; }
+
+  // ---- サーバ呼び出し（通信失敗・BUSY は 2秒・4秒・8秒待って最大3回やり直す） ----
+  function callServer(fn, args) {
+    var delays = [2000, 4000, 8000];
+    return new Promise(function (resolve) {
+      function attempt(n) {
+        var runner = google.script.run
+          .withSuccessHandler(function (result) {
+            if (result && result.ok === false && result.error === 'BUSY' && n < delays.length) {
+              setTimeout(function () { attempt(n + 1); }, delays[n]);
+            } else {
+              resolve(result || { ok: false, error: 'INTERNAL' });
+            }
+          })
+          .withFailureHandler(function () {
+            if (n < delays.length) setTimeout(function () { attempt(n + 1); }, delays[n]);
+            else resolve({ ok: false, error: 'BUSY' });
+          });
+        runner[fn].apply(runner, args);
+      }
+      attempt(0);
+    });
+  }
+  // スピナー付き。セッション切れならログイン画面に戻す。
+  function call(fn, args) {
+    showSpinner();
+    return callServer(fn, args).then(function (res) {
+      hideSpinner();
+      if (res && res.error === 'AUTH_REQUIRED' && fn !== 'api_login') {
+        resetState();
+        showScreen('login-screen');
+        showError('login-error', 'AUTH_REQUIRED');
+      }
+      return res;
+    });
+  }
+  function resetState() {
+    state.token = null; state.role = null; state.studentId = null; state.adminToken = null;
+    state.monthData = null;
+    el('btn-back-admin').hidden = true;
+  }
+
+  // ---- 言語 ----
+  function applyLang() {
+    document.querySelectorAll('[data-i18n]').forEach(function (e) {
+      var v = t(e.getAttribute('data-i18n'));
+      if (v) e.textContent = v;
+    });
+    document.querySelectorAll('.lang-switch button').forEach(function (btn) {
+      btn.classList.toggle('active', btn.getAttribute('data-lang') === currentLang);
+    });
+    if (state.monthData && !el('student-screen').hidden) renderStudent();
+  }
+  document.querySelectorAll('.lang-switch button').forEach(function (btn) {
+    btn.addEventListener('click', function () { currentLang = btn.getAttribute('data-lang'); applyLang(); });
+  });
+
+  // ---- ログイン・パスワード変更・ログアウト ----
+  function afterLogin() {
+    state.yearMonth = todayYm();
+    if (state.role === 'admin') {
+      currentLang = 'ja';
+      applyLang();
+      showScreen('admin-screen');
+      loadAdminBoard();
+    } else {
+      showScreen('student-screen');
+      loadStudentMonth();
+    }
+  }
+
+  el('btn-login').addEventListener('click', function () {
+    hideError('login-error');
+    var loginId = el('inp-loginId').value.trim();
+    var password = el('inp-password').value;
+    if (!loginId || !password) return;
+    call('api_login', [loginId, password]).then(function (res) {
+      if (!res.ok) { showError('login-error', res.error); return; }
+      el('inp-password').value = '';
+      state.token = res.data.token;
+      state.role = res.data.role;
+      state.studentId = res.data.studentId;
+      if (res.data.mustChangePassword) showScreen('change-password-screen');
+      else afterLogin();
+    });
+  });
+
+  el('btn-change-password').addEventListener('click', function () {
+    hideError('change-password-error');
+    call('api_changePassword', [state.token, el('inp-cur-password').value, el('inp-new-password').value]).then(function (res) {
+      if (!res.ok) { showError('change-password-error', res.error); return; }
+      el('inp-cur-password').value = '';
+      el('inp-new-password').value = '';
+      afterLogin();
+    });
+  });
+
+  function doLogout() {
+    if (state.token) callServer('api_logout', [state.token]);
+    if (state.adminToken) callServer('api_logout', [state.adminToken]);
+    resetState();
+    showScreen('login-screen');
+  }
+  el('btn-logout-st').addEventListener('click', doLogout);
+  el('btn-logout-admin').addEventListener('click', doLogout);
+
+  // =====================================================================
+  // 学生画面
+  // =====================================================================
+  el('btn-prev-month').addEventListener('click', function () { state.yearMonth = addMonth(state.yearMonth, -1); loadStudentMonth(); });
+  el('btn-next-month').addEventListener('click', function () { state.yearMonth = addMonth(state.yearMonth, 1); loadStudentMonth(); });
+
+  function loadStudentMonth() {
+    el('st-year-month').textContent = state.yearMonth;
+    hideError('shift-error');
+    hideError('actual-error');
+    call('api_getMonth', [state.token, state.yearMonth]).then(function (month) {
+      if (!month.ok) { showError('shift-error', month.error); return; }
+      state.monthData = month.data;
+      if (month.data.student) {
+        el('st-name').textContent = month.data.student.name + ' (' + month.data.student.studentId + ')';
+      }
+      renderStudent();
+    });
+    call('api_getHistory', [state.token]).then(function (res) { if (res.ok) renderHistory(res.data); });
+  }
+
+  function renderStudent() {
+    renderShifts();
+    renderActual();
+  }
+
+  // ---- 休憩・実働の計算（サーバと同じきまり。入力のたびに画面だけで計算する） ----
+  // 拘束6時間以下: 休憩0分、8時間以下: 45分、それより長い: 60分。終了が開始以前なら翌日の終了とみなす。
+  function toMin(hhmm) {
+    var m = /^(\d{2}):(\d{2})$/.exec(hhmm || '');
+    return m ? (+m[1]) * 60 + (+m[2]) : null;
+  }
+  // 数字の打ち込みを「21:00」の形にそろえる。2100・210・21・21:00・21.00・全角数字を受け付ける。
+  // 時刻として読めないときは null（打った文字はそのまま残し、サーバの「時刻の形が違う」で知らせる）。
+  function normTime(v) {
+    v = String(v || '').replace(/[０-９]/g, function (c) { return String.fromCharCode(c.charCodeAt(0) - 0xFEE0); })
+      .replace(/[：．.]/g, ':').replace(/\s/g, '');
+    var m = /^(\d{1,2}):(\d{2})$/.exec(v) || /^(\d{1,2})(\d{2})$/.exec(v) || /^(\d{1,2})()$/.exec(v);
+    if (!m) return null;
+    var h = +m[1], mi = m[2] === '' ? 0 : +m[2];
+    if (h > 23 || mi > 59) return null;
+    return (h < 10 ? '0' : '') + h + ':' + (mi < 10 ? '0' : '') + mi;
+  }
+  function calcShift(start, end) {
+    var s = toMin(normTime(start)), e = toMin(normTime(end));
+    if (s === null || e === null) return null;
+    if (e <= s) e += 1440;
+    var bound = e - s;
+    var brk = bound <= 360 ? 0 : (bound <= 480 ? 45 : 60);
+    return { breakMinutes: brk, workMinutes: bound - brk };
+  }
+  // 分を「8時間」「45分」「7時間30分」の形にする（ネパール語・ベトナム語は数字と単位の間を空ける）。
+  // zeroAsHours: 0 を「0時間」と書く（月の合計用）
+  function dur(min, zeroAsHours) {
+    min = +min || 0;
+    var sp = currentLang === 'ja' ? '' : ' ';
+    if (min === 0 && zeroAsHours) return '0' + sp + t('label.hours');
+    var h = Math.floor(min / 60), m = min % 60;
+    if (h && m) return h + sp + t('label.hours') + sp + m + sp + t('label.minutes');
+    if (h) return h + sp + t('label.hours');
+    return m + sp + t('label.minutes');
+  }
+
+  function codesHtml(codes) {
+    if (!codes || !codes.length) return '';
+    var seen = {};
+    var words = [];
+    codes.forEach(function (c) {
+      if (seen[c.code]) return;
+      seen[c.code] = true;
+      words.push('<span class="badge ' + (c.severity === 'block' ? 'badge-error' : 'badge-draft') + '">' + esc(tErr(c.code)) + '</span>');
+    });
+    return '<div class="codes-bar">' + words.join(' ') + '</div>';
+  }
+
+  function dayCodes(codes, dateStr) {
+    return (codes || []).filter(function (c) { return c.date === dateStr; });
+  }
+
+  // 1日1行の表（紙の予定表と同じ形）: 日付(曜日) | 開始〜終了 | 休憩 | 実働。最後の行に月の合計。
+  // 古いデータで同じ日に2件以上あれば、その日の行を件数分だけ並べる（黙って消さない）。
+  // opts: { rowClass, timeLabel, totalLabel, disabled, codes, holidays, planShifts(実績のときだけ) }
+  function shiftTableHtml(yearMonth, shifts, opts) {
+    var days = daysInMonth(yearMonth);
+    var html = '<table class="shift-table"><thead><tr>' +
+      '<th class="col-date">' + esc(t('label.date')) + '</th>' +
+      '<th class="col-time">' + esc(t(opts.timeLabel)) + '</th>' +
+      '<th class="col-break">' + esc(t('label.breakTime')) + '</th>' +
+      '<th class="col-work">' + esc(t('label.workTime')) + '</th></tr></thead><tbody>';
+    var dis = opts.disabled ? ' disabled' : '';
+    for (var d = 1; d <= days; d++) {
+      var dateStr = yearMonth + '-' + pad2(d);
+      var isHoliday = (opts.holidays || []).indexOf(dateStr) >= 0;
+      var di = dowIndex(dateStr);
+      var dowClass = di === 0 ? 'dow-sun' : (di === 6 ? 'dow-sat' : 'dow-weekday');
+      var list = shifts[String(d)] || [];
+      var rows = list.length ? list : [{}];
+      var codes = dayCodes(opts.codes, dateStr);
+      rows.forEach(function (sh, i) {
+        var cls = ['day-row', opts.rowClass, dowClass];
+        if (isHoliday) cls.push('holiday-day');
+        if (codes.length) cls.push('has-codes');
+        html += '<tr class="' + cls.join(' ') + '" data-day="' + d + '">';
+        html += '<td class="col-date">';
+        if (i === 0) {
+          html += '<span class="day-num">' + d + '</span><span class="day-dow ' + dowClass + '">(' + esc((DOW[currentLang] || DOW.ja)[di]) + ')</span>';
+          if (isHoliday) html += '<span class="badge badge-holiday hol-mark">' + esc(t('label.holiday')) + '</span>';
+        }
+        html += '</td>';
+        html += '<td class="col-time"><div class="time-pair">' +
+          '<input type="text" class="sh-start" inputmode="numeric" maxlength="5" autocomplete="off" value="' + esc(sh.start || '') + '"' + dis + '>' +
+          '<span class="shift-row-sep">〜</span>' +
+          '<input type="text" class="sh-end" inputmode="numeric" maxlength="5" autocomplete="off" value="' + esc(sh.end || '') + '"' + dis + '>' +
+          '</div>';
+        if (opts.planShifts && i === 0) {
+          var ps = opts.planShifts[String(d)] || [];
+          html += '<div class="plan-hint"><span>' + esc(t('label.plan')) + ': ' + esc(planText(ps)) + '</span>' +
+            '<button type="button" class="btn-as-planned" data-day="' + d + '">' + esc(t('button.asPlanned')) + '</button></div>';
+        }
+        html += '</td>';
+        html += '<td class="col-break cell-break"></td><td class="col-work cell-work"></td></tr>';
+      });
+      if (codes.length) {
+        html += '<tr class="day-codes-row" data-day="' + d + '"><td colspan="4">' + codesHtml(codes) + '</td></tr>';
+      }
+    }
+    html += '</tbody><tfoot><tr><td colspan="4" class="month-total">' + esc(t(opts.totalLabel)) +
+      ': <strong class="month-total-value"></strong></td></tr></tfoot></table>';
+    return html;
+  }
+
+  // 表の各行の休憩・実働と、月の合計を入力から計算し直す
+  function refreshTotals(containerId) {
+    var total = 0;
+    el(containerId).querySelectorAll('tr.day-row').forEach(function (row) {
+      var c = calcShift(row.querySelector('.sh-start').value, row.querySelector('.sh-end').value);
+      row.querySelector('.cell-break').textContent = c ? dur(c.breakMinutes) : '';
+      row.querySelector('.cell-work').textContent = c ? dur(c.workMinutes) : '';
+      if (c) total += c.workMinutes;
+    });
+    var out = el(containerId).querySelector('.month-total-value');
+    if (out) out.textContent = dur(total, true);
+  }
+  ['shifts-table', 'actual-table'].forEach(function (id) {
+    el(id).addEventListener('input', function () { refreshTotals(id); });
+    el(id).addEventListener('change', function () { refreshTotals(id); });
+    // 入力欄を離れたら「21:00」の形に直す。読めない・15分刻みでない時刻は赤枠で知らせる。
+    el(id).addEventListener('focusout', function (ev) {
+      var inp = ev.target;
+      if (!inp.classList || !(inp.classList.contains('sh-start') || inp.classList.contains('sh-end'))) return;
+      var n = normTime(inp.value);
+      if (n) inp.value = n;
+      inp.classList.toggle('time-invalid', inp.value !== '' && !(n && /:(00|15|30|45)$/.test(n)));
+      refreshTotals(id);
+    });
+  });
+
+  function renderShifts() {
+    var data = state.monthData;
+    if (!data) return;
+    var closed = !!data.closed || data.status === '学校確定';
+    var ev = data.evaluation || { shifts: {}, codes: [] };
+
+    el('st-deadline-info').textContent = t('label.deadline') + ': ' + (data.deadlineAt || '—');
+    el('st-closed-notice').hidden = !closed;
+    el('st-closed-notice').textContent = closed ? t('label.closed') : '';
+    el('btn-save-draft').disabled = closed;
+    el('btn-confirm-shift').disabled = closed;
+    // 月全体のコード（日付の無いもの）は表の上、日付のあるものはその日の行の下に出す
+    var visible = (ev.codes || []).filter(function (c) { return c.severity !== 'admin'; });
+    el('st-codes').innerHTML = (data.status === '確定済' ? '<div class="badge badge-confirmed">' + esc(t('label.confirmedDone')) + '</div>' : '') +
+      codesHtml(visible.filter(function (c) { return !c.date; }));
+
+    el('shifts-table').innerHTML = shiftTableHtml(data.yearMonth, data.shifts || {}, {
+      rowClass: 'plan-row', timeLabel: 'label.planTime', totalLabel: 'label.planTotal',
+      disabled: closed, codes: visible, holidays: data.holidays || []
+    });
+    refreshTotals('shifts-table');
+  }
+
+  // 開始・終了のどちらかだけ入った行もサーバへ送り、「入力不足」で止めてもらう。
+  // 両方とも空の行（その日は勤務なし）だけを捨てる。
+  function collectRows(containerId, rowClass) {
+    var result = {};
+    el(containerId).querySelectorAll('tr.' + rowClass).forEach(function (row) {
+      var rawStart = row.querySelector('.sh-start').value.trim(), rawEnd = row.querySelector('.sh-end').value.trim();
+      var sh = { start: normTime(rawStart) || rawStart, end: normTime(rawEnd) || rawEnd };
+      if (!sh.start && !sh.end) return;
+      var day = row.getAttribute('data-day');
+      (result[day] = result[day] || []).push(sh);
+    });
+    return result;
+  }
+
+  // 止められた理由を「5日: 時刻の形が違います」のように日付つきで出し、その日の行を赤くする
+  function handleSaveResult(res, errId, msgKey, containerId) {
+    if (containerId) {
+      el(containerId).querySelectorAll('tr.row-error').forEach(function (r) { r.classList.remove('row-error'); });
+    }
+    if (!res.ok) {
+      var codes = res.details ? (res.details.inputErrors || []).concat(res.details.codes || []) : [];
+      var lines = [];
+      codes.forEach(function (c) {
+        var day = c.date ? Number(c.date.slice(8, 10)) : null;
+        var line = (day ? t('label.dayFmt').replace('{d}', day) + ': ' : '') + tErr(c.code);
+        if (lines.indexOf(line) < 0) lines.push(line);
+        if (day && containerId) {
+          el(containerId).querySelectorAll('tr.day-row[data-day="' + day + '"]').forEach(function (r) { r.classList.add('row-error'); });
+        }
+      });
+      showMsg(errId, tErr(res.error) + (lines.length ? '：' + lines.join('、') : ''), true);
+      return false;
+    }
+    showMsg(errId, t(msgKey), false);
+    return true;
+  }
+
+  el('btn-save-draft').addEventListener('click', function () {
+    hideError('shift-error');
+    call('api_saveDraft', [state.token, state.yearMonth, collectRows('shifts-table', 'plan-row'), state.monthData.version]).then(function (res) {
+      if (handleSaveResult(res, 'shift-error', 'label.saved', 'shifts-table')) reloadKeepMessage();
+    });
+  });
+
+  el('btn-confirm-shift').addEventListener('click', function () {
+    hideError('shift-error');
+    call('api_confirm', [state.token, state.yearMonth, collectRows('shifts-table', 'plan-row'), state.monthData.version]).then(function (res) {
+      if (handleSaveResult(res, 'shift-error', 'label.confirmedDone', 'shifts-table')) reloadKeepMessage();
+    });
+  });
+
+  // 保存後に読み直して、エラー表示と version を最新にする（メッセージは残す）
+  function reloadKeepMessage() {
+    call('api_getMonth', [state.token, state.yearMonth]).then(function (res) {
+      if (!res.ok) return;
+      state.monthData = res.data;
+      renderShifts();
+      renderActual();
+    });
+    call('api_getHistory', [state.token]).then(function (res) { if (res.ok) renderHistory(res.data); });
+  }
+
+  // ---- 実績確認 ----
+  function renderActual() {
+    var data = state.monthData;
+    if (!data || !data.actual || !data.actual.open) { el('actual-section').hidden = true; return; }
+    el('actual-section').hidden = false;
+    var actual = data.actual;
+    var plan = data.shifts || {};
+    var aev = actual.evaluation || { shifts: {}, codes: [] };
+
+    el('actual-codes').innerHTML = '<div class="badge badge-draft">' + esc(actualStatusText(actual.status)) + '</div>' +
+      codesHtml((aev.codes || []).filter(function (c) { return c.code !== 'ACTUAL_OVER' && !c.date; }));
+
+    el('actual-table').innerHTML = shiftTableHtml(data.yearMonth, actual.shifts || plan, {
+      rowClass: 'actual-shift-row', timeLabel: 'label.actualTime', totalLabel: 'label.actualTotal',
+      disabled: false, codes: (aev.codes || []).filter(function (c) { return c.code !== 'ACTUAL_OVER'; }),
+      holidays: data.holidays || [], planShifts: plan
+    });
+    refreshTotals('actual-table');
+  }
+
+  function actualStatusText(s) {
+    if (s === '予定どおり') return t('label.actualStatus.asPlanned');
+    if (s === '修正あり') return t('label.actualStatus.modified');
+    return t('label.actualStatus.unconfirmed');
+  }
+
+  function planText(list) {
+    if (!list.length) return t('label.noPlan');
+    return list.map(function (s) { return s.start + '〜' + s.end; }).join(' / ');
+  }
+
+  // 「予定どおり」: その日の予定を写す（予定が無い日は空にする）。
+  // 予定が1日2件以上ある古いデータでも、件数分の行に写す。
+  el('actual-table').addEventListener('click', function (ev) {
+    var btn = ev.target.closest('.btn-as-planned');
+    if (!btn) return;
+    var day = btn.getAttribute('data-day');
+    var ps = (state.monthData.shifts || {})[day] || [];
+    var dayRows = el('actual-table').querySelectorAll('tr.actual-shift-row[data-day="' + day + '"]');
+    var need = Math.max(ps.length, 1);
+    var last = dayRows[dayRows.length - 1];
+    for (var k = dayRows.length; k < need; k++) {
+      var copy = last.cloneNode(true);
+      copy.querySelector('.col-date').innerHTML = '';
+      var hint = copy.querySelector('.plan-hint');
+      if (hint) hint.remove();
+      last.after(copy);
+      last = copy;
+    }
+    dayRows = el('actual-table').querySelectorAll('tr.actual-shift-row[data-day="' + day + '"]');
+    dayRows.forEach(function (row, i) {
+      if (i >= need) { row.remove(); return; }
+      row.querySelector('.sh-start').value = ps[i] ? ps[i].start : '';
+      row.querySelector('.sh-end').value = ps[i] ? ps[i].end : '';
+    });
+    refreshTotals('actual-table');
+  });
+
+  el('btn-save-actual').addEventListener('click', function () {
+    hideError('actual-error');
+    call('api_saveActual', [state.token, state.yearMonth, collectRows('actual-table', 'actual-shift-row'), state.monthData.version]).then(function (res) {
+      if (handleSaveResult(res, 'actual-error', 'label.saved', 'actual-table')) reloadKeepMessage();
+    });
+  });
+
+  el('btn-confirm-actual').addEventListener('click', function () {
+    hideError('actual-error');
+    call('api_confirmActual', [state.token, state.yearMonth, state.monthData.version]).then(function (res) {
+      if (handleSaveResult(res, 'actual-error', 'label.confirmedDone', 'actual-table')) reloadKeepMessage();
+    });
+  });
+
+  // ---- 提出履歴 ----
+  function statusText(s) {
+    return { '下書き': t('label.status.draft'), '確定済': t('label.status.confirmed'), '学校確定': t('label.status.schoolConfirmed'), '未入力': t('label.status.notEntered') }[s] || s;
+  }
+  function renderHistory(rows) {
+    if (!rows || !rows.length) { el('history-list').innerHTML = ''; return; }
+    el('history-list').innerHTML = '<table class="history-table"><tbody>' + rows.map(function (r) {
+      return '<tr><td><strong>' + esc(r.yearMonth) + '</strong></td><td>' + esc(statusText(r.status)) + '</td><td>' + esc(actualStatusText(r.actualStatus)) + '</td></tr>';
+    }).join('') + '</tbody></table>';
+  }
+
+  // =====================================================================
+  // 管理画面（日本語だけ）
+  // =====================================================================
+  function adminAlert(res, okText) {
+    if (!res.ok) { alert('エラー: ' + tErr(res.error)); return false; }
+    if (okText) alert(okText);
+    return true;
+  }
+
+  el('btn-admin-prev-month').addEventListener('click', function () { state.yearMonth = addMonth(state.yearMonth, -1); loadAdminBoard(); });
+  el('btn-admin-next-month').addEventListener('click', function () { state.yearMonth = addMonth(state.yearMonth, 1); loadAdminBoard(); });
+  el('btn-admin-search').addEventListener('click', loadAdminBoard);
+
+  function boardFilter() {
+    var f = {};
+    var c = el('admin-class-filter').value.trim(); if (c) f.className = c;
+    var s = el('admin-status-filter').value; if (s) f.status = s;
+    var q = el('admin-query').value.trim(); if (q) f.query = q;
+    return f;
+  }
+
+  function loadAdminBoard() {
+    el('admin-year-month').textContent = state.yearMonth;
+    call('api_adminBoard', [state.token, state.yearMonth, boardFilter()]).then(function (res) {
+      if (!adminAlert(res)) return;
+      state.admin.boardRows = res.data.rows;
+      renderAdminBoard(res.data);
+    });
+  }
+
+  function kpi(label, value, cls) {
+    return '<div class="kpi-card ' + (cls || '') + '"><span class="kpi-label">' + esc(label) + '</span><span class="kpi-val">' + esc(value) + '</span></div>';
+  }
+
+  function renderAdminBoard(data) {
+    var c = data.counts;
+    el('admin-counts').innerHTML = '<div class="counts-grid">' +
+      kpi('学生数', c.students) + kpi('確定済', c.confirmed, 'kpi-confirmed') + kpi('下書き', c.draft, 'kpi-draft') +
+      kpi('未提出', c.notSubmitted, 'kpi-notsubmitted') + kpi('エラー', c.error, 'kpi-error') + kpi('対象外', c.outOfScope, 'kpi-outofscope') +
+      '</div><div class="kpi-banner"><span>実績未確認 ' + esc(data.actualUnconfirmed) + '件</span></div>';
+
+    var html = '<table class="admin-table"><thead><tr><th>学籍番号</th><th>氏名</th><th>クラス</th><th>状態</th><th>エラー</th><th>実績</th><th>更新</th><th>操作</th></tr></thead><tbody>';
+    if (!data.rows.length) html += '<tr><td colspan="8">該当する学生はいません</td></tr>';
+    data.rows.forEach(function (row) {
+      var errs = (row.errorCodes || []).map(function (code) { return '<span class="badge badge-error">' + esc(tErr(code)) + '</span>'; }).join(' ');
+      html += '<tr' + (row.actualOver ? ' class="actual-over"' : '') + '>' +
+        '<td><strong>' + esc(row.studentId) + '</strong></td><td>' + esc(row.name) + '</td><td>' + esc(row.className) + '</td>' +
+        '<td>' + esc(row.displayStatus) + '</td><td>' + (errs || '—') + '</td>' +
+        '<td>' + esc(row.actualStatus) + (row.actualOver ? ' <span class="badge badge-error">実績超過</span>' : '') + '</td>' +
+        '<td>' + esc(row.updatedAt || '—') + '</td>' +
+        '<td><button type="button" class="btn-primary btn-sm btn-admin-detail" data-sid="' + esc(row.studentId) + '">詳細</button> ' +
+        '<button type="button" class="btn-secondary btn-sm btn-admin-print" data-sid="' + esc(row.studentId) + '">印刷</button></td></tr>';
+    });
+    el('admin-board').innerHTML = html + '</tbody></table>';
+  }
+
+  el('admin-board').addEventListener('click', function (ev) {
+    var d = ev.target.closest('.btn-admin-detail');
+    if (d) { openStudentDetail(d.getAttribute('data-sid')); return; }
+    var p = ev.target.closest('.btn-admin-print');
+    if (p) printPages([p.getAttribute('data-sid')], [state.yearMonth]);
+  });
+
+  document.querySelectorAll('.admin-sidebar-nav .admin-nav-item').forEach(function (item) {
+    item.addEventListener('click', function () {
+      document.querySelectorAll('.admin-sidebar-nav .admin-nav-item').forEach(function (i) { i.classList.remove('active'); });
+      item.classList.add('active');
+      var target = el(item.getAttribute('data-target'));
+      if (target) target.scrollIntoView({ behavior: 'smooth' });
+    });
+  });
+
+  // ---- ダイアログ（学生詳細・入力フォーム・一覧を同じ枠で出す） ----
+  function openDialog(title, html) {
+    el('admin-dialog-title').textContent = title;
+    el('admin-dialog-body').innerHTML = html;
+    el('admin-dialog-overlay').hidden = false;
+  }
+  function closeDialog() {
+    el('admin-dialog-overlay').hidden = true;
+    el('admin-dialog-body').innerHTML = '';
+    dialogHandlers = {};
+  }
+  el('btn-dialog-close').addEventListener('click', closeDialog);
+
+  // ダイアログ内のボタンは data-act で振り分ける
+  var dialogHandlers = {};
+  el('admin-dialog-body').addEventListener('click', function (ev) {
+    var b = ev.target.closest('[data-act]');
+    if (b && dialogHandlers[b.getAttribute('data-act')]) dialogHandlers[b.getAttribute('data-act')](b);
+  });
+
+  // 入力フォーム。fields: [{ key, label, type: text|date|datetime|ym|number|select|bool, options, value, required, hint }]
+  function formHtml(fields) {
+    return '<div class="admin-form">' + fields.map(function (f) {
+      var v = f.value === null || f.value === undefined ? '' : f.value;
+      var input;
+      if (f.type === 'select') {
+        input = '<select data-key="' + esc(f.key) + '">' + f.options.map(function (o) {
+          var ov = typeof o === 'object' ? o.value : o, ol = typeof o === 'object' ? o.label : o;
+          return '<option value="' + esc(ov) + '"' + (String(ov) === String(v) ? ' selected' : '') + '>' + esc(ol) + '</option>';
+        }).join('') + '</select>';
+      } else if (f.type === 'bool') {
+        input = '<input type="checkbox" data-key="' + esc(f.key) + '"' + (v === true ? ' checked' : '') + '>';
+      } else {
+        var type = f.type === 'date' ? 'date' : f.type === 'number' ? 'number' : 'text';
+        var ph = f.type === 'datetime' ? 'YYYY-MM-DD HH:MM' : f.type === 'ym' ? 'YYYY-MM' : (f.hint || '');
+        input = '<input type="' + type + '" data-key="' + esc(f.key) + '" value="' + esc(v) + '" placeholder="' + esc(ph) + '">';
+      }
+      return '<div class="field"><label>' + esc(f.label) + (f.required ? ' *' : '') + '</label>' + input + '</div>';
+    }).join('') + '<p id="admin-form-error" class="error-msg" hidden></p></div>';
+  }
+  function formValues(fields) {
+    var out = {};
+    fields.forEach(function (f) {
+      var node = el('admin-dialog-body').querySelector('[data-key="' + f.key + '"]');
+      if (!node) return;
+      if (f.type === 'bool') out[f.key] = node.checked;
+      else if (f.type === 'number') out[f.key] = node.value === '' ? null : Number(node.value);
+      else out[f.key] = node.value.trim() === '' ? null : node.value.trim();
+    });
+    return out;
+  }
+  function openForm(title, fields, submitLabel, onSubmit) {
+    openDialog(title, formHtml(fields) +
+      '<div class="dialog-actions"><button type="button" class="btn-primary" data-act="submit">' + esc(submitLabel) + '</button></div>');
+    dialogHandlers.submit = function () {
+      var values = formValues(fields);
+      var missing = fields.filter(function (f) { return f.required && (values[f.key] === null || values[f.key] === ''); });
+      if (missing.length) { showMsg('admin-form-error', '必須項目: ' + missing.map(function (f) { return f.label; }).join('、'), true); return; }
+      onSubmit(values);
+    };
+  }
+  function formError(res) { showMsg('admin-form-error', 'エラー: ' + tErr(res.error), true); }
+
+  // ---- 学生の追加・編集 ----
+  function studentFields(s) {
+    s = s || {};
+    return [
+      { key: 'studentId', label: '学籍番号', type: 'text', value: s.studentId, required: true, hint: '例: 251001' },
+      { key: 'name', label: '氏名', type: 'text', value: s.name, required: true },
+      { key: 'className', label: 'クラス', type: 'text', value: s.className, required: true },
+      { key: 'birthDate', label: '生年月日', type: 'date', value: s.birthDate, required: true },
+      { key: 'language', label: '言語', type: 'select', value: s.language || 'ja', options: [{ value: 'ja', label: '日本語' }, { value: 'ne', label: 'ネパール語' }, { value: 'vi', label: 'ベトナム語' }] },
+      { key: 'enrollmentDate', label: '入学日', type: 'date', value: s.enrollmentDate, required: true },
+      { key: 'graduationDate', label: '卒業日', type: 'date', value: s.graduationDate },
+      { key: 'withdrawalDate', label: '退学日', type: 'date', value: s.withdrawalDate },
+      { key: 'status', label: '在籍状態', type: 'select', value: s.status || '在籍', options: ['在籍', '休学', '卒業', '退学'] },
+      { key: 'workPermission', label: '資格外活動許可あり', type: 'bool', value: s.workPermission === true },
+      { key: 'permissionExpires', label: '許可期限（在留期限）', type: 'date', value: s.permissionExpires },
+      { key: 'permissionCheckedAt', label: '許可確認日', type: 'date', value: s.permissionCheckedAt }
+    ];
+  }
+  function openStudentForm(existing) {
+    var fields = studentFields(existing);
+    openForm(existing ? '学生情報の編集' : '学生の追加', fields, existing ? '更新' : '追加', function (v) {
+      if (existing) v.studentId = existing.studentId;
+      call('api_adminUpsertStudent', [state.token, v]).then(function (res) {
+        if (!res.ok) { formError(res); return; }
+        if (res.data.created) {
+          openDialog('ログイン情報（この画面を閉じると二度と表示されません）',
+            '<p>学籍番号: <strong>' + esc(res.data.studentId) + '</strong></p><p>ログインID: <strong>' + esc(res.data.loginId) + '</strong></p>' +
+            '<p>初期パスワード: <strong>' + esc(res.data.initialPassword) + '</strong></p><p>紙に書いて本人に渡してください。</p>');
+        } else {
+          openStudentDetail(v.studentId);
+        }
+        loadAdminBoard();
+      });
+    });
+  }
+  el('btn-open-student-form').addEventListener('click', function () { openStudentForm(null); });
+
+  // ---- 学生詳細 ----
+  function openStudentDetail(studentId) {
+    call('api_adminStudentDetail', [state.token, studentId]).then(function (res) {
+      if (!adminAlert(res)) return;
+      var d = res.data, s = d.student;
+      var html = '<div class="dialog-student-meta"><h2>' + esc(s.name) + '（' + esc(s.studentId) + '）</h2>' +
+        '<p>クラス ' + esc(s.className) + ' ／ ' + esc(s.status) + ' ／ 生年月日 ' + esc(s.birthDate) + ' ／ 入学 ' + esc(s.enrollmentDate) +
+        (s.graduationDate ? ' ／ 卒業 ' + esc(s.graduationDate) : '') + (s.withdrawalDate ? ' ／ 退学 ' + esc(s.withdrawalDate) : '') + '</p>' +
+        '<p>資格外活動許可: ' + (s.workPermission ? 'あり（期限 ' + esc(s.permissionExpires || '未登録') + '）' : 'なし') + ' ／ ログインID ' + esc(s.loginId || '') + '</p></div>';
+
+      html += '<h4>月ごとの申告</h4><div class="month-row"><div>月を指定: <input type="text" id="detail-ym" value="' + esc(state.yearMonth) + '" placeholder="YYYY-MM"></div>' +
+        '<div><button type="button" class="btn-secondary btn-sm" data-act="schoolConfirm">学校確定</button> ' +
+        '<button type="button" class="btn-outline btn-sm" data-act="unlock">修正許可</button> ' +
+        '<button type="button" class="btn-outline btn-sm" data-act="printMonth">印刷</button></div></div>';
+      d.months.forEach(function (m) {
+        html += '<div class="month-row"><div><strong>' + esc(m.yearMonth) + '</strong> ' + esc(m.status) + ' ／ 実績 ' + esc(m.actualStatus) + '</div></div>';
+      });
+
+      html += '<div class="dialog-actions">' +
+        '<button type="button" class="btn-secondary" data-act="edit">学生情報を編集</button>' +
+        '<button type="button" class="btn-secondary" data-act="reset">パスワード再発行</button>' +
+        '<button type="button" class="btn-outline" data-act="unlockLogin">ロック解除</button>' +
+        '<button type="button" class="btn-gold" data-act="print2y">2年間一括印刷</button></div>';
+
+      openDialog('学生詳細', html);
+      var ym = function () { return el('detail-ym').value.trim(); };
+      dialogHandlers = {
+        schoolConfirm: function () {
+          if (!confirm(ym() + ' を学校確定（対象外）にします。退学・休学・卒業の学生の未入力の月にだけ使えます。')) return;
+          call('api_adminSchoolConfirm', [state.token, studentId, ym()]).then(function (r) {
+            if (adminAlert(r, '学校確定しました。')) { openStudentDetail(studentId); loadAdminBoard(); }
+          });
+        },
+        unlock: function () {
+          var until = prompt('修正許可の期限（YYYY-MM-DD HH:MM）');
+          if (!until) return;
+          call('api_adminGrantUnlock', [state.token, studentId, ym(), until.trim()]).then(function (r) {
+            if (adminAlert(r, '修正許可を出しました。')) openStudentDetail(studentId);
+          });
+        },
+        printMonth: function () { printPages([studentId], [ym()]); },
+        edit: function () { openStudentForm(s); },
+        reset: function () {
+          if (!confirm('パスワードを再発行します。今のパスワードは使えなくなります。')) return;
+          call('api_adminResetPassword', [state.token, studentId]).then(function (r) {
+            if (adminAlert(r)) openDialog('再発行したパスワード（この画面を閉じると二度と表示されません）', '<p>ログインID: <strong>' + esc(s.loginId || '') + '</strong></p><p>初期パスワード: <strong>' + esc(r.data.initialPassword) + '</strong></p>');
+          });
+        },
+        unlockLogin: function () {
+          call('api_adminUnlockLogin', [state.token, studentId]).then(function (r) { adminAlert(r, 'ロックを解除しました。'); });
+        },
+        print2y: function () {
+          var months = [];
+          for (var i = 23; i >= 0; i--) months.push(addMonth(todayYm(), -i));
+          printPages([studentId], months);
+        }
+      };
+    });
+  }
+
+  // ---- 締切 ----
+  el('btn-open-deadline').addEventListener('click', function () {
+    var fields = [
+      { key: 'yearMonth', label: '対象年月', type: 'ym', value: state.yearMonth, required: true },
+      { key: 'className', label: 'クラス', type: 'text', required: true },
+      { key: 'deadlineAt', label: '予定の締切（YYYY-MM-DD HH:MM）', type: 'datetime', required: true },
+      { key: 'actualDeadlineAt', label: '実績確認の期限（空欄なら翌月の既定日 23:59）', type: 'datetime' }
+    ];
+    openForm('締切の設定', fields, '保存', function (v) {
+      call('api_adminSetDeadline', [state.token, v]).then(function (r) { if (r.ok) { closeDialog(); alert('締切を保存しました。'); } else formError(r); });
+    });
+  });
+
+  // ---- 長期休業（一覧・追加・削除） ----
+  function openHolidays() {
+    call('api_adminListHolidays', [state.token]).then(function (res) {
+      if (!adminAlert(res)) return;
+      var fields = [
+        { key: 'name', label: '名称', type: 'text', required: true, hint: '例: 冬季休業' },
+        { key: 'startDate', label: '開始日', type: 'date', required: true },
+        { key: 'endDate', label: '終了日', type: 'date', required: true },
+        { key: 'schoolYear', label: '年度', type: 'number', required: true, value: +todayYm().slice(0, 4) }
+      ];
+      var list = res.data.map(function (h) {
+        return '<div class="month-row"><div>' + esc(h.name) + ' ' + esc(h.startDate) + '〜' + esc(h.endDate) + '（' + esc(h.schoolYear) + '年度）</div>' +
+          '<div><button type="button" class="btn-danger btn-sm" data-act="del" data-id="' + esc(h.holidayId) + '">削除</button></div></div>';
+      }).join('') || '<p>登録なし</p>';
+      openDialog('長期休業', '<h4>登録済み</h4>' + list + '<h4>追加</h4>' + formHtml(fields) +
+        '<div class="dialog-actions"><button type="button" class="btn-primary" data-act="add">追加</button></div>');
+      dialogHandlers = {
+        del: function (b) {
+          if (!confirm('この長期休業を削除します。')) return;
+          call('api_adminDeleteHoliday', [state.token, b.getAttribute('data-id')]).then(function (r) { if (adminAlert(r)) openHolidays(); });
+        },
+        add: function () {
+          call('api_adminSetHoliday', [state.token, formValues(fields)]).then(function (r) { if (r.ok) openHolidays(); else formError(r); });
+        }
+      };
+    });
+  }
+  el('btn-open-holiday').addEventListener('click', openHolidays);
+
+  // ---- 学校設定 ----
+  el('btn-open-settings').addEventListener('click', function () {
+    call('api_adminGetSettings', [state.token]).then(function (res) {
+      if (!adminAlert(res)) return;
+      var s = res.data;
+      state.admin.settings = s;
+      var fields = [
+        { key: 'schoolName', label: '学校名', type: 'text', value: s.schoolName },
+        { key: 'retentionMonths', label: '保存期間（月、24以上）', type: 'number', value: s.retentionMonths, required: true },
+        { key: 'sessionTtlMinutes', label: 'ログインの有効時間（分）', type: 'number', value: s.sessionTtlMinutes, required: true },
+        { key: 'actualConfirmDefaultDay', label: '実績確認の既定の期限日（翌月の何日、1〜28）', type: 'number', value: s.actualConfirmDefaultDay, required: true },
+        { key: 'allowLeaveOfAbsence', label: '休学中でも確定できる', type: 'bool', value: s.allowLeaveOfAbsence }
+      ];
+      openForm('学校設定', fields, '保存', function (v) {
+        if (v.schoolName === null) v.schoolName = '';
+        call('api_adminSetSettings', [state.token, v]).then(function (r) { if (r.ok) { closeDialog(); alert('学校設定を保存しました。'); } else formError(r); });
+      });
+    });
+  });
+
+  // ---- 四半期確認 ----
+  el('btn-open-quarter').addEventListener('click', function () {
+    var fields = [
+      { key: 'endYearMonth', label: '3か月の最後の月', type: 'ym', value: addMonth(todayYm(), -1), required: true },
+      { key: 'className', label: 'クラス（空欄なら全クラス）', type: 'text' }
+    ];
+    openForm('四半期確認', fields, '表示して確認を記録', function (v) {
+      call('api_adminQuarterCheck', [state.token, { className: v.className, endYearMonth: v.endYearMonth }]).then(function (r) {
+        if (!r.ok) { formError(r); return; }
+        var html = '<p>確認者と確認日時を監査ログに記録しました。</p><table class="admin-table"><thead><tr><th>学籍番号</th><th>氏名</th>' +
+          r.data.months.map(function (m) { return '<th>' + esc(m) + '</th>'; }).join('') + '</tr></thead><tbody>';
+        r.data.rows.forEach(function (row) {
+          html += '<tr' + (row.months.some(function (m) { return m.actualOver; }) ? ' class="actual-over"' : '') + '><td>' + esc(row.studentId) + '</td><td>' + esc(row.name) + '</td>' +
+            row.months.map(function (m) {
+              return '<td>' + esc(m.actualStatus) + (m.actualTotalMinutes !== null ? ' ' + esc(hm(m.actualTotalMinutes)) : '') + (m.actualOver ? ' <strong>実績超過</strong>' : '') + '</td>';
+            }).join('') + '</tr>';
+        });
+        openDialog('四半期確認 ' + r.data.months[0] + '〜' + r.data.months[2], html + '</tbody></table>');
+      });
+    });
+  });
+
+  // ---- 管理者の追加・保存期限超過の削除 ----
+  el('btn-create-admin').addEventListener('click', function () {
+    if (!confirm('管理者のアカウントを1つ追加します。')) return;
+    call('api_adminCreateAdmin', [state.token]).then(function (res) {
+      if (adminAlert(res)) openDialog('新しい管理者（この画面を閉じると二度と表示されません）', '<p>ログインID: <strong>' + esc(res.data.loginId) + '</strong></p><p>初期パスワード: <strong>' + esc(res.data.initialPassword) + '</strong></p>');
+    });
+  });
+
+  el('btn-purge-expired').addEventListener('click', function () {
+    call('api_adminGetSettings', [state.token]).then(function (res) {
+      if (!adminAlert(res)) return;
+      if (!confirm('保存期間（' + res.data.retentionMonths + 'か月）より前の月の申告データを完全に削除します。元に戻せません。よろしいですか？')) return;
+      call('api_adminPurgeExpired', [state.token]).then(function (r) {
+        if (adminAlert(r, r.ok ? r.data.deletedRows + '件を削除しました。' : '')) loadAdminBoard();
+      });
+    });
+  });
+
+  // ---- 生徒モード（試用の学生 DEMO の画面に入る。管理者のトークンは手元に残し、「管理者に戻る」で戻す） ----
+  var DEMO_PICK = [['DEMO-A', '生徒A（日本語）'], ['DEMO-B', '生徒B（ネパール語）'], ['DEMO-C', '生徒C（ベトナム語）']];
+  el('btn-student-mode').addEventListener('click', function () {
+    var html = '<p>試用の生徒（クラス DEMO）の画面に入ります。初めてのときは、試用の生徒と締切が自動で入ります。</p>';
+    DEMO_PICK.forEach(function (d) {
+      html += '<p><button data-act="actas" data-id="' + esc(d[0]) + '">' + esc(d[1]) + '</button></p>';
+    });
+    openDialog('生徒モード', html);
+    dialogHandlers.actas = function (b) {
+      var studentId = b.getAttribute('data-id');
+      call('api_adminActAsDemoStudent', [state.token, studentId]).then(function (res) {
+        if (!adminAlert(res)) return;
+        closeDialog();
+        if (res.data.newStudents.length) {
+          var msg = '試用の生徒を作りました。スマホなどから直接ログインするときは次を使ってください（この表示は一度だけです）:\n';
+          res.data.newStudents.forEach(function (s) {
+            msg += '\n' + s.name + '  ID: ' + s.loginId + '  パスワード: ' + s.initialPassword;
+          });
+          alert(msg);
+        }
+        state.adminToken = state.token;
+        state.token = res.data.token;
+        state.role = 'student';
+        state.studentId = res.data.studentId;
+        state.yearMonth = todayYm();
+        currentLang = res.data.language;
+        applyLang();
+        el('btn-back-admin').hidden = false;
+        showScreen('student-screen');
+        loadStudentMonth();
+      });
+    };
+  });
+  el('btn-back-admin').addEventListener('click', function () {
+    if (!state.adminToken) return;
+    callServer('api_logout', [state.token]);
+    state.token = state.adminToken;
+    state.adminToken = null;
+    state.role = 'admin';
+    state.studentId = null;
+    state.monthData = null;
+    el('btn-back-admin').hidden = true;
+    afterLogin();
+  });
+
+  // ---- 試用データ ----
+  el('btn-seed-demo').addEventListener('click', function () {
+    if (!confirm('試用データ（クラス DEMO の架空の学生3人・締切）を入れます。本番で使う場合は押さないでください。')) return;
+    call('api_adminSeedDemo', [state.token]).then(function (res) {
+      if (!adminAlert(res)) return;
+      var html = '<p>クラス「DEMO」に入れました。学生のログイン情報（この画面を閉じると二度と表示されません）:</p>';
+      if (!res.data.students.length) html += '<p>試用の学生はすでに登録済みです（パスワードを忘れた場合は、学生詳細から再発行してください）。</p>';
+      res.data.students.forEach(function (s) {
+        html += '<p><strong>' + esc(s.name) + '</strong>（' + esc(s.studentId) + '）ログインID: <strong>' + esc(s.loginId) + '</strong> ／ 初期パスワード: <strong>' + esc(s.initialPassword) + '</strong></p>';
+      });
+      el('admin-class-filter').value = 'DEMO';
+      openDialog('試用データ', html);
+      loadAdminBoard();
+    });
+  });
+
+  // ---- 印刷（50名ずつ。ポップアップを止められないよう、先に窓を開けてから中身を書く） ----
+  function printPages(studentIds, months, firstWindow) {
+    var chunks = [];
+    for (var i = 0; i < studentIds.length; i += 50) chunks.push(studentIds.slice(i, i + 50));
+    var windows = chunks.map(function (c, idx) { return idx === 0 && firstWindow ? firstWindow : window.open('', '_blank'); });
+    if (windows.some(function (w) { return !w; })) { alert('ポップアップが止められました。ブラウザの設定でこのページのポップアップを許可してください。'); }
+    chunks.forEach(function (chunk, idx) {
+      call('api_adminPrintHtml', [state.token, { studentIds: chunk, yearMonths: months }]).then(function (r) {
+        var w = windows[idx];
+        if (!w) return;
+        if (!r.ok) { w.close(); alert('エラー: ' + tErr(r.error)); return; }
+        w.document.open();
+        w.document.write(r.data.html);
+        w.document.close();
+        w.focus();
+        w.print();
+      });
+    });
+  }
+
+  // クラス一括: 絞り込み欄のクラス全員（対象外の学生も「対象外」と印刷する）。
+  // 学生一覧の取得を待つ間にポップアップが止められないよう、先に1枚目の窓を開けておく。
+  el('btn-print-all-class').addEventListener('click', function () {
+    var cls = el('admin-class-filter').value.trim();
+    if (!cls) { alert('上の絞り込み欄にクラスを入れてください。'); return; }
+    var first = window.open('', '_blank');
+    call('api_adminBoard', [state.token, state.yearMonth, { className: cls }]).then(function (res) {
+      if (!adminAlert(res)) { if (first) first.close(); return; }
+      var sids = res.data.rows.map(function (r) { return r.studentId; });
+      if (!sids.length) { if (first) first.close(); alert('印刷する学生がいません。'); return; }
+      printPages(sids, [state.yearMonth], first);
+    });
+  });
+
+  el('btn-print-board').addEventListener('click', function () {
+    var sids = state.admin.boardRows.map(function (r) { return r.studentId; });
+    if (!sids.length) { alert('表示中の学生がいません。'); return; }
+    printPages(sids, [state.yearMonth]);
+  });
+
+})();
+</script>

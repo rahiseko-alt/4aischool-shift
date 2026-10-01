@@ -12,12 +12,11 @@ const { load, SRC_DIR } = require('./helpers/load');
 const REQUIRED_API = [
   'api_login', 'api_logout', 'api_changePassword',
   'api_getMonth', 'api_saveDraft', 'api_confirm', 'api_saveActual', 'api_confirmActual', 'api_getHistory',
-  'api_saveWorkplace', 'api_listWorkplaces',
   'api_adminBoard', 'api_adminStudentDetail', 'api_adminUpsertStudent', 'api_adminResetPassword', 'api_adminUnlockLogin',
-  'api_adminCreateAdmin', 'api_adminVerifyWorkplace', 'api_adminGrantUnlock', 'api_adminSchoolConfirm', 'api_adminQuarterCheck',
+  'api_adminCreateAdmin', 'api_adminGrantUnlock', 'api_adminSchoolConfirm', 'api_adminQuarterCheck',
   'api_adminSetDeadline', 'api_adminSetHoliday', 'api_adminDeleteHoliday', 'api_adminListHolidays',
-  'api_adminSetMinimumWage', 'api_adminListMinimumWages', 'api_adminGetSettings', 'api_adminSetSettings',
-  'api_adminPrintHtml', 'api_adminPurgeExpired',
+  'api_adminGetSettings', 'api_adminSetSettings',
+  'api_adminPrintHtml', 'api_adminPurgeExpired', 'api_adminSeedDemo', 'api_adminActAsDemoStudent',
 ];
 const OTHER_PUBLIC = ['doGet', 'setupInitial', 'backupMonthly', 'installTriggers', 'evaluateMonth'];
 
@@ -106,4 +105,15 @@ test('乱数に Math.random を使わない（Utilities.getUuid を使う）', (
     if (!/\.js$/.test(f.name)) continue;
     assert.doesNotMatch(fs.readFileSync(f.full, 'utf8'), /Math\.random/, f.name);
   }
+});
+
+test('画面の部品ファイルに埋め込み記号（<?!= ?>）があるなら、テンプレートとして評価して読み込む（2026-09-30 追加）', () => {
+  // createHtmlOutputFromFile で読み込むと記号がそのまま残り、本物の GAS で画面の JavaScript が動かなくなる。
+  const parts = srcFiles().filter((f) => /\.html$/.test(f.name) && f.name !== 'index.html')
+    .filter((f) => fs.readFileSync(f.full, 'utf8').includes('<?'));
+  if (!parts.length) return;
+  const code = srcFiles().filter((f) => /\.js$/.test(f.name)).map((f) => fs.readFileSync(f.full, 'utf8')).join('\n');
+  const include = /function include_\([^)]*\)\s*\{[\s\S]*?\n\}/.exec(code);
+  assert.ok(include, 'include_ が無い');
+  assert.match(include[0], /createTemplateFromFile\([^)]*\)\s*\.evaluate\(\)/, parts.map((f) => f.name).join(', '));
 });

@@ -15,9 +15,6 @@ const JA_FIXED = {
   'error.NO_PERMIT': '許可未確認',
   'error.PERMIT_EXPIRED': '許可期限切れ',
   'error.NOT_ENROLLED': '在籍対象外',
-  'error.WAGE_LOW': '時給不足',
-  'error.WORKPLACE_PENDING': '勤務先要確認',
-  'error.WORKPLACE_BANNED': '勤務不可',
   'error.MINOR_NIGHT': '18歳未満深夜',
   'error.MINOR_OVER': '18歳未満時間超過',
   'error.MISSING': '入力不足',
@@ -27,7 +24,6 @@ const JA_FIXED = {
   'error.INVALID_TIME': '時刻不正',
   'error.SHIFT_OVERLAP': '時間重複',
   'error.SHIFT_TOO_LONG': '16時間超',
-  'error.MINWAGE_MISSING': '最低賃金未登録',
   'error.BUSY': '混雑中。1分後に再試行',
   'error.DEADLINE_PASSED': '締切済み',
 };

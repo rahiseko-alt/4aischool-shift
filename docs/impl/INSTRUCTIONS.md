@@ -23,7 +23,7 @@
 ## 第1章 作るもの
 
 Google Apps Script（GAS）の Web アプリ。Google スプレッドシートを保存先にする。
-学生が翌月のアルバイト予定を入力して確定し、月末に実績を確認する。法令の検算（28時間・長期休業8時間・18歳未満・最低賃金など）はサーバが行う。管理者は管理ボードで全体を見る。
+学生が翌月のアルバイト予定を入力して確定し、月末に実績を確認する。法令の検算（28時間・長期休業8時間・18歳未満など）はサーバが行う。勤務先・時給・給与は扱わない（2026-10-01 決定。時間だけを見る）。管理者は管理ボードで全体を見る。
 
 詳しい要件は `docs/impl/SPEC.md`。用語は `CONTEXT.md`。
 
@@ -111,18 +111,16 @@ src/
 - `result.daily` は**対象月の全日**のキーを持つ（働かない日は 0）。前月・翌月の日は入れない。
 - `codes` の各要素は `{ code, severity, date?, shiftIndex? }`。シフトに関するものは `date` と `shiftIndex`、日に関するものは `date`、7日間に関するものは `date` に**その7日間の初日**を入れる。`NO_PERMIT`・`PREV_MONTH_DRAFT`・`ACTUAL_OVER` は `date` なし。
 - 休憩の位置: `休憩開始 = 開始 + floor(((拘束 − 休憩) ÷ 2) ÷ 15) × 15`。`breakStart`・`breakEnd` は `"HH:MM"`（24時を過ぎたら 00:00 から数え直す）。休憩が0分なら両方 `null`。
-- 深夜帯は、開始日の 0:00〜5:00 と 22:00〜翌5:00。早朝手当の時間帯は、開始日と翌日の両方に当てはめる。どちらも休憩と重なる分は数えない。
-- 給与は整数演算: `Math.floor(時給 * 実働 / 60) + Math.floor(時給 * 深夜 / 240) + Math.floor(早朝手当 * 早朝分 / 60)`。`0.25` や `/60*1.25` のように小数を経由しない。
+- 深夜帯は、開始日の 0:00〜5:00 と 22:00〜翌5:00。休憩と重なる分は数えない（18歳未満の深夜の判定に使う）。
 - 7日間の窓は「対象月の初日の6日前」から「対象月の末日」までの各日を初日として作る。
 - 18歳未満の7日40時間は、7日間のうち1日でも18歳未満の日を含む窓に当てはめる。どの日も成人の窓で 2,400 分を超えたら `LABOR_HOURS`。
 - 7日間の検算は、**違反した窓ごとに1つ**コードを出す（最初の1つだけで止めない）。`date` はその窓の初日。
 - `maxRolling7Minutes` は、28時間の検算をしない窓（7日すべてが長期休業日）も含めた、すべての窓の合計の最大値。
 - 時刻は `/^([01]\d|2[0-3]):(00|15|30|45)$/` に合うものだけ（`"9:00"`・`"24:00"`・`"09:10"` は `INVALID_TIME`）。
-- 勤務先IDが `workplaces` に無いシフト（空・存在しない・他の学生のもの）は `MISSING`。
+- シフトは `{ start, end }`。開始・終了のどちらかが無いシフトは `MISSING`。それ以外の項目（古いデータの `workplace` など）は無視する。
 - 在籍状態が `退学` で退学日が空、`卒業` で卒業日が空なら、すべてのシフトが `NOT_ENROLLED`。
 - `workPermission` が false、または true でも `permissionExpires` が空なら（シフトが1件以上あるとき）`NO_PERMIT`。`PERMIT_EXPIRED` は `workPermission` が true で期限があるときだけ見る。
-- 最低賃金の行が同じ日に複数当てはまるときは、`effectiveFrom` が最も新しい行を使う。
-- テスト: `test/core/*.test.js`（93件）。
+- テスト: `test/core/*.test.js`。
 
 ---
 
@@ -156,7 +154,7 @@ src/
 8. 書き込み・監査ログ
 
 **シフトの形（BAD_REQUEST になるもの）**: オブジェクトでない／配列である／キーが `"1"`〜その月の日数の整数表記でない（`"0"`・`"01"`・`"32"` は不可）／値が配列でない／配列の要素がオブジェクトでない／1日に11件以上。
-保存する前に、各シフトを `{ workplace, start, end }` の3項目だけに整え、空の日は消す。
+保存する前に、各シフトを `{ start, end }` の2項目だけに整え（それ以外の項目は捨てる）、空の日は消す。
 
 ### 6.3 認証
 
@@ -183,8 +181,6 @@ src/
 | `api_saveActual` | `token, yearMonth, shifts, expectedVersion` | `{ version, actualStatus: '未確認', evaluation }`（evaluation は実績モード） |
 | `api_confirmActual` | `token, yearMonth, expectedVersion` | `{ version, actualStatus: '予定どおり'\|'修正あり' }` |
 | `api_getHistory` | `token` | `[{ yearMonth, status, actualStatus }]`（自分の月だけ、新しい順） |
-| `api_listWorkplaces` | `token` | `[{ workplaceId, name, prefecture, jobDescription, baseHourlyWage, earlyStart, earlyEnd, earlyPremium, verificationStatus }]` |
-| `api_saveWorkplace` | `token, workplace` | `{ workplaceId }` |
 
 `api_getMonth` の data:
 
@@ -208,7 +204,7 @@ src/
 - `expectedVersion` は、`api_getMonth` で読んだ `version`（行が無ければ 0）。行の version と違えば `VERSION_CONFLICT`。保存に成功するたびに version を1増やす。予定と実績は同じ行・同じ version を使う。
 - 締切: 学生のクラスと年月で締切表（DEADLINES）を引く。行が無ければ `NOT_OPEN`。現在の日時（分まで）が `deadlineAt` より**後**なら締切済み（`deadlineAt` の分ちょうどはまだ受け付ける）。ただし、その行の修正許可 `unlock_until` があり、現在がそれ以前（同じ分を含む）なら受け付ける。
 - 実績の受付期間: 対象月の翌月1日 00:00 から、実績確認期限まで。実績確認期限は締切表の `actualDeadlineAt`、空なら「翌月の（設定 `actualConfirmDefaultDay`）日 23:59」。修正許可は実績にも効く。
-- `api_confirmActual`: 実績を一度も保存していなければ `BAD_REQUEST`。予定が確定済みで、実績と予定が同じ（日ごとに、開始・終了・勤務先の組が並び順を問わず一致）なら「予定どおり」、それ以外は「修正あり」。
+- `api_confirmActual`: 実績を一度も保存していなければ `BAD_REQUEST`。予定が確定済みで、実績と予定が同じ（日ごとに、開始・終了の組が並び順を問わず一致）なら「予定どおり」、それ以外は「修正あり」。
 - 前月データの取得元（evaluateMonth の `prevMonthSource` と `prevMonthDaily`）:
   1. 前月の末日が入学日より前 → `not_applicable`
   2. 前月が学校確定 → `not_applicable`
@@ -216,8 +212,6 @@ src/
   4. 前月の予定が確定済み → 予定の日ごとの実働（`confirmed`）
   5. それ以外 → `none`（`{}`）
 - 翌月データ（`nextMonthDaily`）は、翌月の行に 3 か 4 が当てはまればその日ごとの実働、無ければ `{}`。
-- 勤務先: 新規は必ず `確認中`。既存（自分のもの）を編集したら `確認中` に戻す。クライアントが送った `verificationStatus` は無視する。他の学生の勤務先IDなら `NOT_FOUND`。`禁止` の勤務先は編集できない（`FORBIDDEN`）。
-  検証（`BAD_REQUEST`）: 名前・仕事内容が空でない／都道府県が47都道府県名のどれか（「愛知県」「東京都」「大阪府」「北海道」のように正式名）／時給が1以上の整数／早朝手当の3項目はすべて null かすべて指定／早朝の開始・終了は15分単位で開始＜終了／早朝手当は0以上の整数。
 
 ### 6.5 管理者の窓口
 
@@ -227,8 +221,7 @@ src/
 | `api_adminResetPassword` | `token, studentId` | `{ initialPassword }`（失敗回数・ロックも解除し、変更を強制） |
 | `api_adminUnlockLogin` | `token, studentId` | `null` |
 | `api_adminCreateAdmin` | `token` | `{ loginId, initialPassword }` |
-| `api_adminStudentDetail` | `token, studentId` | `{ student, workplaces: [... + verifiedBy, verifiedAt], months: [{ yearMonth, status, actualStatus }] }` |
-| `api_adminVerifyWorkplace` | `token, workplaceId, 'OK'\|'禁止'` | `null`（確認者 = 管理者のログインID、確認日時を記録） |
+| `api_adminStudentDetail` | `token, studentId` | `{ student, months: [{ yearMonth, status, actualStatus }] }` |
 | `api_adminGrantUnlock` | `token, studentId, yearMonth, until` | `null`（行が無ければ未入力の行を作る。version は変えない） |
 | `api_adminSchoolConfirm` | `token, studentId, yearMonth` | `null` |
 | `api_adminBoard` | `token, yearMonth, { className?, status?, query? }` | 下記 |
@@ -237,24 +230,21 @@ src/
 | `api_adminSetHoliday` | `token, { holidayId?, name, startDate, endDate, schoolYear }` | `{ holidayId }`（開始＞終了は `BAD_REQUEST`） |
 | `api_adminDeleteHoliday` | `token, holidayId` | `null` |
 | `api_adminListHolidays` | `token` | `[{ holidayId, name, startDate, endDate, schoolYear }]` |
-| `api_adminSetMinimumWage` | `token, { prefecture, amount, effectiveFrom, effectiveTo\|null }` | `null`（都道府県＋発効日で上書き） |
-| `api_adminListMinimumWages` | `token` | `[{ prefecture, amount, effectiveFrom, effectiveTo }]`（amount は数値） |
-| `api_adminGetSettings` | `token` | `{ schoolName, retentionMonths, timezone, sessionTtlMinutes, workplaceSlaDays, allowLeaveOfAbsence, actualConfirmDefaultDay }` |
+| `api_adminGetSettings` | `token` | `{ schoolName, retentionMonths, timezone, sessionTtlMinutes, allowLeaveOfAbsence, actualConfirmDefaultDay }` |
 | `api_adminSetSettings` | `token, 一部の項目` | `null` |
 | `api_adminPrintHtml` | `token, { studentIds, yearMonths }` | `{ html }` |
 | `api_adminPurgeExpired` | `token` | `{ deletedRows }` |
 
 - `student` の形: `{ studentId, name, className, birthDate, language: 'ja'|'ne'|'vi', enrollmentDate, graduationDate|null, withdrawalDate|null, status: '在籍'|'休学'|'卒業'|'退学', workPermission: boolean, permissionExpires|null, permissionCheckedAt|null }`。学籍番号・氏名・クラスが空、日付の形が違う、言語・在籍状態が一覧外なら `BAD_REQUEST`。既存の学籍番号なら更新し、ログインIDは変えない。
 - 学校確定: 学生の在籍状態が 退学・休学・卒業 のどれかで、その月が未入力（行が無い、または状態が未入力）のときだけ。それ以外は `FORBIDDEN`。状態を `学校確定` にし、version を1増やす。
-- 設定の既定値: `retentionMonths` 24、`sessionTtlMinutes` 120、`workplaceSlaDays` 3、`allowLeaveOfAbsence` false、`actualConfirmDefaultDay` 10、`timezone` 'Asia/Tokyo'、`schoolName` ''。
-- 最低賃金の一覧は空で出荷する。**実在の金額をコードや初期データに書かない**（金額は稼働前に学校が入力する）。
+- 設定の既定値: `retentionMonths` 24、`sessionTtlMinutes` 120、`allowLeaveOfAbsence` false、`actualConfirmDefaultDay` 10、`timezone` 'Asia/Tokyo'、`schoolName` ''。
 
 `api_adminBoard` の data:
 
 ```
 {
   counts: { students, confirmed, draft, notSubmitted, error, outOfScope },
-  workplacesPending, workplacesOverdue, actualUnconfirmed,
+  actualUnconfirmed,
   rows: [{ studentId, name, className, displayStatus: '確定済'|'下書き'|'未提出'|'対象外',
            errorCodes: [...], actualStatus, actualOver: boolean, updatedAt: 'YYYY-MM-DD HH:MM'|null }]
 }
@@ -267,12 +257,12 @@ src/
 - `actualOver`: 最後に保存した実績に `ACTUAL_OVER` があれば true。
 - `actualUnconfirmed`: 現在が対象月の翌月1日 00:00 以後のときだけ、**ボードの対象の学生（クラスの絞り込み後）**のうち、表示状態が対象外でなく、実績が未確認（スプレッドシートに行が無い学生も未確認）の人数。それより前は 0。
 - 締切を過ぎても、下書きの月の表示状態は `下書き` のまま（未提出にしない）。
-- `workplacesPending`: 全学生の `確認中` の勤務先の数。`workplacesOverdue`: そのうち、登録日の**翌日から今日まで**の営業日（月〜金で、長期休業日でない日）の数が `workplaceSlaDays` を**超えた**もの。
 
 `api_adminPrintHtml`:
 
 - `studentIds` は1〜50件、`yearMonths` は1〜24件。外れたら `BAD_REQUEST`。
 - 学生×月ごとに `<section class="student-page">…</section>` を1つ出す（`class` の値は `student-page` だけにする）。
+- 表は紙の予定表と同じ形: 日付(曜日)・勤務予定時間（開始〜終了）・休憩時間・実働(合計)時間を、予定と実績の両方について1日1行で並べ、最後に「勤務予定時間合計」（と実績の合計）を書く。勤務先・時給・給与の欄は無い。
 - `<style>` に `@page { size: A4 landscape; }` と `.student-page { break-after: page; }` を**この形のまま**入れる（`@page` の中に余白などを足さない。足したい指定は別の規則に書く）。
 - 予定と実績を並べ、実績の超過日は網掛けにする。学校確定の月は「対象外」と表示する。
 - 学生の氏名など、保存されている文字は**必ず** `& < > " '` をエスケープする。
@@ -306,11 +296,9 @@ ShiftDB の各シートの1行目は見出し（列名）にする。列の並�
 | --- | --- |
 | STUDENTS | student_id, login_id, name, class, birth_date, language, enrollment_date, graduation_date, withdrawal_date, status, work_permission, permission_expires, permission_checked_at, created_at, updated_at |
 | USERS | login_id, role, student_id, password_salt, password_hash, hash_iterations, force_password_change, failed_login_count, locked_until, created_at |
-| WORKPLACES | workplace_id, student_id, name, prefecture, job_description, base_hourly_wage, early_start, early_end, early_premium, verification_status, verified_by, verified_at, created_at, active |
-| MONTHLY_SUBMISSIONS | submission_id, student_id, year_month, status, shift_json, actual_json, actual_status, total_minutes, max_rolling7_minutes, estimated_salary, validation_codes, actual_total_minutes, actual_max_rolling7_minutes, actual_codes, version, confirmed_at, updated_at, unlock_until |
+| MONTHLY_SUBMISSIONS | submission_id, student_id, year_month, status, shift_json, actual_json, actual_status, total_minutes, max_rolling7_minutes, validation_codes, actual_total_minutes, actual_max_rolling7_minutes, actual_codes, version, confirmed_at, updated_at, unlock_until |
 | SCHOOL_HOLIDAYS | holiday_id, name, start_date, end_date, school_year |
 | DEADLINES | year_month, class, deadline_at, actual_deadline_at |
-| MINIMUM_WAGES | prefecture, amount, effective_from, effective_to |
 | SETTINGS | key, value |
 | SESSIONS | token_hash, login_id, role, expires_at, created_at |
 
@@ -319,7 +307,7 @@ AuditLog スプレッドシートの `AUDIT_LOG` シートは、**この列・�
 `timestamp, user_id, role, action, student_id, year_month, version, details`
 
 - `timestamp` は `"YYYY-MM-DD HH:MM"`、`user_id` は操作した人のログインID、`role` は `student`／`admin`。
-- `action` は次のどれか: `SAVE_DRAFT`・`CONFIRM`・`ACTUAL_SAVE`・`ACTUAL_CONFIRM`・`LOGIN_OK`・`LOGIN_FAIL`・`PASSWORD_CHANGE`・`PASSWORD_RESET`・`LOGIN_UNLOCK`・`ADMIN_UNLOCK`・`SCHOOL_CONFIRM`・`WORKPLACE_VERIFY`・`QUARTER_CHECK`・`MASTER_UPDATE`・`PURGE`。
+- `action` は次のどれか: `SAVE_DRAFT`・`CONFIRM`・`ACTUAL_SAVE`・`ACTUAL_CONFIRM`・`LOGIN_OK`・`LOGIN_FAIL`・`PASSWORD_CHANGE`・`PASSWORD_RESET`・`LOGIN_UNLOCK`・`ADMIN_UNLOCK`・`SCHOOL_CONFIRM`・`QUARTER_CHECK`・`MASTER_UPDATE`・`PURGE`。
 - 保存・確定・学校確定の行には、書き込み後の `version` を入れる。
 - パスワード・トークン・秘密鍵を、どのシートにもログにも書かない（テストが全セルを検査する）。
 
@@ -350,26 +338,28 @@ AuditLog スプレッドシートの `AUDIT_LOG` シートは、**この列・�
 
 - 言語切替（日本語｜नेपाली｜Tiếng Việt）を上部に置く。訳が無い語は日本語で表示する。
 - 上部に対象月・学籍番号・氏名・提出期限（`deadlineAt`）。
-- 勤務先の一覧（名前・都道府県・仕事内容・時給・確認状態）と「勤務先を追加」。確認中なら「勤務先要確認」。
-- 31日分を日ごとのカードで縦に並べる（幅 768px 以上では表）。**曜日は日付から計算する**（見本の曜日は1日ずれていて誤り）。
-- 1日に複数行。行ごとに勤務先（選択）・開始・終了（`<input type="time" step="900">`）。休憩・実働・深夜・予定給与は表示だけ。
-- 長期休業日（`holidays`）の日は、カード・行全体を赤枠にし「長期休暇」とだけ表示する。
+- 学校の紙の予定表と同じ形の表にする（2026-10-01 決定）。1日1行: `1(土)` ｜ 勤務予定時間 `<input type="time" step="900">`〜`<input type="time" step="900">` ｜ 休憩 ｜ 実働。最後の行に「勤務予定時間合計: 72時間」。**曜日は日付から計算する**（見本の曜日は1日ずれていて誤り）。勤務先の欄は無い。
+- 休憩・実働・月の合計は、入力のたびに画面の中で計算して表示する（休憩のきまりはサーバと同じ。終了が開始以前なら翌日の終了）。「1時間」「45分」「7時間30分」の形で書く。確定できるかはサーバの返事で決める。
+- 開始・終了の両方を空にした日は勤務なし。片方だけなら保存時にサーバが「入力不足」で止める。古いデータで1日に2件以上あれば、その日の行を件数分並べる。
+- 日付のあるコードはその日の行の下に、日付の無いコードは表の上に出す。
+- 長期休業日（`holidays`）の日は、行全体に色を付け「長期休暇」と表示する。土日は日付の色を変える。
+- スマホ（幅 360px）で横にはみ出さないこと。
 - ボタンは「途中保存」と「確定」。締切済み（`closed`）なら入力欄とボタンを無効にし「締切済み」とだけ表示する（サーバでも拒否される）。
-- 実績確認（`actual.open` のとき）: 日ごとに「予定どおり」「修正」を選ぶ。「予定どおり」は予定のシフトを写す。最後に保存と確認。
+- 実績確認（`actual.open` のとき）: 予定と同じ1日1行の表（日付・勤務時間・休憩・実働、最後に合計）。行ごとに予定を小さく表示し、「予定どおり」で予定のシフトを写す。最後に保存と確認。
 - 提出履歴の一覧。
 
 ### 9.3 管理画面（日本語だけ）
 
-- 対象月・クラス・状態・検索、件数（学生数・確定済・下書き・未提出・エラー・対象外）、勤務先の確認待ち（うち期限超え）、実績未確認。
+- 対象月・クラス・状態・検索、件数（学生数・確定済・下書き・未提出・エラー・対象外）、実績未確認。
 - 学生一覧（学籍番号・氏名・クラス・状態・エラー・実績・更新日・印刷）。実績超過の学生は赤。
-- 学生詳細（学生情報の編集、勤務先の確認、修正許可、学校確定、パスワード再発行、ロック解除、2年間一括印刷）。
-- 四半期確認、締切の設定、長期休業の設定、最低賃金の設定、学校設定、学生の追加、保存期限超過データの削除、クラス一括印刷（50名ずつ）、表示中を一括印刷。
+- 学生詳細（学生情報の編集、修正許可、学校確定、パスワード再発行、ロック解除、2年間一括印刷）。
+- 四半期確認、締切の設定、長期休業の設定、学校設定、学生の追加、保存期限超過データの削除、クラス一括印刷（50名ずつ）、表示中を一括印刷。
 - 印刷は `api_adminPrintHtml` の HTML を新しいウィンドウに書いて `print()` を呼ぶ。
 
 ### 9.4 画面見本（mockup-v1.webp）について
 
 色（紺と金）、角丸のカード、ボタンの配置は参考にしてよい。次の点は**見本が誤り**なので真似しない:
-曜日（2026/10/1 は木曜）、学籍番号でのログイン、PDF ボタン、1日1行・勤務先が上部に1つだけ、200名一括印刷、言語切替が無いこと、実績確認と勤務先確認の表示が無いこと、長期休業でない日（10/5）の赤枠、見本内の氏名・金額などの具体的な値。
+曜日（2026/10/1 は木曜）、学籍番号でのログイン、PDF ボタン、200名一括印刷、言語切替が無いこと、実績確認の表示が無いこと、長期休業でない日（10/5）の赤枠、見本内の氏名・金額などの具体的な値。
 
 ---
 
@@ -381,7 +371,7 @@ AuditLog スプレッドシートの `AUDIT_LOG` シートは、**この列・�
 | --- | --- | --- | --- |
 | 1 | `appsscript.json`、`Core.js`（evaluateMonth） | `node --test "test/core/*.test.js"` | `段階1: 計算の心臓部` |
 | 2 | `Util.js`・`Db.js`・`Auth.js`（setupInitial・ログイン・ログアウト・パスワード変更）、`api_adminUpsertStudent`・`api_adminResetPassword`・`api_adminUnlockLogin`・`api_getMonth`（読むだけ）、**第6章の公開関数すべての「入口」**（下記） | `node --test test/api/auth.test.js` | `段階2: 認証` |
-| 3 | 学生の窓口の残り（保存・確定・実績・勤務先・履歴）、管理者の `api_adminSetDeadline`・`api_adminSetMinimumWage`・`api_adminListMinimumWages`・`api_adminGetSettings`・`api_adminSetSettings`・`api_adminVerifyWorkplace`・`api_adminGrantUnlock`・`api_adminSchoolConfirm` | `node --test test/api/submission.test.js test/api/actual.test.js test/api/permissions.test.js` | `段階3: 学生の窓口` |
+| 3 | 学生の窓口の残り（保存・確定・実績・履歴）、管理者の `api_adminSetDeadline`・`api_adminGetSettings`・`api_adminSetSettings`・`api_adminGrantUnlock`・`api_adminSchoolConfirm` | `node --test test/api/submission.test.js test/api/actual.test.js test/api/permissions.test.js` | `段階3: 学生の窓口` |
 | 4 | 管理者の窓口の残り（ボード・学生詳細・四半期確認・長期休業・管理者の追加・保存期限）、`Print.js` | `node --test test/api/admin.test.js` | `段階4: 管理者の窓口` |
 | 5 | `I18n.js`、`Code.js`、`Backup.js` | `npm test`（全部） | `段階5: 辞書と公開関数` |
 | 6 | `index.html`・`client_css.html`・`client_js.html` | `npm test`（全部。画面を足しても落ちないこと） | `段階6: 画面` |
@@ -426,6 +416,6 @@ AuditLog スプレッドシートの `AUDIT_LOG` シートは、**この列・�
 2. エディタで `setupInitial` を実行し、実行ログの `INITIAL_ADMIN` の行から管理者のログインIDと初期パスワードを控える。
 3. Drive にバックアップ用フォルダを作り、そのIDを Script Properties の `BACKUP_FOLDER_ID` に入れて、`installTriggers` を実行する。
 4. 「ウェブアプリとしてデプロイ」（次のユーザーとして実行: 自分、アクセス: 全員）。
-5. 管理画面で、最低賃金（厚生労働省の最新の一覧から）・長期休業・締切・学生を登録する。
-6. 実機確認（iOS Safari と Android Chrome）: ログイン → パスワード変更 → 勤務先の追加 → 31日分の入力 → 22:00〜02:00 の入力 → 途中保存 → 確定 → 3言語の切替、の順に確かめる項目の一覧。
+5. 管理画面で、長期休業・締切・学生を登録する。
+6. 実機確認（iOS Safari と Android Chrome）: ログイン → パスワード変更 → 31日分の入力 → 22:00〜02:00 の入力 → 途中保存 → 確定 → 3言語の切替、の順に確かめる項目の一覧。
 7. 締切前の負荷確認: 30人程度が同時に保存したときに「混雑中」以外のエラーが出ないか確かめる手順。

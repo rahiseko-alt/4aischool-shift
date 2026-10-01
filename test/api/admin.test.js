@@ -1,10 +1,10 @@
 'use strict';
-// 管理ボード・勤務先の確認期限・マスタ・四半期確認・印刷・保存期限。
+// 管理ボード・マスタ・四半期確認・印刷・保存期限。
 // 実装役はこのファイルを変更してはならない。
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { boot, ok, world, addStudent, addWorkplace, standardMasters, sh, everyDay, auditRows } = require('../helpers/api');
+const { boot, ok, world, addStudent, standardMasters, sh, everyDay, auditRows } = require('../helpers/api');
 
 const YM = '2026-10';
 
@@ -12,12 +12,11 @@ const YM = '2026-10';
 function classroom() {
   const w = world();
   const s2 = addStudent(w, { studentId: '251002', name: 'スズキ タロウ' });
-  const wp2 = addWorkplace(w, s2);
   const s3 = addStudent(w, { studentId: '251003', name: 'タン グエン' });
   const s4 = addStudent(w, { studentId: '251004', name: 'ラマ ビケシュ', status: '退学', withdrawalDate: '2026-10-15' });
   const s5 = addStudent(w, { studentId: '251005', name: 'グルン サン', className: 'B' });
-  ok(w.api('api_confirm', w.st.token, YM, { '1': [sh(w.wp, '09:00', '12:00')] }, 0));
-  ok(w.api('api_saveDraft', s2.token, YM, everyDay(9, 13, sh(wp2, '09:00', '18:00')), 0));
+  ok(w.api('api_confirm', w.st.token, YM, { '1': [sh('09:00', '12:00')] }, 0));
+  ok(w.api('api_saveDraft', s2.token, YM, everyDay(9, 13, sh('09:00', '18:00')), 0));
   ok(w.api('api_adminSchoolConfirm', w.admin, s4.studentId, YM));
   return Object.assign(w, { s2, s3, s4, s5 });
 }
@@ -88,49 +87,21 @@ test('管理ボード: 実績が法令の上限を超えた学生は actualOver 
   const w = classroom();
   w.at('2026-11-02 10:00');
   const m = ok(w.api('api_getMonth', w.s2.token, YM));
-  const wp2 = ok(w.api('api_listWorkplaces', w.s2.token))[0].workplaceId;
-  ok(w.api('api_saveActual', w.s2.token, YM, everyDay(9, 13, sh(wp2, '09:00', '18:00')), m.version));
+  ok(w.api('api_saveActual', w.s2.token, YM, everyDay(9, 13, sh('09:00', '18:00')), m.version));
   const b = ok(w.api('api_adminBoard', w.admin, YM, {}));
   assert.equal(b.rows.find((r) => r.studentId === '251002').actualOver, true);
   assert.equal(b.rows.find((r) => r.studentId === '251001').actualOver, false);
 });
 
-test('勤務先の確認待ち: 件数と、3営業日を超えた件数（土日と長期休業日は数えない）', () => {
-  const w = world();
-  w.at('2026-10-02 10:00'); // 金曜
-  addWorkplace(w, w.st, { name: '確認待ち' }, false);
-  w.at('2026-10-07 10:00'); // 水曜: 翌営業日から数えて 月・火・水 = 3営業日
-  let b = ok(w.api('api_adminBoard', w.admin, YM, {}));
-  assert.equal(b.workplacesPending, 1);
-  assert.equal(b.workplacesOverdue, 0);
-  w.at('2026-10-08 10:00'); // 木曜: 4営業日目
-  b = ok(w.api('api_adminBoard', w.admin, YM, {}));
-  assert.equal(b.workplacesOverdue, 1);
-});
-
-test('勤務先の確認待ち: 長期休業日は営業日に数えない', () => {
-  const w = world();
-  ok(w.api('api_adminSetHoliday', w.admin, { name: '秋休み', startDate: '2026-10-05', endDate: '2026-10-06', schoolYear: 2026 }));
-  w.at('2026-10-02 10:00');
-  addWorkplace(w, w.st, { name: '確認待ち' }, false);
-  w.at('2026-10-09 10:00'); // 水・木・金 = 3営業日
-  assert.equal(ok(w.api('api_adminBoard', w.admin, YM, {})).workplacesOverdue, 0);
-});
-
-test('勤務先を OK にすると確認者と確認日が残り、監査ログに WORKPLACE_VERIFY が残る', () => {
-  const w = world();
-  const detail = ok(w.api('api_adminStudentDetail', w.admin, w.st.studentId));
-  const wp = detail.workplaces.find((x) => x.workplaceId === w.wp);
-  assert.equal(wp.verificationStatus, 'OK');
-  assert.equal(wp.verifiedBy, w.adminLoginId);
-  assert.match(wp.verifiedAt, /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
-  assert.ok(auditRows(w).some((r) => r.action === 'WORKPLACE_VERIFY'));
-});
-
-test('勤務先の確認は OK・禁止 以外を受け付けない（BAD_REQUEST）', () => {
-  const w = world();
-  assert.equal(w.api('api_adminVerifyWorkplace', w.admin, w.wp, '確認中').error, 'BAD_REQUEST');
-  assert.equal(w.api('api_adminVerifyWorkplace', w.admin, 'no-such-id', 'OK').error, 'NOT_FOUND');
+test('管理ボード・学生詳細に勤務先の項目は無い（2026-10-01 勤務先の廃止）', () => {
+  const w = classroom();
+  const b = ok(w.api('api_adminBoard', w.admin, YM, {}));
+  assert.equal('workplacesPending' in b, false);
+  assert.equal('workplacesOverdue' in b, false);
+  for (const r of b.rows) assert.equal('pendingWorkplaces' in r, false);
+  const d = ok(w.api('api_adminStudentDetail', w.admin, w.st.studentId));
+  assert.equal('workplaces' in d, false);
+  assert.equal(d.student.studentId, '251001');
 });
 
 // ---- マスタが評価に反映される ----
@@ -138,13 +109,13 @@ test('勤務先の確認は OK・禁止 以外を受け付けない（BAD_REQUES
 test('長期休業を登録すると、学生の評価に反映される（8時間15分で OVER_8H_HOLIDAY）', () => {
   const w = world();
   ok(w.api('api_adminSetHoliday', w.admin, { name: '冬季休業', startDate: '2026-12-24', endDate: '2027-01-07', schoolYear: 2026 }));
-  const r = w.api('api_confirm', w.st.token, '2026-12', { '25': [sh(w.wp, '09:00', '18:15')] }, 0);
+  const r = w.api('api_confirm', w.st.token, '2026-12', { '25': [sh('09:00', '18:15')] }, 0);
   assert.equal(r.error, 'VALIDATION_FAILED');
   assert.ok(r.details.codes.some((c) => c.code === 'OVER_8H_HOLIDAY'));
   const list = ok(w.api('api_adminListHolidays', w.admin));
   assert.equal(list.length, 1);
   ok(w.api('api_adminDeleteHoliday', w.admin, list[0].holidayId));
-  ok(w.api('api_confirm', w.st.token, '2026-12', { '25': [sh(w.wp, '09:00', '18:15')] }, 0));
+  ok(w.api('api_confirm', w.st.token, '2026-12', { '25': [sh('09:00', '18:15')] }, 0));
 });
 
 test('長期休業の開始日が終了日より後なら BAD_REQUEST', () => {
@@ -152,29 +123,13 @@ test('長期休業の開始日が終了日より後なら BAD_REQUEST', () => {
   assert.equal(w.api('api_adminSetHoliday', w.admin, { name: 'x', startDate: '2027-01-07', endDate: '2026-12-24', schoolYear: 2026 }).error, 'BAD_REQUEST');
 });
 
-test('最低賃金を上げると、それより低い時給の予定は確定できなくなる（WAGE_LOW）', () => {
-  const w = world();
-  ok(w.api('api_adminSetMinimumWage', w.admin, { prefecture: '愛知県', amount: 1250, effectiveFrom: '2026-10-18', effectiveTo: null }));
-  const r = w.api('api_confirm', w.st.token, YM, { '18': [sh(w.wp, '09:00', '12:00')] }, 0);
-  assert.ok(r.details.codes.some((c) => c.code === 'WAGE_LOW'));
-  ok(w.api('api_confirm', w.st.token, YM, { '17': [sh(w.wp, '09:00', '12:00')] }, 0));
-});
-
-test('最低賃金: 同じ都道府県・同じ発効日で登録し直すと上書きされる', () => {
-  const w = world();
-  ok(w.api('api_adminSetMinimumWage', w.admin, { prefecture: '愛知県', amount: 1105, effectiveFrom: '2025-10-18', effectiveTo: null }));
-  const rows = ok(w.api('api_adminListMinimumWages', w.admin)).filter((x) => x.prefecture === '愛知県');
-  assert.deepEqual(rows.map((x) => x.amount), [1105]);
-});
-
 test('学校設定: 休学の確定可否を切り替えると評価に反映される', () => {
   const w = world();
   const leave = addStudent(w, { studentId: '251080', status: '休学' });
-  const wpL = addWorkplace(w, leave);
-  const r = w.api('api_confirm', leave.token, YM, { '1': [sh(wpL, '09:00', '12:00')] }, 0);
+  const r = w.api('api_confirm', leave.token, YM, { '1': [sh('09:00', '12:00')] }, 0);
   assert.ok(r.details.codes.some((c) => c.code === 'NOT_ENROLLED'));
   ok(w.api('api_adminSetSettings', w.admin, { allowLeaveOfAbsence: true }));
-  ok(w.api('api_confirm', leave.token, YM, { '1': [sh(wpL, '09:00', '12:00')] }, 0));
+  ok(w.api('api_confirm', leave.token, YM, { '1': [sh('09:00', '12:00')] }, 0));
 });
 
 test('学校設定の既定値', () => {
@@ -182,7 +137,8 @@ test('学校設定の既定値', () => {
   const s = ok(w.api('api_adminGetSettings', w.admin));
   assert.equal(s.retentionMonths, 24);
   assert.equal(s.sessionTtlMinutes, 120);
-  assert.equal(s.workplaceSlaDays, 3);
+  assert.equal('workplaceSlaDays' in s, false);
+  assert.equal(w.api('api_adminSetSettings', w.admin, { workplaceSlaDays: 3 }).error, 'BAD_REQUEST');
   assert.equal(s.allowLeaveOfAbsence, false);
   assert.equal(s.actualConfirmDefaultDay, 10);
   assert.equal(s.timezone, 'Asia/Tokyo');
@@ -216,7 +172,7 @@ test('四半期確認: 終わりの月を含む3か月分の実績を返し、�
   const w = world();
   w.at('2026-11-02 10:00');
   const m = ok(w.api('api_getMonth', w.st.token, YM));
-  const saved = ok(w.api('api_saveActual', w.st.token, YM, { '1': [sh(w.wp, '09:00', '12:00')] }, m.version));
+  const saved = ok(w.api('api_saveActual', w.st.token, YM, { '1': [sh('09:00', '12:00')] }, m.version));
   ok(w.api('api_confirmActual', w.st.token, YM, saved.version));
   const q = ok(w.api('api_adminQuarterCheck', w.admin, { className: null, endYearMonth: '2026-10' }));
   assert.deepEqual(q.months, ['2026-08', '2026-09', '2026-10']);
