@@ -342,6 +342,10 @@
     // 「確定済み」の札と「前月未確定」の注意は出さない（利用者の判断。確定済みかどうかは提出履歴で分かる）
     var visible = (ev.codes || []).filter(function (c) { return c.severity !== 'admin' && c.code !== 'PREV_MONTH_DRAFT'; });
     el('st-codes').innerHTML = codesHtml(visible.filter(function (c) { return !c.date; }));
+    // 見出しの横に大きく「確定済」か「未確定」（学校確定の月は「対象外」）
+    var cs = el('st-confirm-state');
+    cs.textContent = data.status === '確定済' ? t('label.status.confirmed') : (data.status === '学校確定' ? statusText(data.status) : t('label.notConfirmed'));
+    cs.className = 'confirm-state ' + (data.status === '確定済' ? 'is-confirmed' : (data.status === '学校確定' ? 'is-out' : 'is-unconfirmed'));
 
     el('shifts-table').innerHTML = shiftTableHtml(data.yearMonth, data.shifts || {}, {
       rowClass: 'plan-row', timeLabel: 'label.planTime', totalLabel: 'label.planTotal',
@@ -365,7 +369,8 @@
   }
 
   // 止められた理由を「5日: 時刻の形が違います」のように日付つきで出し、その日の行を赤くする
-  function handleSaveResult(res, errId, msgKey, containerId) {
+  // confirmMode: 確定ボタンのとき。最初に「確定できません。」と書き、その後に理由を並べる
+  function handleSaveResult(res, errId, msgKey, containerId, confirmMode) {
     if (containerId) {
       el(containerId).querySelectorAll('tr.row-error').forEach(function (r) { r.classList.remove('row-error'); });
     }
@@ -380,7 +385,11 @@
           el(containerId).querySelectorAll('tr.day-row[data-day="' + day + '"]').forEach(function (r) { r.classList.add('row-error'); });
         }
       });
-      showMsg(errId, tErr(res.error) + (lines.length ? '：' + lines.join('、') : ''), true);
+      if (confirmMode) {
+        showMsg(errId, t('label.cannotConfirm') + ' ' + (lines.length ? lines.join('、') : tErr(res.error)), true);
+      } else {
+        showMsg(errId, tErr(res.error) + (lines.length ? '：' + lines.join('、') : ''), true);
+      }
       return false;
     }
     showMsg(errId, t(msgKey), false);
@@ -397,7 +406,7 @@
   el('btn-confirm-shift').addEventListener('click', function () {
     hideError('shift-error');
     call('api_confirm', [state.token, state.yearMonth, collectRows('shifts-table', 'plan-row'), state.monthData.version]).then(function (res) {
-      if (handleSaveResult(res, 'shift-error', 'label.confirmedDone', 'shifts-table')) reloadKeepMessage();
+      if (handleSaveResult(res, 'shift-error', 'label.confirmedDone', 'shifts-table', true)) reloadKeepMessage();
     });
   });
 
@@ -474,7 +483,7 @@
   el('btn-confirm-actual').addEventListener('click', function () {
     hideError('actual-error');
     call('api_confirmActual', [state.token, state.yearMonth, state.monthData.version]).then(function (res) {
-      if (handleSaveResult(res, 'actual-error', 'label.confirmedDone', 'actual-table')) reloadKeepMessage();
+      if (handleSaveResult(res, 'actual-error', 'label.confirmedDone', 'actual-table', true)) reloadKeepMessage();
     });
   });
 
@@ -699,7 +708,9 @@
     var html = '<p class="detail-sum">状態 <strong>' + esc(m.status) + '</strong>　予定の合計 <strong>' + esc(dur(m.totalMinutes || 0, true)) + '</strong>' +
       '　実績 <strong>' + esc(m.actualStatus) + '</strong>' + (hasActual ? '　実績の合計 <strong>' + esc(dur(m.actualTotalMinutes || 0, true)) + '</strong>' : '') +
       (m.unlockUntil ? '　修正許可 ' + esc(m.unlockUntil) + ' まで' : '') + '</p>';
-    var codes = (m.codes || []).concat(m.actualCodes || []);
+    // 保存されているコードは文字列（'OVER_28H'）。日付は無いので、どの日かは下の表で見る
+    var codes = (m.codes || []).concat(m.actualCodes || []).map(function (c) { return typeof c === 'string' ? { code: c } : c; })
+      .filter(function (c) { return c.code !== 'PREV_MONTH_DRAFT'; });
     if (codes.length) {
       var seen = {};
       html += '<p class="detail-codes">' + codes.map(function (c) {

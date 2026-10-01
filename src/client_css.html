@@ -883,6 +883,13 @@ a.adm-stat.is-active { color: var(--navy); text-decoration: underline; font-weig
 .history-hint { font-size: 0.8rem; color: var(--text-sub); margin-bottom: 0.4rem; }
 .history-table tr.history-row { cursor: pointer; }
 .history-table tr.history-row:hover td { background: var(--navy-subtle); }
+.section-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; flex-wrap: wrap;
+  margin-bottom: 1rem; padding-bottom: 0.5rem; border-bottom: 1px solid var(--border); }
+.section-head .card-title { margin: 0; padding: 0; border: none; }
+.confirm-state { font-size: 1.15rem; font-weight: 800; padding: 0.2rem 0.8rem; border-radius: 4px; white-space: nowrap; border: 2px solid; }
+.confirm-state.is-confirmed { color: var(--success); border-color: var(--success); background: var(--success-bg); }
+.confirm-state.is-unconfirmed { color: var(--danger); border-color: var(--danger); background: var(--danger-bg); }
+.confirm-state.is-out { color: var(--text-sub); border-color: var(--border); background: #f8fafc; }
 .ph-name { display: block; font-size: 0.65rem; color: var(--danger); line-height: 1.2; white-space: nowrap; }
 .detail-sum { font-size: 0.9rem; margin: 0.5rem 0; }
 .detail-codes { margin: 0.25rem 0 0.5rem; }

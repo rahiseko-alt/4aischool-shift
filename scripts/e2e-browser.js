@@ -190,12 +190,15 @@ html = html.replace('<head>', '<head><script>' + shim + '</script>');
   if ((await totalText()) !== '勤務予定時間合計: 20時間15分') throw new Error('読み込み直した合計: ' + (await totalText()));
 
   step('学生で確定: 1日8時間超の日があると止まり、その日が赤くなる。直せば確定できる');
+  if ((await page.textContent('#st-confirm-state')) !== '未確定') throw new Error('確定前に「未確定」が出ない: ' + (await page.textContent('#st-confirm-state')));
   await page.click('#btn-confirm-shift'); await wait(); await wait();
+  if (!(await page.textContent('#shift-error')).startsWith('確定できません。')) throw new Error('「確定できません。」で始まらない: ' + (await page.textContent('#shift-error')));
   if (!(await page.textContent('#shift-error')).includes('2日: 1日8時間超過')) throw new Error('8時間超で止まらない: ' + (await page.textContent('#shift-error')));
   if (!(await row(2).getAttribute('class')).includes('row-error')) throw new Error('8時間超の日が赤くならない');
   await row(2).locator('.sh-end').fill('18:00');
   await page.click('#btn-confirm-shift'); await wait(); await wait();
   if ((await page.textContent('#shift-error')) !== '確定済み') throw new Error('確定の知らせ: ' + (await page.textContent('#shift-error')));
+  if ((await page.textContent('#st-confirm-state')) !== '確定済') throw new Error('確定後に「確定済」が出ない: ' + (await page.textContent('#st-confirm-state')));
 
   // 時計を進めるとセッション（120分）が切れる。画面がログインに戻ることも確かめ、入り直す。
   const relogin = async () => {
