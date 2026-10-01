@@ -46,6 +46,11 @@
   padding: 0;
 }
 
+html {
+  -webkit-text-size-adjust: 100%; /* iPhone を横にしたときに文字が勝手に大きくならないように */
+  text-size-adjust: 100%;
+}
+
 body {
   font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   background-color: var(--bg);
@@ -558,6 +563,7 @@ button:disabled {
 /* 1日1行の予定表（紙の予定表と同じ形: 日付(曜日) | 開始〜終了 | 休憩 | 実働） */
 .shift-table-wrap {
   margin-bottom: 1rem;
+  overflow-x: auto; /* 文字を大きくした端末でも右が切れず、横にずらして見られる */
 }
 
 .shift-table {
@@ -583,9 +589,9 @@ button:disabled {
   line-height: 1.25;
 }
 
-.shift-table .col-date { width: 3.2rem; }
-.shift-table .col-break { width: 3.1rem; }
-.shift-table .col-work { width: 4.4rem; }
+.shift-table .col-date { width: 17%; }
+.shift-table .col-break { width: 16%; }
+.shift-table .col-work { width: 19%; }
 
 .shift-table td.col-date {
   text-align: left;

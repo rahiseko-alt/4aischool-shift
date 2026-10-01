@@ -280,9 +280,9 @@
         }
         html += '</td>';
         html += '<td class="col-time"><div class="time-pair">' +
-          '<input type="text" class="sh-start" inputmode="numeric" maxlength="5" autocomplete="off" value="' + esc(sh.start || '') + '"' + dis + '>' +
+          '<input type="text" class="sh-start" inputmode="numeric" maxlength="5" size="5" autocomplete="off" value="' + esc(sh.start || '') + '"' + dis + '>' +
           '<span class="shift-row-sep">〜</span>' +
-          '<input type="text" class="sh-end" inputmode="numeric" maxlength="5" autocomplete="off" value="' + esc(sh.end || '') + '"' + dis + '>' +
+          '<input type="text" class="sh-end" inputmode="numeric" maxlength="5" size="5" autocomplete="off" value="' + esc(sh.end || '') + '"' + dis + '>' +
           '</div>';
         if (opts.planShifts && i === 0) {
           var ps = opts.planShifts[String(d)] || [];
