@@ -522,10 +522,10 @@
   }
 
   // 集計は1行の小さな札。状態の札を押すとその状態で絞り込む（もう一度押すと解除）。
-  function chip(label, value, status, cls) {
+  function chip(label, value, status, cls, title) {
     var active = status && el('admin-status-filter').value === status;
     var inner = esc(label) + ' <strong>' + esc(value) + '</strong>';
-    if (!status) return '<span class="adm-stat ' + (cls || '') + '">' + inner + '</span>';
+    if (!status) return '<span class="adm-stat ' + (cls || '') + '"' + (title ? ' title="' + esc(title) + '"' : '') + '>' + inner + '</span>';
     return '<a href="#" class="adm-stat ' + (cls || '') + (active ? ' is-active' : '') + '" data-status="' + esc(status) + '">' + inner + '</a>';
   }
 
@@ -534,7 +534,7 @@
     el('admin-counts').innerHTML =
       chip('学生', c.students) + chip('確定済', c.confirmed, '確定済') + chip('下書き', c.draft, '下書き') +
       chip('未提出', c.notSubmitted, '未提出') + chip('エラー', c.error, null, c.error ? 'stat-error' : '') +
-      chip('対象外', c.outOfScope, '対象外') + chip('実績未確認', data.actualUnconfirmed, null, data.actualUnconfirmed ? 'stat-warn' : '');
+      chip('対象外', c.outOfScope, '対象外') + chip('実績未確認', data.actualUnconfirmed, null, data.actualUnconfirmed ? 'stat-warn' : '', '月が終わったあと、実際に働いた時間（実績）をまだ確認していない学生の数');
 
     var html = '<table class="admin-table"><thead><tr><th>学籍番号</th><th>氏名</th><th class="col-wide">クラス</th><th>状態</th><th>エラー</th>' +
       '<th class="col-wide">実績</th><th class="col-wide">更新</th><th></th></tr></thead><tbody>';
@@ -779,16 +779,16 @@
     });
   }
 
-  // ---- 締切 ----
+  // ---- 入力期限 ----
   el('btn-open-deadline').addEventListener('click', function () {
     var fields = [
       { key: 'yearMonth', label: '対象年月', type: 'ym', value: state.yearMonth, required: true },
       { key: 'className', label: 'クラス', type: 'text', required: true },
-      { key: 'deadlineAt', label: '予定の締切（YYYY-MM-DD HH:MM）', type: 'datetime', required: true },
+      { key: 'deadlineAt', label: '予定の入力期限（YYYY-MM-DD HH:MM）', type: 'datetime', required: true },
       { key: 'actualDeadlineAt', label: '実績確認の期限（空欄なら翌月の既定日 23:59）', type: 'datetime' }
     ];
-    openForm('締切の設定', fields, '保存', function (v) {
-      call('api_adminSetDeadline', [state.token, v]).then(function (r) { if (r.ok) { closeDialog(); alert('締切を保存しました。'); } else formError(r); });
+    openForm('入力期限設定', fields, '保存', function (v) {
+      call('api_adminSetDeadline', [state.token, v]).then(function (r) { if (r.ok) { closeDialog(); alert('入力期限を保存しました。'); } else formError(r); });
     });
   });
 
@@ -806,7 +806,7 @@
         return '<div class="month-row"><div>' + esc(h.name) + ' ' + esc(h.startDate) + '〜' + esc(h.endDate) + '（' + esc(h.schoolYear) + '年度）</div>' +
           '<div><button type="button" class="btn-danger btn-sm" data-act="del" data-id="' + esc(h.holidayId) + '">削除</button></div></div>';
       }).join('') || '<p>登録なし</p>';
-      openDialog('長期休業', '<h4>登録済み</h4>' + list + '<h4>追加</h4>' + formHtml(fields) +
+      openDialog('長期休業設定', '<h4>登録済み</h4>' + list + '<h4>追加</h4>' + formHtml(fields) +
         '<div class="dialog-actions"><button type="button" class="btn-primary" data-act="add">追加</button></div>');
       dialogHandlers = {
         del: function (b) {
@@ -834,21 +834,14 @@
         { key: 'actualConfirmDefaultDay', label: '実績確認の既定の期限日（翌月の何日、1〜28）', type: 'number', value: s.actualConfirmDefaultDay, required: true },
         { key: 'allowLeaveOfAbsence', label: '休学中でも確定できる', type: 'bool', value: s.allowLeaveOfAbsence }
       ];
-      openForm('学校設定', fields, '保存', function (v) {
+      openForm('その他 設定', fields, '保存', function (v) {
         if (v.schoolName === null) v.schoolName = '';
-        call('api_adminSetSettings', [state.token, v]).then(function (r) { if (r.ok) { closeDialog(); alert('学校設定を保存しました。'); } else formError(r); });
+        call('api_adminSetSettings', [state.token, v]).then(function (r) { if (r.ok) { closeDialog(); alert('設定を保存しました。'); } else formError(r); });
       });
     });
   });
 
-  // ---- 管理者の追加・保存期限超過の削除 ----
-  el('btn-create-admin').addEventListener('click', function () {
-    if (!confirm('管理者のアカウントを1つ追加します。')) return;
-    call('api_adminCreateAdmin', [state.token]).then(function (res) {
-      if (adminAlert(res)) openDialog('新しい管理者（この画面を閉じると二度と表示されません）', '<p>ログインID: <strong>' + esc(res.data.loginId) + '</strong></p><p>初期パスワード: <strong>' + esc(res.data.initialPassword) + '</strong></p>');
-    });
-  });
-
+  // ---- 保存期限超過の削除 ----
   el('btn-purge-expired').addEventListener('click', function () {
     call('api_adminGetSettings', [state.token]).then(function (res) {
       if (!adminAlert(res)) return;
@@ -862,7 +855,7 @@
   // ---- 生徒モード（試用の学生 DEMO の画面に入る。管理者のトークンは手元に残し、「管理者に戻る」で戻す） ----
   var DEMO_PICK = [['DEMO-A', '生徒A（日本語）'], ['DEMO-B', '生徒B（ネパール語）'], ['DEMO-C', '生徒C（ベトナム語）']];
   el('btn-student-mode').addEventListener('click', function () {
-    var html = '<p>試用の生徒（クラス DEMO）の画面に入ります。初めてのときは、試用の生徒と締切が自動で入ります。</p>';
+    var html = '<p>試用の生徒（クラス DEMO）の画面に入ります。初めてのときは、試用の生徒と入力期限が自動で入ります。</p>';
     DEMO_PICK.forEach(function (d) {
       html += '<p><button data-act="actas" data-id="' + esc(d[0]) + '">' + esc(d[1]) + '</button></p>';
     });
