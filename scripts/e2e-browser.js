@@ -219,7 +219,8 @@ html = html.replace('<head>', '<head><script>' + shim + '</script>');
   if (!(await page.textContent('#actual-table .month-total')).includes('20時間15分')) throw new Error('実績の合計: ' + (await page.textContent('#actual-table .month-total')));
   await page.click('#btn-save-actual'); await wait(); await wait();
   await page.click('#btn-confirm-actual'); await wait(); await wait();
-  if (!(await page.textContent('#actual-codes')).includes('予定どおり')) throw new Error('実績の状態: ' + (await page.textContent('#actual-codes')));
+  if (!(await page.textContent('#actual-error')).includes('確定済み')) throw new Error('実績の確認: ' + (await page.textContent('#actual-error')));
+  if ((await page.textContent('#actual-codes')).includes('予定どおり') || (await page.textContent('#history-list')).includes('未確認')) throw new Error('生徒に実績確認の進み具合が出ている');
 
   step('管理者: 学校設定・印刷（ポップアップ）');
   await page.click('#btn-logout-st');

@@ -421,8 +421,8 @@
     var plan = data.shifts || {};
     var aev = actual.evaluation || { shifts: {}, codes: [] };
 
-    el('actual-codes').innerHTML = '<div class="badge badge-draft">' + esc(actualStatusText(actual.status)) + '</div>' +
-      codesHtml((aev.codes || []).filter(function (c) { return c.code !== 'ACTUAL_OVER' && !c.date; }));
+    // 実績確認の進み具合（未確認・予定どおり等）は生徒には出さない（利用者の判断）
+    el('actual-codes').innerHTML = codesHtml((aev.codes || []).filter(function (c) { return c.code !== 'ACTUAL_OVER' && !c.date; }));
 
     el('actual-table').innerHTML = shiftTableHtml(data.yearMonth, actual.shifts || plan, {
       rowClass: 'actual-shift-row', timeLabel: 'label.actualTime', totalLabel: 'label.actualTotal',
@@ -430,12 +430,6 @@
       holidays: data.holidays || [], planShifts: plan
     });
     refreshTotals('actual-table');
-  }
-
-  function actualStatusText(s) {
-    if (s === '予定どおり') return t('label.actualStatus.asPlanned');
-    if (s === '修正あり') return t('label.actualStatus.modified');
-    return t('label.actualStatus.unconfirmed');
   }
 
   function planText(list) {
@@ -492,12 +486,11 @@
   function renderHistory(rows) {
     lastHistory = rows;
     if (!rows || !rows.length) { el('history-list').innerHTML = ''; return; }
-    // 見出しつきの表: 対象月・予定（提出の状態）・実績確認（月が終わってからの確認の状態）。行を押すとその月を開く
+    // 見出しつきの表: 対象月・予定（提出の状態）。行を押すとその月を開く。実績確認の進み具合は出さない（利用者の判断）
     el('history-list').innerHTML = '<p class="history-hint">' + esc(t('label.historyHint')) + '</p>' +
-      '<table class="history-table"><thead><tr><th>' + esc(t('label.yearMonth')) + '</th><th>' + esc(t('label.plan')) + '</th><th>' +
-      esc(t('label.actualSection')) + '</th></tr></thead><tbody>' + rows.map(function (r) {
+      '<table class="history-table"><thead><tr><th>' + esc(t('label.yearMonth')) + '</th><th>' + esc(t('label.plan')) + '</th></tr></thead><tbody>' + rows.map(function (r) {
         return '<tr class="history-row" data-ym="' + esc(r.yearMonth) + '"><td><strong>' + esc(r.yearMonth) + '</strong></td><td>' +
-          esc(statusText(r.status)) + '</td><td>' + esc(actualStatusText(r.actualStatus)) + '</td></tr>';
+          esc(statusText(r.status)) + '</td></tr>';
       }).join('') + '</tbody></table>';
   }
   el('history-list').addEventListener('click', function (ev) {
