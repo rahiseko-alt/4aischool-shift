@@ -136,7 +136,7 @@
     hideError('login-error');
     var loginId = el('inp-loginId').value.trim();
     var password = el('inp-password').value;
-    if (!loginId || !password) return;
+    if (!loginId) return; // 学生は学籍番号だけで入れる（パスワードは管理者だけ）
     call('api_login', [loginId, password]).then(function (res) {
       if (!res.ok) { showError('login-error', res.error); return; }
       el('inp-password').value = '';
@@ -677,9 +677,8 @@
       call('api_adminUpsertStudent', [state.token, v]).then(function (res) {
         if (!res.ok) { formError(res); return; }
         if (res.data.created) {
-          openDialog('ログイン情報（この画面を閉じると二度と表示されません）',
-            '<p>学籍番号: <strong>' + esc(res.data.studentId) + '</strong></p><p>ログインID: <strong>' + esc(res.data.loginId) + '</strong></p>' +
-            '<p>初期パスワード: <strong>' + esc(res.data.initialPassword) + '</strong></p><p>紙に書いて本人に渡してください。</p>');
+          openDialog('学生を追加しました',
+            '<p>学籍番号: <strong>' + esc(res.data.studentId) + '</strong></p><p>学生は、ログイン画面で学籍番号だけを入れればログインできます（パスワードは要りません）。</p>');
         } else {
           openStudentDetail(v.studentId);
         }
@@ -741,15 +740,13 @@
         ['クラス', s.className], ['状態', s.status], ['生年月日', s.birthDate], ['入学', s.enrollmentDate],
         s.graduationDate ? ['卒業', s.graduationDate] : null, s.withdrawalDate ? ['退学', s.withdrawalDate] : null,
         ['資格外活動許可', s.workPermission ? 'あり（期限 ' + (s.permissionExpires || '未登録') + '）' : 'なし'],
-        ['ログインID', s.loginId || '']
+        ['ログイン', '学籍番号だけで入れます']
       ].filter(Boolean);
       var html = '<div class="dt-head"><h2 class="dt-name">' + esc(s.name) + '</h2><span class="dt-id">' + esc(s.studentId) + '</span></div>' +
         '<section class="dt-sec"><h3 class="dt-sec-title">学生情報</h3>' +
         '<table class="dt-info"><tbody>' + info.map(function (r) { return '<tr><th>' + esc(r[0]) + '</th><td>' + esc(r[1]) + '</td></tr>'; }).join('') + '</tbody></table>' +
         '<div class="dt-actions">' +
         '<button type="button" class="btn-outline btn-sm adm-btn" data-act="edit">学生情報を編集</button>' +
-        '<button type="button" class="btn-outline btn-sm adm-btn" data-act="reset">パスワード再発行</button>' +
-        '<button type="button" class="btn-outline btn-sm adm-btn" data-act="unlockLogin">ログインのロック解除</button>' +
         '</div></section>';
 
       // 月を選ぶと、その月に学生が入れた中身（予定・実績）を表で出す
@@ -792,15 +789,6 @@
         },
         printMonth: function () { printPages([studentId], [ym()]); },
         edit: function () { openStudentForm(s); },
-        reset: function () {
-          if (!confirm('パスワードを再発行します。今のパスワードは使えなくなります。')) return;
-          call('api_adminResetPassword', [state.token, studentId]).then(function (r) {
-            if (adminAlert(r)) openDialog('再発行したパスワード（この画面を閉じると二度と表示されません）', '<p>ログインID: <strong>' + esc(s.loginId || '') + '</strong></p><p>初期パスワード: <strong>' + esc(r.data.initialPassword) + '</strong></p>');
-          });
-        },
-        unlockLogin: function () {
-          call('api_adminUnlockLogin', [state.token, studentId]).then(function (r) { adminAlert(r, 'ロックを解除しました。'); });
-        },
         print2y: function () {
           var months = [];
           for (var i = 23; i >= 0; i--) months.push(addMonth(todayYm(), -i));
@@ -888,11 +876,7 @@
     call('api_adminActAsDemoStudent', [state.token, 'DEMO-A']).then(function (res) {
       if (!adminAlert(res)) return;
       if (res.data.newStudents.length) {
-        var msg = '試用の生徒を作りました。スマホなどから直接ログインするときは次を使ってください（この表示は一度だけです）:\n';
-        res.data.newStudents.forEach(function (s) {
-          msg += '\n' + s.name + '  ID: ' + s.loginId + '  パスワード: ' + s.initialPassword;
-        });
-        alert(msg);
+        alert('試用の生徒を作りました。スマホなどから直接ログインするときは、学籍番号「' + res.data.studentId + '」だけを入れてください。');
       }
       state.adminToken = state.token;
       state.token = res.data.token;

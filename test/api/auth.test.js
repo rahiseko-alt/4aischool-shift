@@ -41,11 +41,24 @@ test('既存の学生を更新しても、ログインIDは変わらず、新し
   assert.equal(again.initialPassword, undefined);
 });
 
-test('学籍番号ではログインできない', () => {
+test('学生は学籍番号だけでログインできる（パスワード不要。2026-10-01 利用者の判断）', () => {
   const ctx = boot();
-  const x = ok(ctx.api('api_adminUpsertStudent', ctx.admin, studentRecord()));
-  const r = ctx.api('api_login', '251001', x.initialPassword);
-  assert.deepEqual([r.ok, r.error], [false, 'LOGIN_FAILED']);
+  ok(ctx.api('api_adminUpsertStudent', ctx.admin, studentRecord({ studentId: 'AIBC26001' })));
+  const r = ok(ctx.api('api_login', 'AIBC26001', ''));
+  assert.equal(r.role, 'student');
+  assert.equal(r.studentId, 'AIBC26001');
+  assert.equal(r.mustChangePassword, false);
+  ok(ctx.api('api_getMonth', r.token, '2026-10'));
+  // 前後の空白・小文字でも入れる。パスワード欄に何か入っていても学籍番号なら入れる
+  assert.equal(ok(ctx.api('api_login', ' aibc26001 ', undefined)).studentId, 'AIBC26001');
+  assert.equal(ok(ctx.api('api_login', 'AIBC26001', 'なにか')).studentId, 'AIBC26001');
+});
+
+test('パスワード無しで入れるのは学生だけ: 管理者はパスワードが要る。知らない番号は LOGIN_FAILED', () => {
+  const ctx = boot();
+  assert.equal(ctx.api('api_login', ctx.adminLoginId, '').error, 'LOGIN_FAILED');
+  assert.equal(ctx.api('api_login', 'AIBC99999', '').error, 'LOGIN_FAILED');
+  ok(ctx.api('api_login', ctx.adminLoginId, ctx.adminPassword));
 });
 
 test('初回ログインでは mustChangePassword が true で、パスワード変更以外は PASSWORD_CHANGE_REQUIRED', () => {

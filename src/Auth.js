@@ -83,6 +83,11 @@ function auth_sessionTtlMinutes_() {
 
 function api_login(loginId, password) {
   try {
+    // 学生は学籍番号だけで入れる（パスワード不要。2026-10-01 利用者の判断。管理者は従来どおりパスワードが要る）
+    if (typeof loginId === 'string' && loginId.trim()) {
+      var byNumber = auth_loginByStudentNumber_(loginId);
+      if (byNumber) return byNumber;
+    }
     if (!loginId || typeof loginId !== 'string' || !password || typeof password !== 'string') {
       return { ok: false, error: 'LOGIN_FAILED' };
     }
@@ -174,6 +179,41 @@ function api_login(loginId, password) {
     }
   } catch (err) {
     return { ok: false, error: 'INTERNAL' };
+  }
+}
+
+// 学籍番号（前後の空白・大文字小文字は問わない）に当たる学生がいれば、その学生のセッションを出す。いなければ null
+function auth_loginByStudentNumber_(input) {
+  var number = input.trim().toUpperCase();
+  var student = null;
+  db_readAllRows_('STUDENTS').forEach(function (s) { if (String(s.student_id).toUpperCase() === number) student = s; });
+  if (!student) return null;
+  var user = null;
+  db_readAllRows_('USERS').forEach(function (u) { if (u.role === 'student' && u.student_id === student.student_id) user = u; });
+  if (!user) return null;
+
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(5000)) return { ok: false, error: 'BUSY' };
+  try {
+    var now = util_nowJst_();
+    auth_purgeExpiredSessions_(now);
+    // 学籍番号で入る学生には初回のパスワード変更を求めない
+    if (user.force_password_change === 'true') {
+      user.force_password_change = 'false';
+      db_updateRow_('USERS', user._rowNum, user);
+    }
+    var token = util_generateToken_();
+    db_insertRow_('SESSIONS', {
+      token_hash: util_sha256Hex_(token),
+      login_id: user.login_id,
+      role: 'student',
+      expires_at: util_addMinutesToJst_(now, auth_sessionTtlMinutes_()),
+      created_at: now
+    });
+    db_logAudit_('LOGIN_OK', user.login_id, 'student', user.student_id, '', null, { via: 'student_number' });
+    return { ok: true, data: { token: token, role: 'student', mustChangePassword: false, studentId: user.student_id } };
+  } finally {
+    lock.releaseLock();
   }
 }
 

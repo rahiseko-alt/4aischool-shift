@@ -82,16 +82,15 @@ html = html.replace('<head>', '<head><script>' + shim + '</script>');
   await page.check('[data-key="workPermission"]'); await page.fill('[data-key="permissionExpires"]', '2027-12-31');
   await page.click('[data-act="submit"]'); await wait();
   const cred = await page.textContent('#admin-dialog-body');
-  const stId = /ログインID: ([A-Za-z0-9]+)/.exec(cred)[1];
-  const stPw = /初期パスワード: ([A-Za-z0-9]+)/.exec(cred)[1];
+  if (!cred.includes('学籍番号だけ')) throw new Error('追加後の案内: ' + cred);
+  const stId = '251001';
   await page.click('#btn-dialog-close');
   await page.click('#btn-admin-search'); await wait();
   if (!(await page.innerHTML('#admin-board')).includes('&lt;b&gt;テスト&lt;/b&gt;')) throw new Error('氏名がエスケープされていない');
 
-  step('ログアウト → 学生ログイン');
+  step('ログアウト → 学生ログイン（学籍番号だけ・パスワード無し）');
   await page.click('#btn-logout-admin');
-  await page.fill('#inp-loginId', stId); await page.fill('#inp-password', stPw); await page.click('#btn-login'); await wait();
-  await page.fill('#inp-cur-password', stPw); await page.fill('#inp-new-password', 'student-pass-1'); await page.click('#btn-change-password'); await wait();
+  await page.fill('#inp-loginId', stId); await page.fill('#inp-password', ''); await page.click('#btn-login'); await wait();
   await page.waitForSelector('#student-screen:not([hidden])');
   await page.click('#btn-next-month'); await wait(); // 9月 → 10月
   if ((await page.textContent('#st-year-month')) !== '2026-10') throw new Error('月の切替');
@@ -205,7 +204,7 @@ html = html.replace('<head>', '<head><script>' + shim + '</script>');
     await page.click('#btn-prev-month'); await wait();
     await page.waitForSelector('#login-screen:not([hidden])');
     if (!(await page.textContent('#login-error')).includes('ログイン')) throw new Error('期限切れの案内が出ない');
-    await page.fill('#inp-loginId', stId); await page.fill('#inp-password', 'student-pass-1'); await page.click('#btn-login'); await wait();
+    await page.fill('#inp-loginId', stId); await page.fill('#inp-password', ''); await page.click('#btn-login'); await wait();
     await page.click('#btn-next-month'); await wait();
   };
   step('締切後は入力できない（セッション切れ → 入り直し）');
@@ -261,7 +260,7 @@ html = html.replace('<head>', '<head><script>' + shim + '</script>');
 
   step('生徒モード: ボタン1つで生徒Aの画面に入り、管理者に戻る');
   await page.click('#btn-student-mode'); await wait(); await wait();
-  if (!dialogs.some((m) => m.includes('生徒A') && m.includes('パスワード'))) throw new Error('試用の生徒のログイン情報が出ない');
+  if (!dialogs.some((m) => m.includes('DEMO-A') && m.includes('学籍番号'))) throw new Error('試用の生徒のログイン案内が出ない');
   await page.waitForSelector('#student-screen:not([hidden])');
   await page.waitForFunction(() => document.getElementById('st-name').textContent.includes('DEMO-A'));
   if (await page.isHidden('#btn-back-admin')) throw new Error('管理者に戻るボタンが無い');
