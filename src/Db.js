@@ -6,7 +6,7 @@ var DB_TABLES_ = {
     'student_id', 'login_id', 'name', 'class', 'birth_date', 'language',
     'enrollment_date', 'graduation_date', 'withdrawal_date', 'status',
     'work_permission', 'permission_expires', 'permission_checked_at',
-    'created_at', 'updated_at'
+    'created_at', 'updated_at', 'name_kana'
   ],
   USERS: [
     'login_id', 'role', 'student_id', 'password_salt', 'password_hash',

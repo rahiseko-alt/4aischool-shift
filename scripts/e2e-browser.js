@@ -258,6 +258,17 @@ html = html.replace('<head>', '<head><script>' + shim + '</script>');
   if (!(await page.textContent('#detail-month')).includes('〜')) throw new Error('詳細に学生の入力した時間が出ない: ' + (await page.textContent('#detail-month')));
   await page.click('#btn-dialog-close');
 
+  step('名簿から一括登録: Excel から貼った表（番号・学籍番号・ローマ字・セル内改行のあるカナ）を読み取って登録し、学籍番号だけで入れる');
+  await page.click('#btn-open-roster');
+  await page.fill('[data-key="className"]', '名簿テスト科');
+  await page.fill('#roster-text', '1\tTEST26001\tTARO  YAMADA\t"タロウ　\nヤマダ"\n2\tTEST26002\tHANAKO SATO\tハナコ　サトウ\n\n');
+  await page.click('[data-act="rosterCheck"]');
+  const prev = await page.textContent('#roster-preview');
+  if (!prev.includes('2人') || !prev.includes('TARO YAMADA') || !prev.includes('タロウ　ヤマダ')) throw new Error('名簿の読み取り: ' + prev);
+  await page.click('[data-act="rosterSave"]'); await wait();
+  if (!(await page.textContent('#admin-dialog-body')).includes('2人を登録しました')) throw new Error('名簿の登録: ' + (await page.textContent('#admin-dialog-body')));
+  await page.click('#btn-dialog-close');
+
   step('生徒モード: ボタン1つで生徒Aの画面に入り、管理者に戻る');
   await page.click('#btn-student-mode'); await wait(); await wait();
   if (!dialogs.some((m) => m.includes('DEMO-A') && m.includes('学籍番号'))) throw new Error('試用の生徒のログイン案内が出ない');

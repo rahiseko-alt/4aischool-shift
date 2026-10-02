@@ -255,7 +255,7 @@ function api_adminPrintHtml(token, params) {
             '</div>' +
             '<table class="info-table"><tbody><tr>' +
               '<th>学籍番号</th><td>' + print_escapeHtml_(student.student_id) + '</td>' +
-              '<th>氏名</th><td>' + print_escapeHtml_(student.name) + '</td>' +
+              '<th>氏名</th><td>' + print_escapeHtml_(student.name) + (student.name_kana ? '<br><span style="font-size: 10px;">' + print_escapeHtml_(student.name_kana) + '</span>' : '') + '</td>' +
               '<th>クラス</th><td>' + print_escapeHtml_(student.class) + '</td>' +
               '<th>状態</th><td>' + print_escapeHtml_(statusText) + '</td>' +
             '</tr></tbody></table>' +

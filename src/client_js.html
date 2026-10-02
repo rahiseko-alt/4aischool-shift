@@ -688,6 +688,79 @@
   }
   el('btn-open-student-form').addEventListener('click', function () { openStudentForm(null); });
 
+  // ---- 名簿から一括登録（Excel などからコピーした表を貼り付ける） ----
+  // Excel のコピーはタブ区切りで、セルの中の改行は "…" で囲まれて来る。それを1行ずつの [番号, 学籍番号, ローマ字, カナ] に戻す。
+  function parseTsv(text) {
+    var rows = [], row = [], cell = '', q = false;
+    text = String(text || '').replace(/\r\n?/g, '\n');
+    for (var i = 0; i < text.length; i++) {
+      var ch = text.charAt(i);
+      if (q) {
+        if (ch === '"' && text.charAt(i + 1) === '"') { cell += '"'; i++; }
+        else if (ch === '"') q = false;
+        else cell += ch;
+      } else if (ch === '"' && cell === '') q = true;
+      else if (ch === '\t') { row.push(cell); cell = ''; }
+      else if (ch === '\n') { row.push(cell); rows.push(row); row = []; cell = ''; }
+      else cell += ch;
+    }
+    if (cell !== '' || row.length) { row.push(cell); rows.push(row); }
+    return rows;
+  }
+  // 学籍番号の形（英字2文字以上＋数字）のセルを探し、その右をローマ字氏名・カナとみなす。番号の列や空行は無視する。
+  function parseRoster(text) {
+    var out = [];
+    parseTsv(text).forEach(function (cells) {
+      cells = cells.map(function (c) { return c.replace(/\s+/g, ' ').trim(); });
+      for (var k = 0; k < cells.length; k++) {
+        if (/^[A-Za-z]{2,}[A-Za-z0-9-]*\d$/.test(cells[k])) {
+          var name = (cells[k + 1] || '').replace(/\s+/g, ' ').trim();
+          var kana = (cells[k + 2] || '').replace(/\s+/g, '　').trim();
+          if (name) out.push({ studentId: cells[k].toUpperCase(), name: name, nameKana: kana });
+          return;
+        }
+      }
+    });
+    return out;
+  }
+  el('btn-open-roster').addEventListener('click', function () {
+    var html = '<p>Excel などの名簿（学籍番号・ローマ字氏名・カナの列）をそのままコピーして貼り付けてください。番号の列はあっても無くてもかまいません。</p>' +
+      formHtml([
+        { key: 'className', label: 'クラス（学科）', type: 'text', required: true, hint: '例: 国際ビジネス科' },
+        { key: 'enrollmentDate', label: '入学日', type: 'date', value: '2026-04-01', required: true }
+      ]) +
+      '<div class="field"><label>名簿</label><textarea id="roster-text" rows="8" placeholder="1\tAIBC26001\tADHIKARI GOMA DEVI\tアディカリ ゴマ デヴィ"></textarea></div>' +
+      '<div id="roster-preview"></div>' +
+      '<p class="detail-empty">生年月日と資格外活動許可は空のまま登録します。許可が未登録の学生は、学生詳細で許可を入れるまで確定できません。学生は学籍番号だけでログインできます。</p>' +
+      '<div class="dialog-actions"><button type="button" class="btn-outline" data-act="rosterCheck">読み取って確認</button>' +
+      '<button type="button" class="btn-primary" data-act="rosterSave" disabled id="roster-save">この内容で登録</button></div>';
+    openDialog('名簿から一括登録', html);
+    var parsed = [];
+    var onEdit = function () { el('roster-save').disabled = true; el('roster-preview').innerHTML = ''; };
+    el('roster-text').addEventListener('input', onEdit);
+    dialogHandlers.rosterCheck = function () {
+      parsed = parseRoster(el('roster-text').value);
+      if (!parsed.length) { el('roster-preview').innerHTML = '<p class="error-msg">学籍番号の列が見つかりません。</p>'; return; }
+      el('roster-preview').innerHTML = '<p><strong>' + parsed.length + '人</strong>を読み取りました。内容を確かめてから登録してください。</p>' +
+        '<div class="adm-table-wrap"><table class="admin-table"><thead><tr><th>学籍番号</th><th>氏名</th><th>カナ</th></tr></thead><tbody>' +
+        parsed.map(function (r) { return '<tr><td class="nowrap">' + esc(r.studentId) + '</td><td>' + esc(r.name) + '</td><td>' + esc(r.nameKana) + '</td></tr>'; }).join('') +
+        '</tbody></table></div>';
+      el('roster-save').disabled = false;
+    };
+    dialogHandlers.rosterSave = function () {
+      var v = formValues([{ key: 'className', type: 'text' }, { key: 'enrollmentDate', type: 'date' }]);
+      if (!v.className) { alert('クラス（学科）を入れてください。'); return; }
+      call('api_adminImportRoster', [state.token, { className: v.className, enrollmentDate: v.enrollmentDate, rows: parsed }]).then(function (r) {
+        if (!adminAlert(r)) return;
+        openDialog('名簿から一括登録', '<p>' + r.data.created.length + '人を登録しました。</p>' +
+          (r.data.skipped.length ? '<p>すでに登録済み・名簿の中で重複のため飛ばした学籍番号: ' + esc(r.data.skipped.join('、')) + '</p>' : '') +
+          '<p>学生は学籍番号だけでログインできます。</p>');
+        el('admin-class-filter').value = v.className;
+        loadAdminBoard();
+      });
+    };
+  });
+
   // ---- 学生詳細 ----
   // 学生詳細の中の1か月分: 予定か実績のある日だけを1日1行で並べ、休憩・実働と月の合計、注意を出す
   function detailMonthHtml(ym, m) {
@@ -737,7 +810,7 @@
       var d = res.data, s = d.student;
       // 上: 学生情報（表）とその操作。下: 月を選んで申告の中身とその月の操作。操作はそれぞれの区切りの中に1列で並べる
       var info = [
-        ['クラス', s.className], ['状態', s.status], ['生年月日', s.birthDate], ['入学', s.enrollmentDate],
+        s.nameKana ? ['カナ', s.nameKana] : null, ['クラス', s.className], ['状態', s.status], ['生年月日', s.birthDate], ['入学', s.enrollmentDate],
         s.graduationDate ? ['卒業', s.graduationDate] : null, s.withdrawalDate ? ['退学', s.withdrawalDate] : null,
         ['資格外活動許可', s.workPermission ? 'あり（期限 ' + (s.permissionExpires || '未登録') + '）' : 'なし'],
         ['ログイン', '学籍番号だけで入れます']

@@ -522,6 +522,7 @@ function api_adminStudentDetail(token, studentId) {
       studentId: targetStudent.student_id,
       loginId: targetStudent.login_id || '',
       name: targetStudent.name,
+      nameKana: targetStudent.name_kana || '',
       className: targetStudent.class,
       birthDate: targetStudent.birth_date || '',
       language: targetStudent.language || 'ja',
@@ -1174,6 +1175,68 @@ function api_adminActAsDemoStudent(token, studentId) {
         newStudents: newStudents
       }
     };
+  } catch (err) {
+    return { ok: false, error: 'INTERNAL' };
+  }
+}
+
+// 名簿の一括登録（2026-10-02）。rows: [{ studentId, name（ローマ字）, nameKana }]、最大300人。
+// 生年月日・資格外活動許可は空のまま登録する（許可が未登録の間は確定できない。あとで学生詳細から入れる）。
+// 学生は学籍番号だけでログインするので、パスワードは誰も知らない乱数にしておく（1万回の計算は省く）。
+// 既にいる学籍番号・名簿の中の重複は飛ばし、上書きしない。1行でも形が違えば1人も登録しない。
+function api_adminImportRoster(token, params) {
+  try {
+    var auth = auth_verifySession_(token, 'admin');
+    if (!auth.ok) return auth;
+    if (!params || typeof params !== 'object') return { ok: false, error: 'BAD_REQUEST' };
+    var className = params.className, enrollmentDate = params.enrollmentDate, rows = params.rows;
+    if (!util_isNonEmptyString_(className, 30) || !util_isDate_(enrollmentDate)) return { ok: false, error: 'BAD_REQUEST' };
+    if (!Array.isArray(rows) || rows.length < 1 || rows.length > 300) return { ok: false, error: 'BAD_REQUEST' };
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i];
+      if (!r || typeof r.studentId !== 'string' || !/^[A-Za-z0-9-]{1,20}$/.test(r.studentId)) return { ok: false, error: 'BAD_REQUEST' };
+      if (!util_isNonEmptyString_(r.name, 100)) return { ok: false, error: 'BAD_REQUEST' };
+      if (r.nameKana !== undefined && r.nameKana !== null && (typeof r.nameKana !== 'string' || r.nameKana.length > 100)) return { ok: false, error: 'BAD_REQUEST' };
+    }
+
+    var lock = LockService.getScriptLock();
+    if (!lock.tryLock(10000)) return { ok: false, error: 'BUSY' };
+    try {
+      var existing = {};
+      db_readAllRows_('STUDENTS').forEach(function (s) { existing[String(s.student_id).toUpperCase()] = true; });
+      var usedLogin = {};
+      db_readAllRows_('USERS').forEach(function (u) { usedLogin[u.login_id] = true; });
+      var pepper = PropertiesService.getScriptProperties().getProperty('PASSWORD_PEPPER');
+      var now = util_nowJst_();
+      var students = [], users = [], created = [], skipped = [];
+      rows.forEach(function (r) {
+        var key = r.studentId.toUpperCase();
+        if (existing[key]) { skipped.push(r.studentId); return; }
+        existing[key] = true;
+        var loginId;
+        do { loginId = util_randomString_(8, UTIL_LOGIN_ID_CHARS_); } while (usedLogin[loginId]);
+        usedLogin[loginId] = true;
+        var salt = util_generateSalt_();
+        students.push({
+          student_id: r.studentId, login_id: loginId, name: r.name.trim(), name_kana: (r.nameKana || '').trim(),
+          class: className, birth_date: '', language: 'ja', enrollment_date: enrollmentDate,
+          graduation_date: '', withdrawal_date: '', status: '在籍', work_permission: 'false',
+          permission_expires: '', permission_checked_at: '', created_at: now, updated_at: now
+        });
+        users.push({
+          login_id: loginId, role: 'student', student_id: r.studentId, password_salt: salt,
+          password_hash: util_hashPassword_(util_generatePassword_(24), salt, pepper, 1), hash_iterations: '1',
+          force_password_change: 'false', failed_login_count: '0', locked_until: '', created_at: now
+        });
+        created.push(r.studentId);
+      });
+      db_insertRows_('STUDENTS', students);
+      db_insertRows_('USERS', users);
+      db_logAudit_('MASTER_UPDATE', auth.user.login_id, 'admin', '', '', null, { op: 'import_roster', className: className, created: created.length, skipped: skipped.length });
+      return { ok: true, data: { created: created, skipped: skipped } };
+    } finally {
+      lock.releaseLock();
+    }
   } catch (err) {
     return { ok: false, error: 'INTERNAL' };
   }
