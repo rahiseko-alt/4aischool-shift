@@ -584,6 +584,7 @@ function api_adminBoard(token, yearMonth, filters) {
   try {
     var auth = auth_verifySession_(token, 'admin');
     if (!auth.ok) return auth;
+    manual_ensureSheets_(); // データの表にマニュアルと ChatGPT 用の文章のシートを置く（無いか古いときだけ書く）
 
     if (!yearMonth || typeof yearMonth !== 'string' || !/^\d{4}-(0[1-9]|1[0-2])$/.test(yearMonth)) {
       return { ok: false, error: 'BAD_REQUEST' };
