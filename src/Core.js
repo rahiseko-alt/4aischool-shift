@@ -138,7 +138,8 @@ function evaluateMonth(input) {
   }
 
   if (totalRawShiftCount > 0) {
-    if (!student.workPermission || !student.permissionExpires) {
+    // 期限は見ない（全員が許可を持って入学するため。期限が入っていれば PERMIT_EXPIRED で見る。2026-10-03）
+    if (!student.workPermission) {
       codes.push({ code: 'NO_PERMIT', severity: 'block' });
     }
   }

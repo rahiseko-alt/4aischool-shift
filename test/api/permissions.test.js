@@ -14,6 +14,7 @@ const ADMIN_APIS = [
   ['api_adminUnlockLogin', '251001'],
   ['api_adminGrantUnlock', '251001', '2026-10', '2026-10-02 18:00'],
   ['api_adminSchoolConfirm', '251001', '2026-10'],
+  ['api_adminUndoSchoolConfirm', '251001', '2026-10'],
   ['api_adminSetDeadline', { yearMonth: '2026-10', className: 'A', deadlineAt: '2026-09-30 23:59', actualDeadlineAt: null }],
   ['api_adminSetHoliday', { name: '冬季休業', startDate: '2026-12-24', endDate: '2027-01-07', schoolYear: 2026 }],
   ['api_adminDeleteHoliday', 'x'],
@@ -24,6 +25,10 @@ const ADMIN_APIS = [
   ['api_adminPurgeExpired'],
   ['api_adminCreateAdmin'],
   ['api_adminSeedDemo'],
+  ['api_adminListClasses'],
+  ['api_adminAddClass', 'X'],
+  ['api_adminDeleteClass', 'X'],
+  ['api_adminImportRoster', { className: 'A', enrollmentDate: '2026-04-01', rows: [{ studentId: 'X1', name: 'N', nameKana: '' }] }],
   ['api_adminActAsDemoStudent', 'DEMO-A'],
 ];
 

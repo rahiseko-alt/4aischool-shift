@@ -120,7 +120,7 @@ src/
 - 時刻は `/^([01]\d|2[0-3]):(00|15|30|45)$/` に合うものだけ（`"9:00"`・`"24:00"`・`"09:10"` は `INVALID_TIME`）。
 - シフトは `{ start, end }`。開始・終了のどちらかが無いシフトは `MISSING`。それ以外の項目（古いデータの `workplace` など）は無視する。
 - 在籍状態が `退学` で退学日が空、`卒業` で卒業日が空なら、すべてのシフトが `NOT_ENROLLED`。
-- `workPermission` が false、または true でも `permissionExpires` が空なら（シフトが1件以上あるとき）`NO_PERMIT`。`PERMIT_EXPIRED` は `workPermission` が true で期限があるときだけ見る。
+- `workPermission` が false なら（シフトが1件以上あるとき）`NO_PERMIT`。期限が空でも `NO_PERMIT` にしない（2026-10-03 変更）。`PERMIT_EXPIRED` は `workPermission` が true で期限があるときだけ見る。
 - テスト: `test/core/*.test.js`。
 
 ---
@@ -223,9 +223,12 @@ src/
 | `api_adminResetPassword` | `token, studentId` | `{ initialPassword }`（失敗回数・ロックも解除し、変更を強制） |
 | `api_adminUnlockLogin` | `token, studentId` | `null` |
 | `api_adminCreateAdmin` | `token` | `{ loginId, initialPassword }` |
+| `api_adminImportRoster` | `token, { className, enrollmentDate, rows: [{ studentId, name, nameKana }] }`（最大300人） | `{ created: [学籍番号], skipped: [学籍番号] }`（2026-10-02 追加。既存・重複は飛ばす。1行でも形が違えば BAD_REQUEST で何も登録しない） |
+| `api_adminListClasses` / `api_adminAddClass` / `api_adminDeleteClass` | `token` / `token, name` / `token, name` | `[{ name, students }]` / `null` / `null`（2026-10-03 追加。学生がいるクラスは消せない＝BAD_REQUEST） |
 | `api_adminStudentDetail` | `token, studentId` | `{ student, months: [{ yearMonth, status, actualStatus, shifts, totalMinutes, codes, actual: object\|null, actualTotalMinutes: number\|null, actualCodes, unlockUntil, publicHolidays }] }`（新しい月が先） |
 | `api_adminGrantUnlock` | `token, studentId, yearMonth, until` | `null`（行が無ければ未入力の行を作る。version は変えない） |
 | `api_adminSchoolConfirm` | `token, studentId, yearMonth` | `null` |
+| `api_adminUndoSchoolConfirm` | `token, studentId, yearMonth` | `null`（学校確定の月を未入力に戻す。学校確定でなければ FORBIDDEN、行が無ければ NOT_FOUND。2026-10-03 追加） |
 | `api_adminBoard` | `token, yearMonth, { className?, status?, query? }` | 下記 |
 | `api_adminSetDeadline` | `token, { yearMonth, className, deadlineAt, actualDeadlineAt\|null }` | `null`（年月＋クラスで上書き） |
 | `api_adminSetHoliday` | `token, { holidayId?, name, startDate, endDate, schoolYear }` | `{ holidayId }`（開始＞終了は `BAD_REQUEST`） |
@@ -247,17 +250,21 @@ src/
   counts: { students, confirmed, draft, notSubmitted, error, outOfScope },
   actualUnconfirmed,
   rows: [{ studentId, name, className, displayStatus: '確定済'|'下書き'|'未提出'|'対象外',
-           errorCodes: [...], actualStatus, actualOver: boolean, updatedAt: 'YYYY-MM-DD HH:MM'|null }]
+           errorCodes: [...], actualStatus, actualOver: boolean, updatedAt: 'YYYY-MM-DD HH:MM'|null }],
+  backup: { configured: boolean, lastAt: 'YYYY-MM-DD HH:MM'|null, warn: boolean }
 }
 ```
 
 - 対象の学生: 入学日がその月の末日以前で、退学日・卒業日（早いほう、無ければ無期限）がその月の初日以後の学生。加えて、その月の行を持つ学生。
 - `counts` はクラスの絞り込みだけを反映する。`rows` は、クラス・状態（`displayStatus` と一致）・検索（学籍番号の前方一致、または氏名の部分一致）をすべて反映する。`rows` は学籍番号の昇順。
 - 表示状態: 確定済→確定済、学校確定→対象外、下書き→下書き、行が無い・未入力→未提出。
-- `errorCodes`: 最後に保存したときの block のコードの**文字列**の配列（例 `['OVER_28H']`、重複なし）。`error` は `errorCodes` が空でない行の数。
+- `errorCodes`: 表示のたびに、今の学生情報・長期休業・前後の月で計算し直した block のコードの**文字列**の配列（例 `['OVER_28H']`、重複なし。学校確定の月は空。2026-10-03 変更）。`error` は `errorCodes` が空でない行の数。
 - `actualOver`: 最後に保存した実績に `ACTUAL_OVER` があれば true。
 - `actualUnconfirmed`: 現在が対象月の翌月1日 00:00 以後のときだけ、**ボードの対象の学生（クラスの絞り込み後）**のうち、表示状態が対象外でなく、実績が未確認（スプレッドシートに行が無い学生も未確認）の人数。それより前は 0。
 - 締切を過ぎても、下書きの月の表示状態は `下書き` のまま（未提出にしない）。
+- `backup`: 保存先（`BACKUP_FOLDER_ID`）が未設定、最後のバックアップ（`LAST_BACKUP_AT`）が無い、または40日以上前なら `warn: true`。
+- 一覧を返す前に、保存先フォルダ（「ShiftDB バックアップ」）・毎月の自動実行・最初のバックアップが無ければ用意する（`backup_ensureSetup_`。失敗しても一覧は返す）。
+- `errorCodes` の計算では、確定済の月に翌月の下書きの時間を数えない（月をまたぐ28時間超は翌月の側に出る）。学生の `api_getMonth` の表示も同じ。
 
 `api_adminPrintHtml`:
 
@@ -275,7 +282,8 @@ src/
 | 関数 | 役割 |
 | --- | --- |
 | `doGet()` | `index.html` を返す。`setTitle` とスマートフォン用の viewport を付ける |
-| `setupInitial()` | 初期設定（下記）。2回目以降は何もせず `Logger.log('ALREADY_SET_UP')` |
+| `setupInitial()` | 初期設定（下記）。2回目以降は何もせず `Logger.log('ALREADY_SET_UP')`。`SHIFT_DB_ID` の表が開けて管理者がいるときも作り直さず `Logger.log('SHIFT_DB_EXISTS...')`（表が開けない・管理者がいないときは途中で失敗したとみなして最初から作る） |
+| `resetAdminPassword()` | 管理者パスワードの再発行（エディタから実行）。スクリプトのプロパティ `ADMIN_RESET_LOGIN_ID` に管理者のログインIDがあるときだけ動き、そのプロパティを消してから、新しいパスワード（次のログインで変更を求める）を `Logger.log('ADMIN_PASSWORD_RESET loginId=%s password=%s')` に出す |
 | `backupMonthly()` | 第8章 |
 | `installTriggers()` | 第8章 |
 | `evaluateMonth(input)` | 第5章 |

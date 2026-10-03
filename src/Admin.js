@@ -128,6 +128,7 @@ function api_adminUpsertStudent(token, student) {
       lock.releaseLock();
     }
   } catch (err) {
+    util_logError_(err);
     return { ok: false, error: 'INTERNAL' };
   }
 }
@@ -169,6 +170,7 @@ function api_adminResetPassword(token, studentId) {
       lock.releaseLock();
     }
   } catch (err) {
+    util_logError_(err);
     return { ok: false, error: 'INTERNAL' };
   }
 }
@@ -197,6 +199,7 @@ function api_adminUnlockLogin(token, studentId) {
       lock.releaseLock();
     }
   } catch (err) {
+    util_logError_(err);
     return { ok: false, error: 'INTERNAL' };
   }
 }
@@ -261,6 +264,7 @@ function api_adminGrantUnlock(token, studentId, yearMonth, until) {
       lock.releaseLock();
     }
   } catch (err) {
+    util_logError_(err);
     return { ok: false, error: 'INTERNAL' };
   }
 }
@@ -341,6 +345,40 @@ function api_adminSchoolConfirm(token, studentId, yearMonth) {
       lock.releaseLock();
     }
   } catch (err) {
+    util_logError_(err);
+    return { ok: false, error: 'INTERNAL' };
+  }
+}
+
+// 学校確定の取り消し。その月を「未入力」に戻し、学生がまた入力できるようにする。
+function api_adminUndoSchoolConfirm(token, studentId, yearMonth) {
+  try {
+    var auth = auth_verifySession_(token, 'admin');
+    if (!auth.ok) return auth;
+
+    var lock = LockService.getScriptLock();
+    if (!lock.tryLock(5000)) return { ok: false, error: 'BUSY' };
+
+    try {
+      var sub = db_readAllRows_('MONTHLY_SUBMISSIONS').filter(function (r) {
+        return r.student_id === studentId && r.year_month === yearMonth;
+      })[0];
+      if (!sub) return { ok: false, error: 'NOT_FOUND' };
+      if (sub.status !== '学校確定') return { ok: false, error: 'FORBIDDEN' };
+
+      var newVersion = (Number(sub.version) || 0) + 1;
+      sub.status = '未入力';
+      sub.version = String(newVersion);
+      sub.updated_at = util_nowJst_();
+      db_updateRow_('MONTHLY_SUBMISSIONS', sub._rowNum, sub);
+      db_logAudit_('UNDO_SCHOOL_CONFIRM', auth.user.login_id, 'admin', studentId, yearMonth, newVersion, {});
+
+      return { ok: true, data: null };
+    } finally {
+      lock.releaseLock();
+    }
+  } catch (err) {
+    util_logError_(err);
     return { ok: false, error: 'INTERNAL' };
   }
 }
@@ -355,6 +393,13 @@ function api_adminSetDeadline(token, params) {
     var className = params.className;
     var deadlineAt = params.deadlineAt;
     var actualDeadlineAt = params.actualDeadlineAt || null;
+    // 予定の入力期限が空なら、対象月の末日 23:59（2026-10-03）
+    if ((deadlineAt === '' || deadlineAt === null || deadlineAt === undefined) && util_isYearMonth_(yearMonth)) {
+      deadlineAt = core_buildDateStr_(yearMonth, core_getDaysInMonth_(yearMonth)) + ' 23:59';
+    }
+    // 日付だけ（YYYY-MM-DD）なら、その日の 23:59
+    if (util_isDate_(deadlineAt)) deadlineAt = deadlineAt + ' 23:59';
+    if (actualDeadlineAt !== null && util_isDate_(actualDeadlineAt)) actualDeadlineAt = actualDeadlineAt + ' 23:59';
 
     if (!util_isYearMonth_(yearMonth) || !util_isNonEmptyString_(className, 30) || !util_isDateTime_(deadlineAt)) {
       return { ok: false, error: 'BAD_REQUEST' };
@@ -394,6 +439,7 @@ function api_adminSetDeadline(token, params) {
       lock.releaseLock();
     }
   } catch (err) {
+    util_logError_(err);
     return { ok: false, error: 'INTERNAL' };
   }
 }
@@ -406,6 +452,7 @@ function api_adminGetSettings(token) {
     var s = student_getSettings_();
     return { ok: true, data: s };
   } catch (err) {
+    util_logError_(err);
     return { ok: false, error: 'INTERNAL' };
   }
 }
@@ -450,6 +497,7 @@ function api_adminSetSettings(token, params) {
       lock.releaseLock();
     }
   } catch (err) {
+    util_logError_(err);
     return { ok: false, error: 'INTERNAL' };
   }
 }
@@ -497,6 +545,7 @@ function api_adminCreateAdmin(token) {
       lock.releaseLock();
     }
   } catch (err) {
+    util_logError_(err);
     return { ok: false, error: 'INTERNAL' };
   }
 }
@@ -522,6 +571,7 @@ function api_adminStudentDetail(token, studentId) {
       studentId: targetStudent.student_id,
       loginId: targetStudent.login_id || '',
       name: targetStudent.name,
+      nameKana: targetStudent.name_kana || '',
       className: targetStudent.class,
       birthDate: targetStudent.birth_date || '',
       language: targetStudent.language || 'ja',
@@ -551,6 +601,8 @@ function api_adminStudentDetail(token, studentId) {
       try { return JSON.parse(txt); } catch (e) { return fallback; }
     };
     var num = function (v) { return v === '' || v === undefined || v === null ? null : Number(v); };
+    var detailHolidays = db_readAllRows_('SCHOOL_HOLIDAYS').map(function (h) { return { startDate: h.start_date, endDate: h.end_date }; });
+    var detailSettings = student_getSettings_();
     var monthsList = mySubs.map(function(s) {
       return {
         yearMonth: s.year_month,
@@ -558,7 +610,7 @@ function api_adminStudentDetail(token, studentId) {
         actualStatus: s.actual_status || '未確認',
         shifts: parse(s.shift_json, {}),
         totalMinutes: num(s.total_minutes),
-        codes: parse(s.validation_codes, []),
+        codes: s.status === '学校確定' ? [] : admin_currentBlockCodes_(targetStudent, s.year_month, s, subRows, detailHolidays, detailSettings),
         actual: s.actual_json ? parse(s.actual_json, null) : null,
         actualTotalMinutes: s.actual_json ? num(s.actual_total_minutes) : null,
         actualCodes: parse(s.actual_codes, []),
@@ -575,14 +627,31 @@ function api_adminStudentDetail(token, studentId) {
       }
     };
   } catch (err) {
+    util_logError_(err);
     return { ok: false, error: 'INTERNAL' };
   }
+}
+
+// バックアップの状態。保存先が未設定か、最後のバックアップが無い・40日以上前なら warn を立てる。
+function admin_backupStatus_() {
+  var props = PropertiesService.getScriptProperties();
+  var configured = !!props.getProperty('BACKUP_FOLDER_ID');
+  var lastAt = props.getProperty('LAST_BACKUP_AT') || null;
+  var days = null;
+  if (lastAt) {
+    var d = function (x) { var p = x.slice(0, 10).split('-'); return Date.UTC(Number(p[0]), Number(p[1]) - 1, Number(p[2])); };
+    days = Math.floor((d(util_todayJst_()) - d(lastAt)) / 86400000);
+  }
+  return { configured: configured, lastAt: lastAt, warn: !configured || days === null || days >= 40 };
 }
 
 function api_adminBoard(token, yearMonth, filters) {
   try {
     var auth = auth_verifySession_(token, 'admin');
     if (!auth.ok) return auth;
+    manual_ensureSheets_(); // データの表にマニュアルと ChatGPT 用の文章のシートを置く（無いか古いときだけ書く）
+    admin_removeSampleHolidaysOnce_();
+    try { backup_ensureSetup_(); } catch (e) { util_logError_(e); } // 失敗しても一覧は出す（赤い注意で気付ける）
 
     if (!yearMonth || typeof yearMonth !== 'string' || !/^\d{4}-(0[1-9]|1[0-2])$/.test(yearMonth)) {
       return { ok: false, error: 'BAD_REQUEST' };
@@ -647,6 +716,8 @@ function api_adminBoard(token, yearMonth, filters) {
     };
 
     var allRows = [];
+    var boardHolidays = db_readAllRows_('SCHOOL_HOLIDAYS').map(function (h) { return { startDate: h.start_date, endDate: h.end_date }; });
+    var boardSettings = student_getSettings_();
     var now = util_nowJst_();
     var nextMonthFirstDay = core_addDays_(lastDayStr, 1) + ' 00:00';
     var isActualPeriod = (now >= nextMonthFirstDay);
@@ -673,18 +744,9 @@ function api_adminBoard(token, yearMonth, filters) {
           displayStatus = '未提出';
         }
 
-        if (cSub.validation_codes) {
-          try {
-            var parsed = JSON.parse(cSub.validation_codes);
-            if (Array.isArray(parsed)) {
-              // 重複排除
-              var codeSet = {};
-              for (var ci = 0; ci < parsed.length; ci++) {
-                codeSet[parsed[ci]] = true;
-              }
-              errorCodes = Object.keys(codeSet);
-            }
-          } catch (e) {}
+        // 確定を止める注意は、表示のたびにいまの学生情報・長期休業・前後の月で計算し直す（確定後の変更を見逃さない。2026-10-03）
+        if (cSub.status !== '学校確定') {
+          errorCodes = admin_currentBlockCodes_(cSt, yearMonth, cSub, allSubs, boardHolidays, boardSettings);
         }
 
         if (cSub.actual_status) {
@@ -754,10 +816,12 @@ function api_adminBoard(token, yearMonth, filters) {
       data: {
         counts: counts,
         actualUnconfirmed: actualUnconfirmedCount,
-        rows: filteredRows
+        rows: filteredRows,
+        backup: admin_backupStatus_()
       }
     };
   } catch (err) {
+    util_logError_(err);
     return { ok: false, error: 'INTERNAL' };
   }
 }
@@ -824,6 +888,7 @@ function api_adminSetHoliday(token, params) {
       lock.releaseLock();
     }
   } catch (err) {
+    util_logError_(err);
     return { ok: false, error: 'INTERNAL' };
   }
 }
@@ -857,6 +922,7 @@ function api_adminDeleteHoliday(token, holidayId) {
       lock.releaseLock();
     }
   } catch (err) {
+    util_logError_(err);
     return { ok: false, error: 'INTERNAL' };
   }
 }
@@ -878,6 +944,7 @@ function api_adminListHolidays(token) {
     });
     return { ok: true, data: list };
   } catch (err) {
+    util_logError_(err);
     return { ok: false, error: 'INTERNAL' };
   }
 }
@@ -902,16 +969,7 @@ function api_adminPurgeExpired(token) {
       var cutoffDate = new Date(Date.UTC(cy, cm - 1 - retentionMonths, 1));
       var cutoffYm = cutoffDate.getUTCFullYear() + '-' + String(cutoffDate.getUTCMonth() + 1).padStart(2, '0');
 
-      var rows = db_readAllRows_('MONTHLY_SUBMISSIONS');
-      var deletedRows = 0;
-
-      // 行番号がずれないよう、後ろから削除
-      for (var i = rows.length - 1; i >= 0; i--) {
-        if (rows[i].year_month < cutoffYm) {
-          db_deleteRow_('MONTHLY_SUBMISSIONS', rows[i]._rowNum);
-          deletedRows++;
-        }
-      }
+      var deletedRows = db_deleteRowsWhere_('MONTHLY_SUBMISSIONS', function (r) { return r.year_month < cutoffYm; });
 
       db_logAudit_('PURGE', auth.user.login_id, 'admin', '', '', null, { deletedRows: deletedRows });
 
@@ -920,6 +978,7 @@ function api_adminPurgeExpired(token) {
       lock.releaseLock();
     }
   } catch (err) {
+    util_logError_(err);
     return { ok: false, error: 'INTERNAL' };
   }
 }
@@ -983,6 +1042,7 @@ function api_adminSeedDemo(token) {
       { op: 'seed_demo', students: created.length, deadlines: deadlines.length });
     return { ok: true, data: { className: DEMO_CLASS_, students: created } };
   } catch (err) {
+    util_logError_(err);
     return { ok: false, error: 'INTERNAL' };
   }
 }
@@ -1002,6 +1062,22 @@ var SAMPLE_STUDENTS_ = [
   { id: 'DEMO-09', name: 'レ・ティ・ホア', lang: 'vi', birth: '2009-05-10', type: 'evening', cur: '下書き', next: 'なし', actual: '予定どおり' },
   { id: 'DEMO-10', name: 'シュレスタ・ビカス', lang: 'ne', birth: '2002-02-14', type: 'heavy', cur: '確定', next: '超過', actual: '予定どおり' }
 ];
+// 以前の版が本物の表に入れてしまった見本の休業。名前と期間が完全に一致するものだけを1回だけ取り除く（2026-10-03）
+function admin_removeSampleHolidaysOnce_() {
+  try {
+    var props = PropertiesService.getScriptProperties();
+    if (props.getProperty('SAMPLE_HOLIDAYS_REMOVED') === 'true') return;
+    var rows = db_readAllRows_('SCHOOL_HOLIDAYS').filter(function (r) {
+      return SAMPLE_HOLIDAYS_.some(function (h) { return r.name === h.name && r.start_date === h.start && r.end_date === h.end; });
+    });
+    rows.sort(function (a, b) { return b._rowNum - a._rowNum; }).forEach(function (r) { db_deleteRow_('SCHOOL_HOLIDAYS', r._rowNum); });
+    if (rows.length) db_logAudit_('MASTER_UPDATE', 'system', 'admin', '', '', null, { op: 'remove_sample_holidays', count: rows.length });
+    props.setProperty('SAMPLE_HOLIDAYS_REMOVED', 'true');
+  } catch (e) {
+    util_logError_(e);
+  }
+}
+
 var SAMPLE_HOLIDAYS_ = [
   { name: '秋季休業', start: '2026-09-21', end: '2026-09-30', year: 2026 },
   { name: '冬季休業', start: '2026-12-21', end: '2027-01-07', year: 2026 }
@@ -1036,14 +1112,9 @@ function admin_sampleMonthShifts_(sample, ym, holidays, over) {
 }
 
 function admin_seedSampleData_(token, auth) {
-  // 1. 長期休業（同じ名前・開始日のものが無ければ足す）
-  var holRows = db_readAllRows_('SCHOOL_HOLIDAYS');
-  var newHol = SAMPLE_HOLIDAYS_.filter(function (h) {
-    return !holRows.some(function (r) { return r.name === h.name && r.start_date === h.start; });
-  }).map(function (h) {
-    return { holiday_id: 'HOL_' + util_uuid_().slice(0, 8), name: h.name, start_date: h.start, end_date: h.end, school_year: String(h.year) };
-  });
-  db_insertRows_('SCHOOL_HOLIDAYS', newHol);
+  // 1. 長期休業は本物の表に入れない（全学生の判定に効いてしまうため。2026-10-03）。
+  //    見本の予定は、学校が登録している長期休業に合わせて作る。
+  var newHol = [];
   var holidays = db_readAllRows_('SCHOOL_HOLIDAYS').map(function (h) { return { startDate: h.start_date, endDate: h.end_date }; });
 
   // 2. 学生（無い人だけ）
@@ -1074,13 +1145,21 @@ function admin_seedSampleData_(token, auth) {
       birthDate: sm.birth, enrollmentDate: '2025-04-01', withdrawalDate: null, graduationDate: null, status: '在籍',
       workPermission: true, permissionExpires: sm.permitEndsNext ? core_buildDateStr_(nextYm, 15) : '2099-12-31'
     };
-    var prevDaily = {};
+    // 先に3か月分の予定を作り、前後の月の時間も渡して検算する（画面の一覧と同じ計算）
+    var months = [[prevYm, '確定'], [ym, sm.cur], [nextYm, sm.next]].map(function (pair) {
+      if (pair[1] === 'なし') return null;
+      var sh = admin_sampleMonthShifts_(sm, pair[0], holidays, pair[1] === '超過');
+      return { shifts: sh, daily: evaluateMonth({ yearMonth: pair[0], mode: 'plan', student: student, shifts: sh,
+        prevMonthDaily: {}, prevMonthSource: 'not_applicable', nextMonthDaily: {}, holidays: holidays, settings: {} }).daily };
+    });
     [[prevYm, '確定'], [ym, sm.cur], [nextYm, sm.next]].forEach(function (pair, idx) {
       var month = pair[0], plan = pair[1];
-      if (plan === 'なし') { prevDaily = {}; return; }
-      var shifts = admin_sampleMonthShifts_(sm, month, holidays, plan === '超過');
+      if (plan === 'なし') return;
+      var shifts = months[idx].shifts;
+      var prevDaily = idx > 0 && months[idx - 1] ? months[idx - 1].daily : {};
+      var nextDaily = idx < 2 && months[idx + 1] ? months[idx + 1].daily : {};
       var ev = evaluateMonth({ yearMonth: month, mode: 'plan', student: student, shifts: shifts,
-        prevMonthDaily: prevDaily, prevMonthSource: idx === 0 ? 'not_applicable' : 'confirmed', nextMonthDaily: {}, holidays: holidays, settings: {} });
+        prevMonthDaily: prevDaily, prevMonthSource: idx === 0 ? 'not_applicable' : 'confirmed', nextMonthDaily: nextDaily, holidays: holidays, settings: {} });
       var blocking = ev.codes.filter(function (c) { return c.severity === 'block'; });
       var status = (plan === '確定' && !blocking.length) ? '確定済' : '下書き';
       var row = {
@@ -1108,7 +1187,6 @@ function admin_seedSampleData_(token, auth) {
         row.version = '2';
       }
       rows.push(row);
-      prevDaily = ev.daily;
     });
   });
   db_insertRows_('MONTHLY_SUBMISSIONS', rows);
@@ -1175,6 +1253,151 @@ function api_adminActAsDemoStudent(token, studentId) {
       }
     };
   } catch (err) {
+    util_logError_(err);
+    return { ok: false, error: 'INTERNAL' };
+  }
+}
+
+// その月の予定を、いまの学生情報・長期休業・前後の月で計算し直し、確定を止める注意のコード（重複なし）を返す（2026-10-03）
+function admin_currentBlockCodes_(st, yearMonth, sub, allSubs, holidays, settings) {
+  var shifts = util_parseJson_(sub.shift_json, {});
+  var prev = student_getAdjacentMonthData_(st, yearMonth, true, allSubs);
+  var next = student_getAdjacentMonthData_(st, yearMonth, false, allSubs);
+  var ev = evaluateMonth({
+    yearMonth: yearMonth, mode: 'plan',
+    student: {
+      birthDate: st.birth_date, enrollmentDate: st.enrollment_date, withdrawalDate: st.withdrawal_date || null,
+      graduationDate: st.graduation_date || null, status: st.status, workPermission: st.work_permission === 'true',
+      permissionExpires: st.permission_expires || null
+    },
+    shifts: shifts, prevMonthDaily: prev.daily, prevMonthSource: prev.source, nextMonthDaily: student_nextDailyFor_(sub.status, next),
+    holidays: holidays, settings: settings
+  });
+  var seen = {}, out = [];
+  ev.codes.forEach(function (c) { if (c.severity === 'block' && !seen[c.code]) { seen[c.code] = true; out.push(c.code); } });
+  return out;
+}
+
+// 名簿の一括登録（2026-10-02）。rows: [{ studentId, name（ローマ字）, nameKana }]、最大300人。
+// 生年月日は空のまま登録する。資格外活動許可は「あり」（許可が無ければ入学できないため。期限は空。2026-10-03）。
+// 学生は学籍番号だけでログインするので、パスワードは誰も知らない乱数にしておく（1万回の計算は省く）。
+// 既にいる学籍番号・名簿の中の重複は飛ばし、上書きしない。1行でも形が違えば1人も登録しない。
+function api_adminImportRoster(token, params) {
+  try {
+    var auth = auth_verifySession_(token, 'admin');
+    if (!auth.ok) return auth;
+    if (!params || typeof params !== 'object') return { ok: false, error: 'BAD_REQUEST' };
+    var className = params.className, enrollmentDate = params.enrollmentDate, rows = params.rows;
+    if (!util_isNonEmptyString_(className, 30) || !util_isDate_(enrollmentDate)) return { ok: false, error: 'BAD_REQUEST' };
+    if (!Array.isArray(rows) || rows.length < 1 || rows.length > 300) return { ok: false, error: 'BAD_REQUEST' };
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i];
+      if (!r || typeof r.studentId !== 'string' || !/^[A-Za-z0-9-]{1,20}$/.test(r.studentId)) return { ok: false, error: 'BAD_REQUEST' };
+      if (!util_isNonEmptyString_(r.name, 100)) return { ok: false, error: 'BAD_REQUEST' };
+      if (r.nameKana !== undefined && r.nameKana !== null && (typeof r.nameKana !== 'string' || r.nameKana.length > 100)) return { ok: false, error: 'BAD_REQUEST' };
+    }
+
+    var lock = LockService.getScriptLock();
+    if (!lock.tryLock(10000)) return { ok: false, error: 'BUSY' };
+    try {
+      var existing = {};
+      db_readAllRows_('STUDENTS').forEach(function (s) { existing[String(s.student_id).toUpperCase()] = true; });
+      var usedLogin = {};
+      db_readAllRows_('USERS').forEach(function (u) { usedLogin[u.login_id] = true; });
+      var pepper = PropertiesService.getScriptProperties().getProperty('PASSWORD_PEPPER');
+      var now = util_nowJst_();
+      var students = [], users = [], created = [], skipped = [];
+      rows.forEach(function (r) {
+        var key = r.studentId.toUpperCase();
+        if (existing[key]) { skipped.push(r.studentId); return; }
+        existing[key] = true;
+        var loginId;
+        do { loginId = util_randomString_(8, UTIL_LOGIN_ID_CHARS_); } while (usedLogin[loginId]);
+        usedLogin[loginId] = true;
+        var salt = util_generateSalt_();
+        students.push({
+          student_id: r.studentId, login_id: loginId, name: r.name.trim(), name_kana: (r.nameKana || '').trim(),
+          class: className, birth_date: '', language: 'ja', enrollment_date: enrollmentDate,
+          graduation_date: '', withdrawal_date: '', status: '在籍', work_permission: 'true',
+          permission_expires: '', permission_checked_at: '', created_at: now, updated_at: now
+        });
+        users.push({
+          login_id: loginId, role: 'student', student_id: r.studentId, password_salt: salt,
+          password_hash: util_hashPassword_(util_generatePassword_(24), salt, pepper, 1), hash_iterations: '1',
+          force_password_change: 'false', failed_login_count: '0', locked_until: '', created_at: now
+        });
+        created.push(r.studentId);
+      });
+      db_insertRows_('STUDENTS', students);
+      db_insertRows_('USERS', users);
+      db_logAudit_('MASTER_UPDATE', auth.user.login_id, 'admin', '', '', null, { op: 'import_roster', className: className, created: created.length, skipped: skipped.length });
+      return { ok: true, data: { created: created, skipped: skipped } };
+    } finally {
+      lock.releaseLock();
+    }
+  } catch (err) {
+    util_logError_(err);
+    return { ok: false, error: 'INTERNAL' };
+  }
+}
+
+// ---- クラスの登録（2026-10-03）。学生・名簿・入力期限のクラスは、ここに登録した名前から選ぶ ----
+// 一覧には、登録したクラスに加えて、学生がいるクラス（登録前に入った学生のクラス）も自動で登録して出す。
+function api_adminListClasses(token) {
+  try {
+    var auth = auth_verifySession_(token, 'admin');
+    if (!auth.ok) return auth;
+    db_ensureTable_('CLASSES');
+    var names = {};
+    db_readAllRows_('CLASSES').forEach(function (r) { if (r.class_name) names[r.class_name] = 0; });
+    var missing = [];
+    db_readAllRows_('STUDENTS').forEach(function (s) {
+      if (!s.class) return;
+      if (!(s.class in names)) { names[s.class] = 0; missing.push({ class_name: s.class, created_at: util_nowJst_() }); }
+      names[s.class]++;
+    });
+    db_insertRows_('CLASSES', missing);
+    var list = Object.keys(names).sort().map(function (n) { return { name: n, students: names[n] }; });
+    return { ok: true, data: list };
+  } catch (err) {
+    util_logError_(err);
+    return { ok: false, error: 'INTERNAL' };
+  }
+}
+
+function api_adminAddClass(token, name) {
+  try {
+    var auth = auth_verifySession_(token, 'admin');
+    if (!auth.ok) return auth;
+    if (typeof name !== 'string' || !util_isNonEmptyString_(name.trim(), 30)) return { ok: false, error: 'BAD_REQUEST' };
+    name = name.trim();
+    db_ensureTable_('CLASSES');
+    var exists = db_readAllRows_('CLASSES').some(function (r) { return r.class_name === name; });
+    if (!exists) {
+      db_insertRow_('CLASSES', { class_name: name, created_at: util_nowJst_() });
+      db_logAudit_('MASTER_UPDATE', auth.user.login_id, 'admin', '', '', null, { op: 'add_class', className: name });
+    }
+    return { ok: true, data: null };
+  } catch (err) {
+    util_logError_(err);
+    return { ok: false, error: 'INTERNAL' };
+  }
+}
+
+// 学生が1人でもいるクラスは消せない（学生の情報とずれるため）
+function api_adminDeleteClass(token, name) {
+  try {
+    var auth = auth_verifySession_(token, 'admin');
+    if (!auth.ok) return auth;
+    if (typeof name !== 'string' || !name) return { ok: false, error: 'BAD_REQUEST' };
+    if (db_readAllRows_('STUDENTS').some(function (s) { return s.class === name; })) return { ok: false, error: 'BAD_REQUEST' };
+    db_ensureTable_('CLASSES');
+    var rows = db_readAllRows_('CLASSES').filter(function (r) { return r.class_name === name; });
+    rows.sort(function (a, b) { return b._rowNum - a._rowNum; }).forEach(function (r) { db_deleteRow_('CLASSES', r._rowNum); });
+    db_logAudit_('MASTER_UPDATE', auth.user.login_id, 'admin', '', '', null, { op: 'delete_class', className: name });
+    return { ok: true, data: null };
+  } catch (err) {
+    util_logError_(err);
     return { ok: false, error: 'INTERNAL' };
   }
 }

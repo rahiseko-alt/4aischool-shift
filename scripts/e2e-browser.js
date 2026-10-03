@@ -46,7 +46,14 @@ html = html.replace('<head>', '<head><script>' + shim + '</script>');
   const dialogs = [];
   const promptAnswer = [];
   await page.clock.setFixedTime(new Date('2026-09-10T01:00:00Z'));
-  await page.exposeFunction('__api', async (name, args) => JSON.stringify(api(name, ...JSON.parse(args))));
+  // slowGetMonth: 月の読み込みを遅らせて、読み込み中の画面を確かめる。savedYm: 最後に保存した月
+  let slowGetMonth = 0; let savedYm = null;
+  await page.exposeFunction('__api', async (name, args) => {
+    const xs = JSON.parse(args);
+    if (name === 'api_getMonth' && slowGetMonth) await new Promise((r) => setTimeout(r, slowGetMonth));
+    if (name === 'api_saveDraft' || name === 'api_confirm') savedYm = xs[1];
+    return JSON.stringify(api(name, ...xs));
+  });
   await page.setContent(html);
   const step = (s) => console.log('▶ ' + s);
   const wait = () => page.waitForFunction(() => document.getElementById('global-spinner').hidden, null, { timeout: 5000 });
@@ -62,10 +69,19 @@ html = html.replace('<head>', '<head><script>' + shim + '</script>');
   if (await page.$('#btn-open-wage')) throw new Error('最低賃金設定のボタンが残っている');
   if ((await page.textContent('#admin-screen')).includes('最低賃金')) throw new Error('管理画面に最低賃金の文字が残っている');
 
-  step('締切を登録');
-  await page.click('#btn-open-deadline');
-  await page.fill('[data-key="yearMonth"]', '2026-10'); await page.fill('[data-key="className"]', 'A'); await page.fill('[data-key="deadlineAt"]', '2026-09-30 23:59');
+  step('クラスを登録（A と 名簿テスト科）。クラスが無いと学生の追加はできない');
+  await page.click('#btn-open-classes'); await wait();
+  for (const name of ['A', '名簿テスト科']) {
+    await page.fill('[data-key="name"]', name); await page.click('[data-act="addClass"]'); await wait();
+  }
+  if (!(await page.textContent('#admin-dialog-body')).includes('名簿テスト科')) throw new Error('クラスが一覧に出ない');
+  await page.click('#btn-dialog-close');
+
+  step('入力期限を登録（クラスは選ぶ。日付だけ入れれば 23:59）');
+  await page.click('#btn-open-deadline'); await wait();
+  await page.fill('[data-key="yearMonth"]', '2026-10'); await page.selectOption('[data-key="className"]', 'A'); await page.fill('[data-key="deadlineAt"]', '2026-09-30');
   await page.click('[data-act="submit"]'); await wait();
+  if (!dialogs.some((m) => m.includes('入力期限を保存しました（A）'))) throw new Error('入力期限が保存されない: ' + dialogs.slice(-1));
 
   step('長期休業を登録');
   await page.click('#btn-open-holiday'); await wait();
@@ -78,7 +94,7 @@ html = html.replace('<head>', '<head><script>' + shim + '</script>');
   await page.click('[data-act="submit"]');
   if (!(await page.textContent('#admin-form-error')).includes('学籍番号')) throw new Error('必須項目の案内が出ない');
   await page.fill('[data-key="studentId"]', '251001'); await page.fill('[data-key="name"]', '<b>テスト</b> 学生');
-  await page.fill('[data-key="className"]', 'A'); await page.fill('[data-key="birthDate"]', '2000-04-01'); await page.fill('[data-key="enrollmentDate"]', '2025-04-01');
+  await page.selectOption('[data-key="className"]', 'A'); await page.fill('[data-key="birthDate"]', '2000-04-01'); await page.fill('[data-key="enrollmentDate"]', '2025-04-01');
   await page.check('[data-key="workPermission"]'); await page.fill('[data-key="permissionExpires"]', '2027-12-31');
   await page.click('[data-act="submit"]'); await wait();
   const cred = await page.textContent('#admin-dialog-body');
@@ -188,6 +204,19 @@ html = html.replace('<head>', '<head><script>' + shim + '</script>');
   if (v !== '18:15') throw new Error('保存したシフトが表示されない: ' + v);
   if ((await totalText()) !== '勤務予定時間合計: 20時間15分') throw new Error('読み込み直した合計: ' + (await totalText()));
 
+  step('月を切り替えた直後は、読み込み終わるまで表が空で保存できない。保存は表に出ている月で送る');
+  slowGetMonth = 800;
+  await page.click('#btn-next-month');
+  if (!(await page.isDisabled('#btn-save-draft'))) throw new Error('読み込み中に保存ボタンが押せる');
+  if ((await page.$$eval('#shifts-table tr.plan-row', (xs) => xs.length)) !== 0) throw new Error('読み込み中に前の月の表が残っている');
+  await page.click('#btn-prev-month');
+  await page.waitForTimeout(1000); await wait();
+  slowGetMonth = 0;
+  if ((await page.textContent('#st-year-month')) !== '2026-10') throw new Error('月が戻らない');
+  if ((await row(2).locator('.sh-end').inputValue()) !== '18:15') throw new Error('遅れて届いた11月の表で上書きされた');
+  await page.click('#btn-save-draft'); await wait();
+  if (savedYm !== '2026-10') throw new Error('保存した月がずれた: ' + savedYm);
+
   step('学生で確定: 1日8時間超の日があると止まり、その日が赤くなる。直せば確定できる');
   if ((await page.textContent('#st-confirm-state')) !== '未確定') throw new Error('確定前に「未確定」が出ない: ' + (await page.textContent('#st-confirm-state')));
   await page.click('#btn-confirm-shift'); await wait(); await wait();
@@ -256,6 +285,17 @@ html = html.replace('<head>', '<head><script>' + shim + '</script>');
   if (await page.isHidden('#admin-dialog-overlay')) throw new Error('行を押しても詳細が開かない');
   await page.selectOption('#detail-ym', '2026-10');
   if (!(await page.textContent('#detail-month')).includes('〜')) throw new Error('詳細に学生の入力した時間が出ない: ' + (await page.textContent('#detail-month')));
+  await page.click('#btn-dialog-close');
+
+  step('名簿から一括登録: Excel から貼った表（番号・学籍番号・ローマ字・セル内改行のあるカナ）を読み取って登録し、学籍番号だけで入れる');
+  await page.click('#btn-open-roster');
+  await page.selectOption('[data-key="className"]', '名簿テスト科');
+  await page.fill('#roster-text', '1\tTEST26001\tTARO  YAMADA\t"タロウ　\nヤマダ"\n2\tTEST26002\tHANAKO SATO\tハナコ　サトウ\n\n');
+  await page.click('[data-act="rosterCheck"]');
+  const prev = await page.textContent('#roster-preview');
+  if (!prev.includes('2人') || !prev.includes('TARO YAMADA') || !prev.includes('タロウ　ヤマダ')) throw new Error('名簿の読み取り: ' + prev);
+  await page.click('[data-act="rosterSave"]'); await wait();
+  if (!(await page.textContent('#admin-dialog-body')).includes('2人を登録しました')) throw new Error('名簿の登録: ' + (await page.textContent('#admin-dialog-body')));
   await page.click('#btn-dialog-close');
 
   step('生徒モード: ボタン1つで生徒Aの画面に入り、管理者に戻る');

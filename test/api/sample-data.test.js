@@ -44,11 +44,9 @@ test('見本データ: 確定済の月には確定を止める注意が無い（
   }
 });
 
-test('見本データ: 長期休業（秋季・冬季）が入り、生徒の入力内容を学生詳細で見られる', () => {
+test('見本データ: 長期休業は本物の表に入れない（2026-10-03 修正）。生徒の入力内容を学生詳細で見られる', () => {
   const { ctx } = seeded();
-  const names = ok(ctx.api('api_adminListHolidays', ctx.admin)).map((h) => h.name);
-  assert.ok(names.includes('秋季休業'));
-  assert.ok(names.includes('冬季休業'));
+  assert.equal(ok(ctx.api('api_adminListHolidays', ctx.admin)).length, 0);
   const d = ok(ctx.api('api_adminStudentDetail', ctx.admin, 'DEMO-01'));
   const sep = d.months.find((m) => m.yearMonth === '2026-09');
   assert.ok(Object.keys(sep.shifts).length > 0);
@@ -61,5 +59,5 @@ test('見本データ: 2回押しても増えない', () => {
   const n = count();
   ok(ctx.api('api_adminActAsDemoStudent', ctx.admin, 'DEMO-A'));
   assert.equal(count(), n);
-  assert.equal(ok(ctx.api('api_adminListHolidays', ctx.admin)).length, 2);
+  assert.equal(ok(ctx.api('api_adminListHolidays', ctx.admin)).length, 0);
 });

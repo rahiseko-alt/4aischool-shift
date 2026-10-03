@@ -6,7 +6,7 @@ var DB_TABLES_ = {
     'student_id', 'login_id', 'name', 'class', 'birth_date', 'language',
     'enrollment_date', 'graduation_date', 'withdrawal_date', 'status',
     'work_permission', 'permission_expires', 'permission_checked_at',
-    'created_at', 'updated_at'
+    'created_at', 'updated_at', 'name_kana'
   ],
   USERS: [
     'login_id', 'role', 'student_id', 'password_salt', 'password_hash',
@@ -31,8 +31,21 @@ var DB_TABLES_ = {
   ],
   SESSIONS: [
     'token_hash', 'login_id', 'role', 'expires_at', 'created_at'
+  ],
+  CLASSES: [
+    'class_name', 'created_at'
   ]
 };
+
+// 後から足した表（CLASSES など）は、古いデータの表には無い。無ければ見出しつきで作る。
+function db_ensureTable_(sheetName) {
+  var ss = db_getShiftDb_();
+  if (ss.getSheetByName(sheetName)) return;
+  var s = ss.insertSheet(sheetName);
+  db_setPlainText_(s);
+  s.appendRow(DB_TABLES_[sheetName]);
+  s.setFrozenRows(1);
+}
 
 var DB_AUDIT_LOG_HEADERS_ = [
   'timestamp', 'user_id', 'role', 'action', 'student_id', 'year_month', 'version', 'details'
@@ -159,6 +172,22 @@ function db_deleteRow_(sheetName, rowNum) {
   var ss = db_getShiftDb_();
   var sheet = db_getSheet_(ss, sheetName);
   sheet.deleteRow(rowNum);
+}
+
+// 条件に合う行をまとめて消す（ロックの中で呼ぶ）。残す行を上に詰めて1回で書き、余った下の行を1回で消す。
+// 1行ずつ deleteRow すると本物のシートでは遅く、その間ロックを握り続けるため。消した行数を返す。
+function db_deleteRowsWhere_(sheetName, shouldDelete) {
+  var rows = db_readAllRows_(sheetName);
+  var kept = rows.filter(function (r) { return !shouldDelete(r); });
+  var removed = rows.length - kept.length;
+  if (!removed) return 0;
+  var sheet = db_getSheet_(db_getShiftDb_(), sheetName);
+  if (kept.length) {
+    var cols = db_columns_(sheet, sheetName);
+    sheet.getRange(2, 1, kept.length, cols.length).setValues(kept.map(function (r) { return db_rowValues_(cols, r); }));
+  }
+  sheet.deleteRows(kept.length + 2, removed);
+  return removed;
 }
 
 function db_logAudit_(action, userId, role, studentId, yearMonth, version, details) {

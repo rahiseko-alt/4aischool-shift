@@ -78,7 +78,8 @@ function student_cleanShifts_(shifts) {
   return clean;
 }
 
-function student_getAdjacentMonthData_(student, targetYm, isPrev) {
+// subs: すでに読んだ MONTHLY_SUBMISSIONS（読み直しを減らすため。無ければここで読む）
+function student_getAdjacentMonthData_(student, targetYm, isPrev, subs) {
   var parts = targetYm.split('-');
   var y = Number(parts[0]);
   var m = Number(parts[1]);
@@ -94,7 +95,7 @@ function student_getAdjacentMonthData_(student, targetYm, isPrev) {
     }
   }
 
-  var subs = db_readAllRows_('MONTHLY_SUBMISSIONS');
+  subs = subs || db_readAllRows_('MONTHLY_SUBMISSIONS');
   var adjSub = null;
   for (var i = 0; i < subs.length; i++) {
     if (subs[i].student_id === student.student_id && subs[i].year_month === adjYm) {
@@ -112,7 +113,7 @@ function student_getAdjacentMonthData_(student, targetYm, isPrev) {
 
   // 3. 実績が「予定どおり」か「修正あり」
   if (adjSub && (adjSub.actual_status === '予定どおり' || adjSub.actual_status === '修正あり')) {
-    var aShifts = adjSub.actual_json ? JSON.parse(adjSub.actual_json) : {};
+    var aShifts = util_parseJson_(adjSub.actual_json, {});
     var aEval = evaluateMonth({
       yearMonth: adjYm,
       mode: 'actual',
@@ -129,7 +130,7 @@ function student_getAdjacentMonthData_(student, targetYm, isPrev) {
 
   // 4. 予定が確定済み
   if (adjSub && adjSub.status === '確定済') {
-    var pShifts = adjSub.shift_json ? JSON.parse(adjSub.shift_json) : {};
+    var pShifts = util_parseJson_(adjSub.shift_json, {});
     var pEval = evaluateMonth({
       yearMonth: adjYm,
       mode: 'plan',
@@ -144,8 +145,31 @@ function student_getAdjacentMonthData_(student, targetYm, isPrev) {
     return { source: 'confirmed', daily: pEval.daily };
   }
 
-  // 5. それ以外
+  // 5. 予定が下書き: 確定していなくても、その時間を数える（0として数えると、月をまたいで28時間を超えても確定できてしまう。2026-10-03）
+  if (adjSub && adjSub.status === '下書き') {
+    var dShifts = util_parseJson_(adjSub.shift_json, {});
+    var dEval = evaluateMonth({
+      yearMonth: adjYm,
+      mode: 'plan',
+      student: {},
+      shifts: dShifts,
+      prevMonthDaily: {},
+      prevMonthSource: 'confirmed',
+      nextMonthDaily: {},
+      holidays: [],
+      settings: {}
+    });
+    return { source: 'none', daily: dEval.daily };
+  }
+
+  // 6. それ以外
   return { source: 'none', daily: {} };
+}
+
+// 表示用: 確定済みの月には、翌月の下書きの時間を数えない（後から翌月に入れた下書きで、確定済みの月にエラーを出さない。
+// 月をまたぐ28時間超は翌月の側に出る）。保存・確定の検算では使わない。
+function student_nextDailyFor_(status, nextData) {
+  return status === '確定済' && nextData.source === 'none' ? {} : nextData.daily;
 }
 
 function api_getMonth(token, yearMonth) {
@@ -200,7 +224,7 @@ function api_getMonth(token, yearMonth) {
 
     var version = sub ? Number(sub.version) || 0 : 0;
     var status = sub && sub.status ? sub.status : '未入力';
-    var shifts = sub && sub.shift_json ? JSON.parse(sub.shift_json) : {};
+    var shifts = sub ? util_parseJson_(sub.shift_json, {}) : {};
 
     var holidays = db_readAllRows_('SCHOOL_HOLIDAYS').map(function(h) {
       return { startDate: h.start_date, endDate: h.end_date };
@@ -225,8 +249,8 @@ function api_getMonth(token, yearMonth) {
     };
 
     var settings = student_getSettings_();
-    var prevData = student_getAdjacentMonthData_(student, yearMonth, true);
-    var nextData = student_getAdjacentMonthData_(student, yearMonth, false);
+    var prevData = student_getAdjacentMonthData_(student, yearMonth, true, submissions);
+    var nextData = student_getAdjacentMonthData_(student, yearMonth, false, submissions);
 
     var evaluation = evaluateMonth({
       yearMonth: yearMonth,
@@ -235,7 +259,7 @@ function api_getMonth(token, yearMonth) {
       shifts: shifts,
       prevMonthDaily: prevData.daily,
       prevMonthSource: prevData.source,
-      nextMonthDaily: nextData.daily,
+      nextMonthDaily: student_nextDailyFor_(status, nextData),
       holidays: holidays,
       settings: settings
     });
@@ -256,7 +280,7 @@ function api_getMonth(token, yearMonth) {
       }
     }
 
-    var actualShifts = sub && sub.actual_json ? JSON.parse(sub.actual_json) : null;
+    var actualShifts = sub && sub.actual_json ? util_parseJson_(sub.actual_json, {}) : null;
     var actualEvaluation = actualShifts ? evaluateMonth({
       yearMonth: yearMonth,
       mode: 'actual',
@@ -293,6 +317,7 @@ function api_getMonth(token, yearMonth) {
       }
     };
   } catch (err) {
+    util_logError_(err);
     return { ok: false, error: 'INTERNAL' };
   }
 }
@@ -373,8 +398,8 @@ function student_saveSubmission_(token, yearMonth, shifts, expectedVersion, acti
     });
 
     var settings = student_getSettings_();
-    var prevData = student_getAdjacentMonthData_(student, yearMonth, true);
-    var nextData = student_getAdjacentMonthData_(student, yearMonth, false);
+    var prevData = student_getAdjacentMonthData_(student, yearMonth, true, submissions);
+    var nextData = student_getAdjacentMonthData_(student, yearMonth, false, submissions);
 
     var studentPayload = {
       birthDate: student.birth_date,
@@ -494,6 +519,7 @@ function student_saveSubmission_(token, yearMonth, shifts, expectedVersion, acti
       lock.releaseLock();
     }
   } catch (err) {
+    util_logError_(err);
     return { ok: false, error: 'INTERNAL' };
   }
 }
@@ -576,8 +602,8 @@ function api_saveActual(token, yearMonth, shifts, expectedVersion) {
       return { startDate: h.start_date, endDate: h.end_date };
     });
 
-    var prevData = student_getAdjacentMonthData_(student, yearMonth, true);
-    var nextData = student_getAdjacentMonthData_(student, yearMonth, false);
+    var prevData = student_getAdjacentMonthData_(student, yearMonth, true, submissions);
+    var nextData = student_getAdjacentMonthData_(student, yearMonth, false, submissions);
 
     var studentPayload = {
       birthDate: student.birth_date,
@@ -679,6 +705,7 @@ function api_saveActual(token, yearMonth, shifts, expectedVersion) {
       lock.releaseLock();
     }
   } catch (err) {
+    util_logError_(err);
     return { ok: false, error: 'INTERNAL' };
   }
 }
@@ -781,8 +808,8 @@ function api_confirmActual(token, yearMonth, expectedVersion) {
       // 予定と実績の一致判定
       var isSameAsPlan = false;
       if (freshSub.status === '確定済') {
-        var planShifts = freshSub.shift_json ? JSON.parse(freshSub.shift_json) : {};
-        var actShifts = freshSub.actual_json ? JSON.parse(freshSub.actual_json) : {};
+        var planShifts = util_parseJson_(freshSub.shift_json, {});
+        var actShifts = util_parseJson_(freshSub.actual_json, {});
         isSameAsPlan = student_areShiftsEqual_(planShifts, actShifts);
       }
 
@@ -807,6 +834,7 @@ function api_confirmActual(token, yearMonth, expectedVersion) {
       lock.releaseLock();
     }
   } catch (err) {
+    util_logError_(err);
     return { ok: false, error: 'INTERNAL' };
   }
 }
@@ -861,6 +889,7 @@ function api_getHistory(token) {
 
     return { ok: true, data: result };
   } catch (err) {
+    util_logError_(err);
     return { ok: false, error: 'INTERNAL' };
   }
 }

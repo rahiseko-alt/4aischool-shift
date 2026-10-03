@@ -207,10 +207,38 @@ function createGasEnv(options) {
     },
   };
 
+  // バックアップ用（Backup.js だけが使う）。driveFail を立てると、ドライブの操作が失敗する
+  const drive = { folders: [], copies: [], triggers: [], driveFail: false };
+  const DriveApp = {
+    createFolder(name) {
+      if (drive.driveFail) throw new Error('Drive unavailable');
+      const f = { id: 'folder_' + state.nextId++, name, getId() { return this.id; } };
+      drive.folders.push(f);
+      return f;
+    },
+    getFolderById(id) {
+      if (drive.driveFail) throw new Error('Drive unavailable');
+      const f = drive.folders.find((x) => x.id === id);
+      if (!f) throw new Error('Folder not found: ' + id);
+      return f;
+    },
+    getFileById(id) {
+      if (drive.driveFail) throw new Error('Drive unavailable');
+      return { makeCopy(name, folder) { drive.copies.push({ id, name, folder: folder.id }); } };
+    },
+  };
+  const ScriptApp = {
+    getProjectTriggers() { return drive.triggers.map((h) => ({ getHandlerFunction: () => h })); },
+    newTrigger(h) {
+      const b = { timeBased: () => b, onMonthDay: () => b, atHour: () => b, create: () => { drive.triggers.push(h); return {}; } };
+      return b;
+    },
+  };
+
   const quietConsole = { log() {}, info() {}, warn() {}, error() {} };
 
   return {
-    globals: { SpreadsheetApp, LockService, PropertiesService, Utilities, Logger, console: quietConsole, Date: FakeDate },
+    globals: { SpreadsheetApp, DriveApp, ScriptApp, LockService, PropertiesService, Utilities, Logger, console: quietConsole, Date: FakeDate },
     clock: {
       set(s) { state.nowMs = jstToEpochMs(s); },
       advanceMinutes(n) { state.nowMs += n * 60 * 1000; },
@@ -219,6 +247,7 @@ function createGasEnv(options) {
     get lockHeld() { return state.lockHeld; },
     get hmacCalls() { return state.hmacCalls; },
     logs: state.logs,
+    drive,
     properties: state.properties,
     spreadsheets: state.spreadsheets,
   };

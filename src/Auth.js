@@ -6,12 +6,18 @@ function setupInitial() {
     Logger.log('ALREADY_SET_UP');
     return;
   }
+  // 管理者のいるデータの表がすでにあるなら作り直さない（やり直すと、学生の入った表とつながらない空の表ができる）。
+  // 表が開けない・管理者がいない（途中で失敗した）ときは、最初から作り直す。
+  if (setup_hasLiveShiftDb_()) {
+    Logger.log('SHIFT_DB_EXISTS: 初期設定は済んでいます（データの表に管理者がいます）');
+    return;
+  }
 
   // 1. ShiftDB 作成（全シートを書式なしテキストにしてから見出しを書く）
   var shiftDb = SpreadsheetApp.create('ShiftDB');
   var tableNames = [
     'STUDENTS', 'USERS', 'MONTHLY_SUBMISSIONS',
-    'SCHOOL_HOLIDAYS', 'DEADLINES', 'SETTINGS', 'SESSIONS'
+    'SCHOOL_HOLIDAYS', 'DEADLINES', 'SETTINGS', 'SESSIONS', 'CLASSES'
   ];
   for (var i = 0; i < tableNames.length; i++) {
     var tName = tableNames[i];
@@ -57,6 +63,47 @@ function setupInitial() {
   Logger.log('INITIAL_ADMIN loginId=%s password=%s', adminLoginId, adminPassword);
 }
 
+// 管理者のパスワードを忘れたときの再発行（Apps Script のエディタから実行する）。
+// スクリプトのプロパティ ADMIN_RESET_LOGIN_ID に管理者のログインIDを入れたときだけ動き、1回動くとその許可を消す。
+// 新しいパスワードは実行ログに出る（次のログインで変更を求める）。
+function resetAdminPassword() {
+  var props = PropertiesService.getScriptProperties();
+  var loginId = props.getProperty('ADMIN_RESET_LOGIN_ID');
+  if (!loginId) {
+    Logger.log('NOT_ALLOWED: スクリプトのプロパティ ADMIN_RESET_LOGIN_ID に管理者のログインIDを入れてから実行してください');
+    return;
+  }
+  props.deleteProperty('ADMIN_RESET_LOGIN_ID');
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(10000)) { Logger.log('BUSY: しばらくしてからやり直してください（許可はもう一度入れる）'); return; }
+  try {
+    var user = db_readAllRows_('USERS').filter(function (u) { return u.login_id === loginId && u.role === 'admin'; })[0];
+    if (!user) { Logger.log('NOT_FOUND: その管理者はいません: ' + loginId); return; }
+    var password = util_generatePassword_(16);
+    var salt = util_generateSalt_();
+    user.password_salt = salt;
+    user.password_hash = util_hashPassword_(password, salt, props.getProperty('PASSWORD_PEPPER'), 10000);
+    user.hash_iterations = '10000';
+    user.force_password_change = 'true';
+    user.failed_login_count = '0';
+    user.locked_until = '';
+    db_updateRow_('USERS', user._rowNum, user);
+    db_logAudit_('ADMIN_PASSWORD_RESET', 'editor', 'admin', '', '', null, { loginId: loginId });
+    Logger.log('ADMIN_PASSWORD_RESET loginId=%s password=%s', loginId, password);
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function setup_hasLiveShiftDb_() {
+  if (!PropertiesService.getScriptProperties().getProperty('SHIFT_DB_ID')) return false;
+  try {
+    return db_readAllRows_('USERS').some(function (u) { return u.role === 'admin'; });
+  } catch (e) {
+    return false;
+  }
+}
+
 // 新しいスプレッドシートに最初からある空のシート（言語により名前が違う）を消す。
 function setup_removeOtherSheets_(ss, keepNames) {
   ss.getSheets().forEach(function (sh) {
@@ -66,14 +113,9 @@ function setup_removeOtherSheets_(ss, keepNames) {
   });
 }
 
-// 期限切れのセッションを消す（ロックの中で呼ぶ）。下の行から消して行番号のずれを防ぐ。
+// 期限切れのセッションをまとめて消す（ロックの中で呼ぶ）。
 function auth_purgeExpiredSessions_(now) {
-  var sessions = db_readAllRows_('SESSIONS');
-  for (var i = sessions.length - 1; i >= 0; i--) {
-    if (!sessions[i].expires_at || sessions[i].expires_at <= now) {
-      db_deleteRow_('SESSIONS', sessions[i]._rowNum);
-    }
-  }
+  db_deleteRowsWhere_('SESSIONS', function (r) { return !r.expires_at || r.expires_at <= now; });
 }
 
 function auth_sessionTtlMinutes_() {
@@ -178,6 +220,7 @@ function api_login(loginId, password) {
       lock.releaseLock();
     }
   } catch (err) {
+    util_logError_(err);
     return { ok: false, error: 'INTERNAL' };
   }
 }
@@ -241,6 +284,7 @@ function api_logout(token) {
     }
     return { ok: true, data: null };
   } catch (err) {
+    util_logError_(err);
     return { ok: false, error: 'INTERNAL' };
   }
 }
@@ -278,6 +322,7 @@ function api_changePassword(token, currentPassword, newPassword) {
 
     return { ok: true, data: null };
   } catch (err) {
+    util_logError_(err);
     return { ok: false, error: 'INTERNAL' };
   }
 }
