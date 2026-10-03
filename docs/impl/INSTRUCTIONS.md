@@ -224,6 +224,7 @@ src/
 | `api_adminUnlockLogin` | `token, studentId` | `null` |
 | `api_adminCreateAdmin` | `token` | `{ loginId, initialPassword }` |
 | `api_adminImportRoster` | `token, { className, enrollmentDate, rows: [{ studentId, name, nameKana }] }`（最大300人） | `{ created: [学籍番号], skipped: [学籍番号] }`（2026-10-02 追加。既存・重複は飛ばす。1行でも形が違えば BAD_REQUEST で何も登録しない） |
+| `api_adminListClasses` / `api_adminAddClass` / `api_adminDeleteClass` | `token` / `token, name` / `token, name` | `[{ name, students }]` / `null` / `null`（2026-10-03 追加。学生がいるクラスは消せない＝BAD_REQUEST） |
 | `api_adminStudentDetail` | `token, studentId` | `{ student, months: [{ yearMonth, status, actualStatus, shifts, totalMinutes, codes, actual: object\|null, actualTotalMinutes: number\|null, actualCodes, unlockUntil, publicHolidays }] }`（新しい月が先） |
 | `api_adminGrantUnlock` | `token, studentId, yearMonth, until` | `null`（行が無ければ未入力の行を作る。version は変えない） |
 | `api_adminSchoolConfirm` | `token, studentId, yearMonth` | `null` |

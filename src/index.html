@@ -155,7 +155,7 @@
 
       <!-- 絞り込みと印刷 -->
       <div class="adm-toolbar">
-        <input type="text" id="admin-class-filter" placeholder="クラス">
+        <select id="admin-class-filter"><option value="">全クラス</option></select>
         <select id="admin-status-filter">
           <option value="">全状態</option>
           <option value="確定済">確定済</option>
@@ -177,6 +177,7 @@
       <section class="adm-tools">
         <h2 class="adm-tools-title">設定</h2>
         <div class="adm-tools-row">
+          <button id="btn-open-classes" class="adm-link">クラス設定</button>
           <button id="btn-open-student-form" class="adm-link">学生を追加</button>
           <button id="btn-open-roster" class="adm-link">名簿から一括登録</button>
           <button id="btn-open-deadline" class="adm-link">入力期限設定</button>

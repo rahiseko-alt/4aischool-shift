@@ -31,8 +31,21 @@ var DB_TABLES_ = {
   ],
   SESSIONS: [
     'token_hash', 'login_id', 'role', 'expires_at', 'created_at'
+  ],
+  CLASSES: [
+    'class_name', 'created_at'
   ]
 };
+
+// 後から足した表（CLASSES など）は、古いデータの表には無い。無ければ見出しつきで作る。
+function db_ensureTable_(sheetName) {
+  var ss = db_getShiftDb_();
+  if (ss.getSheetByName(sheetName)) return;
+  var s = ss.insertSheet(sheetName);
+  db_setPlainText_(s);
+  s.appendRow(DB_TABLES_[sheetName]);
+  s.setFrozenRows(1);
+}
 
 var DB_AUDIT_LOG_HEADERS_ = [
   'timestamp', 'user_id', 'role', 'action', 'student_id', 'year_month', 'version', 'details'

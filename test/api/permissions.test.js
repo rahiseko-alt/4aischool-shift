@@ -24,6 +24,9 @@ const ADMIN_APIS = [
   ['api_adminPurgeExpired'],
   ['api_adminCreateAdmin'],
   ['api_adminSeedDemo'],
+  ['api_adminListClasses'],
+  ['api_adminAddClass', 'X'],
+  ['api_adminDeleteClass', 'X'],
   ['api_adminImportRoster', { className: 'A', enrollmentDate: '2026-04-01', rows: [{ studentId: 'X1', name: 'N', nameKana: '' }] }],
   ['api_adminActAsDemoStudent', 'DEMO-A'],
 ];

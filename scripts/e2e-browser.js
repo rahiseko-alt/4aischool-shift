@@ -62,10 +62,19 @@ html = html.replace('<head>', '<head><script>' + shim + '</script>');
   if (await page.$('#btn-open-wage')) throw new Error('最低賃金設定のボタンが残っている');
   if ((await page.textContent('#admin-screen')).includes('最低賃金')) throw new Error('管理画面に最低賃金の文字が残っている');
 
-  step('締切を登録');
-  await page.click('#btn-open-deadline');
-  await page.fill('[data-key="yearMonth"]', '2026-10'); await page.fill('[data-key="className"]', 'A'); await page.fill('[data-key="deadlineAt"]', '2026-09-30 23:59');
+  step('クラスを登録（A と 名簿テスト科）。クラスが無いと学生の追加はできない');
+  await page.click('#btn-open-classes'); await wait();
+  for (const name of ['A', '名簿テスト科']) {
+    await page.fill('[data-key="name"]', name); await page.click('[data-act="addClass"]'); await wait();
+  }
+  if (!(await page.textContent('#admin-dialog-body')).includes('名簿テスト科')) throw new Error('クラスが一覧に出ない');
+  await page.click('#btn-dialog-close');
+
+  step('入力期限を登録（クラスは選ぶ。日付だけ入れれば 23:59）');
+  await page.click('#btn-open-deadline'); await wait();
+  await page.fill('[data-key="yearMonth"]', '2026-10'); await page.selectOption('[data-key="className"]', 'A'); await page.fill('[data-key="deadlineAt"]', '2026-09-30');
   await page.click('[data-act="submit"]'); await wait();
+  if (!dialogs.some((m) => m.includes('入力期限を保存しました（A）'))) throw new Error('入力期限が保存されない: ' + dialogs.slice(-1));
 
   step('長期休業を登録');
   await page.click('#btn-open-holiday'); await wait();
@@ -78,7 +87,7 @@ html = html.replace('<head>', '<head><script>' + shim + '</script>');
   await page.click('[data-act="submit"]');
   if (!(await page.textContent('#admin-form-error')).includes('学籍番号')) throw new Error('必須項目の案内が出ない');
   await page.fill('[data-key="studentId"]', '251001'); await page.fill('[data-key="name"]', '<b>テスト</b> 学生');
-  await page.fill('[data-key="className"]', 'A'); await page.fill('[data-key="birthDate"]', '2000-04-01'); await page.fill('[data-key="enrollmentDate"]', '2025-04-01');
+  await page.selectOption('[data-key="className"]', 'A'); await page.fill('[data-key="birthDate"]', '2000-04-01'); await page.fill('[data-key="enrollmentDate"]', '2025-04-01');
   await page.check('[data-key="workPermission"]'); await page.fill('[data-key="permissionExpires"]', '2027-12-31');
   await page.click('[data-act="submit"]'); await wait();
   const cred = await page.textContent('#admin-dialog-body');
@@ -260,7 +269,7 @@ html = html.replace('<head>', '<head><script>' + shim + '</script>');
 
   step('名簿から一括登録: Excel から貼った表（番号・学籍番号・ローマ字・セル内改行のあるカナ）を読み取って登録し、学籍番号だけで入れる');
   await page.click('#btn-open-roster');
-  await page.fill('[data-key="className"]', '名簿テスト科');
+  await page.selectOption('[data-key="className"]', '名簿テスト科');
   await page.fill('#roster-text', '1\tTEST26001\tTARO  YAMADA\t"タロウ　\nヤマダ"\n2\tTEST26002\tHANAKO SATO\tハナコ　サトウ\n\n');
   await page.click('[data-act="rosterCheck"]');
   const prev = await page.textContent('#roster-preview');

@@ -95,7 +95,7 @@ test('修正許可: 期限の形が違えば BAD_REQUEST、存在しない学生
 
 test('締切・長期休業: 日付や数の形が違えば BAD_REQUEST', () => {
   const ctx = boot();
-  assert.equal(ctx.api('api_adminSetDeadline', ctx.admin, { yearMonth: '2026-10', className: 'A', deadlineAt: '2026-09-30', actualDeadlineAt: null }).error, 'BAD_REQUEST');
+  assert.equal(ctx.api('api_adminSetDeadline', ctx.admin, { yearMonth: '2026-10', className: 'A', deadlineAt: '2026/09/30', actualDeadlineAt: null }).error, 'BAD_REQUEST'); // 2026-10-03: 日付だけ（2026-09-30）は 23:59 として受け付ける
   assert.equal(ctx.api('api_adminSetHoliday', ctx.admin, { name: '冬季休業', startDate: '2026-12-24', endDate: '2027-01-07', schoolYear: 'abc' }).error, 'BAD_REQUEST');
 });
 

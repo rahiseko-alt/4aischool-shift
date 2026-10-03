@@ -355,6 +355,13 @@ function api_adminSetDeadline(token, params) {
     var className = params.className;
     var deadlineAt = params.deadlineAt;
     var actualDeadlineAt = params.actualDeadlineAt || null;
+    // 予定の入力期限が空なら、対象月の末日 23:59（2026-10-03）
+    if ((deadlineAt === '' || deadlineAt === null || deadlineAt === undefined) && util_isYearMonth_(yearMonth)) {
+      deadlineAt = core_buildDateStr_(yearMonth, core_getDaysInMonth_(yearMonth)) + ' 23:59';
+    }
+    // 日付だけ（YYYY-MM-DD）なら、その日の 23:59
+    if (util_isDate_(deadlineAt)) deadlineAt = deadlineAt + ' 23:59';
+    if (actualDeadlineAt !== null && util_isDate_(actualDeadlineAt)) actualDeadlineAt = actualDeadlineAt + ' 23:59';
 
     if (!util_isYearMonth_(yearMonth) || !util_isNonEmptyString_(className, 30) || !util_isDateTime_(deadlineAt)) {
       return { ok: false, error: 'BAD_REQUEST' };
@@ -1238,6 +1245,64 @@ function api_adminImportRoster(token, params) {
     } finally {
       lock.releaseLock();
     }
+  } catch (err) {
+    return { ok: false, error: 'INTERNAL' };
+  }
+}
+
+// ---- クラスの登録（2026-10-03）。学生・名簿・入力期限のクラスは、ここに登録した名前から選ぶ ----
+// 一覧には、登録したクラスに加えて、学生がいるクラス（登録前に入った学生のクラス）も自動で登録して出す。
+function api_adminListClasses(token) {
+  try {
+    var auth = auth_verifySession_(token, 'admin');
+    if (!auth.ok) return auth;
+    db_ensureTable_('CLASSES');
+    var names = {};
+    db_readAllRows_('CLASSES').forEach(function (r) { if (r.class_name) names[r.class_name] = 0; });
+    var missing = [];
+    db_readAllRows_('STUDENTS').forEach(function (s) {
+      if (!s.class) return;
+      if (!(s.class in names)) { names[s.class] = 0; missing.push({ class_name: s.class, created_at: util_nowJst_() }); }
+      names[s.class]++;
+    });
+    db_insertRows_('CLASSES', missing);
+    var list = Object.keys(names).sort().map(function (n) { return { name: n, students: names[n] }; });
+    return { ok: true, data: list };
+  } catch (err) {
+    return { ok: false, error: 'INTERNAL' };
+  }
+}
+
+function api_adminAddClass(token, name) {
+  try {
+    var auth = auth_verifySession_(token, 'admin');
+    if (!auth.ok) return auth;
+    if (typeof name !== 'string' || !util_isNonEmptyString_(name.trim(), 30)) return { ok: false, error: 'BAD_REQUEST' };
+    name = name.trim();
+    db_ensureTable_('CLASSES');
+    var exists = db_readAllRows_('CLASSES').some(function (r) { return r.class_name === name; });
+    if (!exists) {
+      db_insertRow_('CLASSES', { class_name: name, created_at: util_nowJst_() });
+      db_logAudit_('MASTER_UPDATE', auth.user.login_id, 'admin', '', '', null, { op: 'add_class', className: name });
+    }
+    return { ok: true, data: null };
+  } catch (err) {
+    return { ok: false, error: 'INTERNAL' };
+  }
+}
+
+// 学生が1人でもいるクラスは消せない（学生の情報とずれるため）
+function api_adminDeleteClass(token, name) {
+  try {
+    var auth = auth_verifySession_(token, 'admin');
+    if (!auth.ok) return auth;
+    if (typeof name !== 'string' || !name) return { ok: false, error: 'BAD_REQUEST' };
+    if (db_readAllRows_('STUDENTS').some(function (s) { return s.class === name; })) return { ok: false, error: 'BAD_REQUEST' };
+    db_ensureTable_('CLASSES');
+    var rows = db_readAllRows_('CLASSES').filter(function (r) { return r.class_name === name; });
+    rows.sort(function (a, b) { return b._rowNum - a._rowNum; }).forEach(function (r) { db_deleteRow_('CLASSES', r._rowNum); });
+    db_logAudit_('MASTER_UPDATE', auth.user.login_id, 'admin', '', '', null, { op: 'delete_class', className: name });
+    return { ok: true, data: null };
   } catch (err) {
     return { ok: false, error: 'INTERNAL' };
   }

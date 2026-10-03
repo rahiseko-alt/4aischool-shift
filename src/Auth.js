@@ -11,7 +11,7 @@ function setupInitial() {
   var shiftDb = SpreadsheetApp.create('ShiftDB');
   var tableNames = [
     'STUDENTS', 'USERS', 'MONTHLY_SUBMISSIONS',
-    'SCHOOL_HOLIDAYS', 'DEADLINES', 'SETTINGS', 'SESSIONS'
+    'SCHOOL_HOLIDAYS', 'DEADLINES', 'SETTINGS', 'SESSIONS', 'CLASSES'
   ];
   for (var i = 0; i < tableNames.length; i++) {
     var tName = tableNames[i];
