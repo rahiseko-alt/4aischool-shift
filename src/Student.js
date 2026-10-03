@@ -166,6 +166,12 @@ function student_getAdjacentMonthData_(student, targetYm, isPrev, subs) {
   return { source: 'none', daily: {} };
 }
 
+// 表示用: 確定済みの月には、翌月の下書きの時間を数えない（後から翌月に入れた下書きで、確定済みの月にエラーを出さない。
+// 月をまたぐ28時間超は翌月の側に出る）。保存・確定の検算では使わない。
+function student_nextDailyFor_(status, nextData) {
+  return status === '確定済' && nextData.source === 'none' ? {} : nextData.daily;
+}
+
 function api_getMonth(token, yearMonth) {
   try {
     var auth = auth_verifySession_(token, 'student');
@@ -253,7 +259,7 @@ function api_getMonth(token, yearMonth) {
       shifts: shifts,
       prevMonthDaily: prevData.daily,
       prevMonthSource: prevData.source,
-      nextMonthDaily: nextData.daily,
+      nextMonthDaily: student_nextDailyFor_(status, nextData),
       holidays: holidays,
       settings: settings
     });

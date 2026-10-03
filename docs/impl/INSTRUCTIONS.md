@@ -263,6 +263,8 @@ src/
 - `actualUnconfirmed`: 現在が対象月の翌月1日 00:00 以後のときだけ、**ボードの対象の学生（クラスの絞り込み後）**のうち、表示状態が対象外でなく、実績が未確認（スプレッドシートに行が無い学生も未確認）の人数。それより前は 0。
 - 締切を過ぎても、下書きの月の表示状態は `下書き` のまま（未提出にしない）。
 - `backup`: 保存先（`BACKUP_FOLDER_ID`）が未設定、最後のバックアップ（`LAST_BACKUP_AT`）が無い、または40日以上前なら `warn: true`。
+- 一覧を返す前に、保存先フォルダ（「ShiftDB バックアップ」）・毎月の自動実行・最初のバックアップが無ければ用意する（`backup_ensureSetup_`。失敗しても一覧は返す）。
+- `errorCodes` の計算では、確定済の月に翌月の下書きの時間を数えない（月をまたぐ28時間超は翌月の側に出る）。学生の `api_getMonth` の表示も同じ。
 
 `api_adminPrintHtml`:
 
@@ -280,7 +282,7 @@ src/
 | 関数 | 役割 |
 | --- | --- |
 | `doGet()` | `index.html` を返す。`setTitle` とスマートフォン用の viewport を付ける |
-| `setupInitial()` | 初期設定（下記）。2回目以降は何もせず `Logger.log('ALREADY_SET_UP')`。`SHIFT_DB_ID` があるときも作り直さず `Logger.log('SHIFT_DB_EXISTS...')` |
+| `setupInitial()` | 初期設定（下記）。2回目以降は何もせず `Logger.log('ALREADY_SET_UP')`。`SHIFT_DB_ID` の表が開けて管理者がいるときも作り直さず `Logger.log('SHIFT_DB_EXISTS...')`（表が開けない・管理者がいないときは途中で失敗したとみなして最初から作る） |
 | `resetAdminPassword()` | 管理者パスワードの再発行（エディタから実行）。スクリプトのプロパティ `ADMIN_RESET_LOGIN_ID` に管理者のログインIDがあるときだけ動き、そのプロパティを消してから、新しいパスワード（次のログインで変更を求める）を `Logger.log('ADMIN_PASSWORD_RESET loginId=%s password=%s')` に出す |
 | `backupMonthly()` | 第8章 |
 | `installTriggers()` | 第8章 |

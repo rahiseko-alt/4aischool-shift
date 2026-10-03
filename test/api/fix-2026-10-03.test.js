@@ -103,9 +103,11 @@ test('6: ログイン時の片付けは期限切れのセッションだけを�
 
 test('8: 管理一覧の応答にバックアップの状態が入り、未設定・40日以上前なら警告になる', () => {
   const w = world();
+  w.env.drive.driveFail = true; // ドライブが使えず、自動で用意できない場合
   const backup = () => ok(w.api('api_adminBoard', w.admin, '2026-10', {})).backup;
   assert.deepEqual(backup(), { configured: false, lastAt: null, warn: true });
   w.env.properties.set('BACKUP_FOLDER_ID', 'folder-1');
+  w.env.properties.set('BACKUP_TRIGGER_OK', 'true');
   assert.equal(backup().warn, true); // 一度も取っていない
   w.env.properties.set('LAST_BACKUP_AT', '2026-09-01 03:00');
   assert.deepEqual(backup(), { configured: true, lastAt: '2026-09-01 03:00', warn: false });
@@ -161,4 +163,49 @@ test('10: 学校確定を取り消すと未入力に戻り、学生がまた入�
   assert.equal(m.status, '未入力');
   ok(w.api('api_saveDraft', w.st.token, '2026-10', { '20': [sh('09:00', '12:00')] }, m.version));
   assert.equal(w.api('api_adminUndoSchoolConfirm', w.admin, w.st.studentId, '2026-10').error, 'FORBIDDEN'); // 学校確定でない月は取り消せない
+});
+
+// ---- 後でやるリスト 1. 確定済みの月に、翌月の下書きで28時間超が出る ----
+
+test('後1: 確定済みの月には、翌月の下書きによる28時間超を出さない（翌月の側にだけ出る）', () => {
+  const w = world();
+  ok(w.api('api_adminSetDeadline', w.admin, { yearMonth: '2026-11', className: w.st.className || 'A', deadlineAt: '2026-10-31 23:59', actualDeadlineAt: null }));
+  ok(w.api('api_confirm', w.st.token, '2026-10', everyDay(26, 31, sh('09:00', '13:00')), 0));
+  ok(w.api('api_saveDraft', w.st.token, '2026-11', everyDay(1, 4, sh('09:00', '14:00')), 0));
+  const codes = (ym) => ok(w.api('api_adminBoard', w.admin, ym, {})).rows.find((r) => r.studentId === w.st.studentId).errorCodes;
+  assert.deepEqual(codes('2026-10'), []);
+  assert.deepEqual(codes('2026-11'), ['OVER_28H']);
+  const d = ok(w.api('api_adminStudentDetail', w.admin, w.st.studentId));
+  assert.deepEqual(d.months.find((m) => m.yearMonth === '2026-10').codes, []);
+  const m = ok(w.api('api_getMonth', w.st.token, '2026-10'));
+  assert.ok(!m.evaluation.codes.some((c) => c.code === 'OVER_28H'));
+});
+
+// ---- 後でやるリスト 2. 初期設定が途中で失敗すると、やり直しが止まる ----
+
+test('後2: 初期設定が管理者を作る前に失敗していたら、やり直せる（管理者がいるデータの表は作り直さない）', () => {
+  const { load } = require('../helpers/load.js');
+  const app = load({ now: '2026-09-01 10:00' });
+  app.env.properties.set('SHIFT_DB_ID', 'half-made'); // 表の番号だけ残って止まった状態（表は開けない）
+  app.get('setupInitial')();
+  assert.ok(app.env.logs.some((l) => l.startsWith('INITIAL_ADMIN')), app.env.logs.join('\n'));
+  assert.notEqual(app.env.properties.get('SHIFT_DB_ID'), 'half-made');
+  assert.equal(app.env.properties.get('SETUP_DONE'), 'true');
+});
+
+// ---- 後でやるリスト 3. バックアップが本番で設定されていない ----
+
+test('後3: 管理画面を開くと、保存先のフォルダ・毎月の自動実行・最初のバックアップが自動で用意され、2回目以降は何もしない', () => {
+  const w = world();
+  w.env.properties.set('LAST_BACKUP_YM', '2026-09'); // 古い版で月だけ記録されていた場合でも取り直す
+  const b = ok(w.api('api_adminBoard', w.admin, '2026-10', {})).backup;
+  assert.equal(b.configured, true);
+  assert.equal(b.warn, false);
+  assert.equal(w.env.drive.folders.length, 1);
+  assert.deepEqual(w.env.drive.triggers, ['backupMonthly']);
+  assert.deepEqual(w.env.drive.copies.map((c) => c.name).sort(), ['AuditLog_2026-09', 'ShiftDB_2026-09']);
+  ok(w.api('api_adminBoard', w.admin, '2026-10', {}));
+  assert.equal(w.env.drive.folders.length, 1);
+  assert.equal(w.env.drive.triggers.length, 1);
+  assert.equal(w.env.drive.copies.length, 2);
 });

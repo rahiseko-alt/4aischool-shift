@@ -6,9 +6,10 @@ function setupInitial() {
     Logger.log('ALREADY_SET_UP');
     return;
   }
-  // データの表がすでにあるなら作り直さない（やり直すと、学生の入った表とつながらない空の表ができる）
-  if (props.getProperty('SHIFT_DB_ID')) {
-    Logger.log('SHIFT_DB_EXISTS: 初期設定は済んでいます。やり直す場合はスクリプトのプロパティ SHIFT_DB_ID を消してから');
+  // 管理者のいるデータの表がすでにあるなら作り直さない（やり直すと、学生の入った表とつながらない空の表ができる）。
+  // 表が開けない・管理者がいない（途中で失敗した）ときは、最初から作り直す。
+  if (setup_hasLiveShiftDb_()) {
+    Logger.log('SHIFT_DB_EXISTS: 初期設定は済んでいます（データの表に管理者がいます）');
     return;
   }
 
@@ -91,6 +92,15 @@ function resetAdminPassword() {
     Logger.log('ADMIN_PASSWORD_RESET loginId=%s password=%s', loginId, password);
   } finally {
     lock.releaseLock();
+  }
+}
+
+function setup_hasLiveShiftDb_() {
+  if (!PropertiesService.getScriptProperties().getProperty('SHIFT_DB_ID')) return false;
+  try {
+    return db_readAllRows_('USERS').some(function (u) { return u.role === 'admin'; });
+  } catch (e) {
+    return false;
   }
 }
 

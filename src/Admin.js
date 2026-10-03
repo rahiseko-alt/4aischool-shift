@@ -651,6 +651,7 @@ function api_adminBoard(token, yearMonth, filters) {
     if (!auth.ok) return auth;
     manual_ensureSheets_(); // データの表にマニュアルと ChatGPT 用の文章のシートを置く（無いか古いときだけ書く）
     admin_removeSampleHolidaysOnce_();
+    try { backup_ensureSetup_(); } catch (e) { util_logError_(e); } // 失敗しても一覧は出す（赤い注意で気付ける）
 
     if (!yearMonth || typeof yearMonth !== 'string' || !/^\d{4}-(0[1-9]|1[0-2])$/.test(yearMonth)) {
       return { ok: false, error: 'BAD_REQUEST' };
@@ -1269,7 +1270,7 @@ function admin_currentBlockCodes_(st, yearMonth, sub, allSubs, holidays, setting
       graduationDate: st.graduation_date || null, status: st.status, workPermission: st.work_permission === 'true',
       permissionExpires: st.permission_expires || null
     },
-    shifts: shifts, prevMonthDaily: prev.daily, prevMonthSource: prev.source, nextMonthDaily: next.daily,
+    shifts: shifts, prevMonthDaily: prev.daily, prevMonthSource: prev.source, nextMonthDaily: student_nextDailyFor_(sub.status, next),
     holidays: holidays, settings: settings
   });
   var seen = {}, out = [];
