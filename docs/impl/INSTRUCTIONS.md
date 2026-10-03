@@ -120,7 +120,7 @@ src/
 - 時刻は `/^([01]\d|2[0-3]):(00|15|30|45)$/` に合うものだけ（`"9:00"`・`"24:00"`・`"09:10"` は `INVALID_TIME`）。
 - シフトは `{ start, end }`。開始・終了のどちらかが無いシフトは `MISSING`。それ以外の項目（古いデータの `workplace` など）は無視する。
 - 在籍状態が `退学` で退学日が空、`卒業` で卒業日が空なら、すべてのシフトが `NOT_ENROLLED`。
-- `workPermission` が false、または true でも `permissionExpires` が空なら（シフトが1件以上あるとき）`NO_PERMIT`。`PERMIT_EXPIRED` は `workPermission` が true で期限があるときだけ見る。
+- `workPermission` が false なら（シフトが1件以上あるとき）`NO_PERMIT`。期限が空でも `NO_PERMIT` にしない（2026-10-03 変更）。`PERMIT_EXPIRED` は `workPermission` が true で期限があるときだけ見る。
 - テスト: `test/core/*.test.js`。
 
 ---

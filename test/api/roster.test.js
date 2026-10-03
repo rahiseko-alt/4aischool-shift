@@ -23,20 +23,18 @@ test('名簿の一括登録: 学生が入り、学籍番号だけでログイン
   assert.equal(d.student.className, 'テスト科');
   assert.equal(d.student.enrollmentDate, '2026-04-01');
   assert.equal(d.student.birthDate, '');
-  assert.equal(d.student.workPermission, false);
+  assert.equal(d.student.workPermission, true); // 許可が無ければ入学できないため「あり」で登録
   const login = ok(ctx.api('api_login', 'TEST26002', ''));
   assert.equal(login.studentId, 'TEST26002');
 });
 
-test('名簿の一括登録: 許可が未登録の学生は、入力・途中保存はできるが確定は NO_PERMIT で止まる', () => {
+test('名簿の一括登録: 登録した学生は、許可の期限が空のままでも確定できる', () => {
   const ctx = boot({ now: '2026-10-02 10:00' });
   ok(ctx.api('api_adminImportRoster', ctx.admin, req(ROWS)));
   ok(ctx.api('api_adminSetDeadline', ctx.admin, { yearMonth: '2026-11', className: 'テスト科', deadlineAt: '2026-10-31 23:59', actualDeadlineAt: null }));
   const t = ok(ctx.api('api_login', 'TEST26001', '')).token;
   ok(ctx.api('api_saveDraft', t, '2026-11', { '2': [{ start: '09:00', end: '13:00' }] }, 0));
-  const r = ctx.api('api_confirm', t, '2026-11', { '2': [{ start: '09:00', end: '13:00' }] }, 1);
-  assert.equal(r.error, 'VALIDATION_FAILED');
-  assert.ok(r.details.codes.some((c) => c.code === 'NO_PERMIT'));
+  ok(ctx.api('api_confirm', t, '2026-11', { '2': [{ start: '09:00', end: '13:00' }] }, 1));
 });
 
 test('名簿の一括登録: 既にいる学籍番号と、名簿の中の重複は飛ばす（上書きしない）', () => {

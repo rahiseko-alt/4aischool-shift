@@ -57,9 +57,10 @@ test('許可なしでシフトがあれば NO_PERMIT（block）', () => {
   assert.ok(blocking(r).some((c) => c.code === 'NO_PERMIT'));
 });
 
-test('許可ありでも期限が空なら NO_PERMIT', () => {
+test('許可ありなら期限が空でも NO_PERMIT は付かない（期限は見ない。2026-10-03）', () => {
   const r = evaluateMonth(input({ student: { permissionExpires: null }, shifts: on(1) }));
-  assert.ok(has(r, 'NO_PERMIT'));
+  assert.equal(has(r, 'NO_PERMIT'), false);
+  assert.equal(has(r, 'PERMIT_EXPIRED'), false);
 });
 
 test('許可なしでもシフト0件なら NO_PERMIT は付かない', () => {

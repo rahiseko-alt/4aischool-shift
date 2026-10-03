@@ -1279,7 +1279,7 @@ function admin_currentBlockCodes_(st, yearMonth, sub, allSubs, holidays, setting
 }
 
 // 名簿の一括登録（2026-10-02）。rows: [{ studentId, name（ローマ字）, nameKana }]、最大300人。
-// 生年月日・資格外活動許可は空のまま登録する（許可が未登録の間は確定できない。あとで学生詳細から入れる）。
+// 生年月日は空のまま登録する。資格外活動許可は「あり」（許可が無ければ入学できないため。期限は空。2026-10-03）。
 // 学生は学籍番号だけでログインするので、パスワードは誰も知らない乱数にしておく（1万回の計算は省く）。
 // 既にいる学籍番号・名簿の中の重複は飛ばし、上書きしない。1行でも形が違えば1人も登録しない。
 function api_adminImportRoster(token, params) {
@@ -1318,7 +1318,7 @@ function api_adminImportRoster(token, params) {
         students.push({
           student_id: r.studentId, login_id: loginId, name: r.name.trim(), name_kana: (r.nameKana || '').trim(),
           class: className, birth_date: '', language: 'ja', enrollment_date: enrollmentDate,
-          graduation_date: '', withdrawal_date: '', status: '在籍', work_permission: 'false',
+          graduation_date: '', withdrawal_date: '', status: '在籍', work_permission: 'true',
           permission_expires: '', permission_checked_at: '', created_at: now, updated_at: now
         });
         users.push({
