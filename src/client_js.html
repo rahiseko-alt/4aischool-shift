@@ -60,12 +60,16 @@
   }
   function showError(elId, code) { showMsg(elId, tErr(code), true); }
   function hideError(elId) { var x = el(elId); if (x) x.hidden = true; }
-  function showSpinner() { el('global-spinner').hidden = false; }
-  function hideSpinner() { el('global-spinner').hidden = true; }
+  // 通信中の数を数え、全部終わるまで覆いを消さない
+  var spinnerCount = 0;
+  function showSpinner() { spinnerCount++; el('global-spinner').hidden = false; }
+  function hideSpinner() { spinnerCount = Math.max(0, spinnerCount - 1); if (!spinnerCount) el('global-spinner').hidden = true; }
 
   // ---- サーバ呼び出し（通信失敗・BUSY は 2秒・4秒・8秒待って最大3回やり直す） ----
+  // データの削除は、届いたか分からないまま何度も送らないよう、やり直さない
+  var NO_RETRY = ['api_adminPurgeExpired'];
   function callServer(fn, args) {
-    var delays = [2000, 4000, 8000];
+    var delays = NO_RETRY.indexOf(fn) >= 0 ? [] : [2000, 4000, 8000];
     return new Promise(function (resolve) {
       function attempt(n) {
         var runner = google.script.run
@@ -174,11 +178,19 @@
   el('btn-prev-month').addEventListener('click', function () { state.yearMonth = addMonth(state.yearMonth, -1); loadStudentMonth(); });
   el('btn-next-month').addEventListener('click', function () { state.yearMonth = addMonth(state.yearMonth, 1); loadStudentMonth(); });
 
+  // 月を変えたら、読み終わるまで表を空にして保存・確定を押せなくする（別の月を上書きしないため）
   function loadStudentMonth() {
-    el('st-year-month').textContent = state.yearMonth;
+    var ym = state.yearMonth;
+    el('st-year-month').textContent = ym;
     hideError('shift-error');
     hideError('actual-error');
-    call('api_getMonth', [state.token, state.yearMonth]).then(function (month) {
+    state.monthData = null;
+    el('shifts-table').innerHTML = '';
+    el('actual-section').hidden = true;
+    el('btn-save-draft').disabled = true;
+    el('btn-confirm-shift').disabled = true;
+    call('api_getMonth', [state.token, ym]).then(function (month) {
+      if (ym !== state.yearMonth) return;
       if (!month.ok) { showError('shift-error', month.error); return; }
       state.monthData = month.data;
       if (month.data.student) {
@@ -399,22 +411,25 @@
 
   el('btn-save-draft').addEventListener('click', function () {
     hideError('shift-error');
-    call('api_saveDraft', [state.token, state.yearMonth, collectRows('shifts-table', 'plan-row'), state.monthData.version]).then(function (res) {
+    if (!state.monthData) return;
+    call('api_saveDraft', [state.token, state.monthData.yearMonth, collectRows('shifts-table', 'plan-row'), state.monthData.version]).then(function (res) {
       if (handleSaveResult(res, 'shift-error', 'label.saved', 'shifts-table')) reloadKeepMessage();
     });
   });
 
   el('btn-confirm-shift').addEventListener('click', function () {
     hideError('shift-error');
-    call('api_confirm', [state.token, state.yearMonth, collectRows('shifts-table', 'plan-row'), state.monthData.version]).then(function (res) {
+    if (!state.monthData) return;
+    call('api_confirm', [state.token, state.monthData.yearMonth, collectRows('shifts-table', 'plan-row'), state.monthData.version]).then(function (res) {
       if (handleSaveResult(res, 'shift-error', 'label.confirmedDone', 'shifts-table', true)) reloadKeepMessage();
     });
   });
 
   // 保存後に読み直して、エラー表示と version を最新にする（メッセージは残す）
   function reloadKeepMessage() {
-    call('api_getMonth', [state.token, state.yearMonth]).then(function (res) {
-      if (!res.ok) return;
+    var ym = state.yearMonth;
+    call('api_getMonth', [state.token, ym]).then(function (res) {
+      if (ym !== state.yearMonth || !res.ok) return;
       state.monthData = res.data;
       renderShifts();
       renderActual();
@@ -476,14 +491,16 @@
 
   el('btn-save-actual').addEventListener('click', function () {
     hideError('actual-error');
-    call('api_saveActual', [state.token, state.yearMonth, collectRows('actual-table', 'actual-shift-row'), state.monthData.version]).then(function (res) {
+    if (!state.monthData) return;
+    call('api_saveActual', [state.token, state.monthData.yearMonth, collectRows('actual-table', 'actual-shift-row'), state.monthData.version]).then(function (res) {
       if (handleSaveResult(res, 'actual-error', 'label.saved', 'actual-table')) reloadKeepMessage();
     });
   });
 
   el('btn-confirm-actual').addEventListener('click', function () {
     hideError('actual-error');
-    call('api_confirmActual', [state.token, state.yearMonth, state.monthData.version]).then(function (res) {
+    if (!state.monthData) return;
+    call('api_confirmActual', [state.token, state.monthData.yearMonth, state.monthData.version]).then(function (res) {
       if (handleSaveResult(res, 'actual-error', 'label.confirmedDone', 'actual-table', true)) reloadKeepMessage();
     });
   });
@@ -553,6 +570,13 @@
 
   function renderAdminBoard(data) {
     var c = data.counts;
+    var b = data.backup;
+    el('admin-backup').hidden = !(b && b.warn);
+    if (b && b.warn) {
+      el('admin-backup').textContent = !b.configured
+        ? 'バックアップの保存先が未設定です（マニュアルの「バックアップ」を参照）'
+        : 'バックアップが40日以上取られていません（最後: ' + (b.lastAt || 'なし') + '）';
+    }
     el('admin-counts').innerHTML =
       chip('学生', c.students) + chip('確定済', c.confirmed, '確定済') + chip('下書き', c.draft, '下書き') +
       chip('未提出', c.notSubmitted, '未提出') + chip('エラー', c.error, null, c.error ? 'stat-error' : '') +
@@ -892,6 +916,7 @@
         '<button type="button" class="btn-outline btn-sm adm-btn" data-act="print2y">2年分を印刷</button>' +
         '<button type="button" class="btn-outline btn-sm adm-btn" data-act="unlock">締切後の修正を許可</button>' +
         '<button type="button" class="btn-outline btn-sm adm-btn" data-act="schoolConfirm">学校確定（対象外にする）</button>' +
+        '<button type="button" class="btn-outline btn-sm adm-btn" data-act="undoSchoolConfirm" id="btn-undo-school-confirm" hidden>学校確定を取り消す</button>' +
         '</div></section>';
 
       openDialog('学生詳細', html);
@@ -899,6 +924,7 @@
       var showMonth = function () {
         var m = d.months.filter(function (x) { return x.yearMonth === ym(); })[0];
         el('detail-month').innerHTML = detailMonthHtml(ym(), m);
+        el('btn-undo-school-confirm').hidden = !(m && m.status === '学校確定');
       };
       el('detail-ym').addEventListener('change', showMonth);
       showMonth();
@@ -907,6 +933,12 @@
           if (!confirm(ym() + ' を学校確定（対象外）にします。退学・休学・卒業の学生の未入力の月にだけ使えます。')) return;
           call('api_adminSchoolConfirm', [state.token, studentId, ym()]).then(function (r) {
             if (adminAlert(r, '学校確定しました。')) { openStudentDetail(studentId); loadAdminBoard(); }
+          });
+        },
+        undoSchoolConfirm: function () {
+          if (!confirm(ym() + ' の学校確定を取り消し、未入力に戻します。学生がまた入力できるようになります。')) return;
+          call('api_adminUndoSchoolConfirm', [state.token, studentId, ym()]).then(function (r) {
+            if (adminAlert(r, '学校確定を取り消しました。')) { openStudentDetail(studentId); loadAdminBoard(); }
           });
         },
         unlock: function () {

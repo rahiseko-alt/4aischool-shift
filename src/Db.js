@@ -174,6 +174,22 @@ function db_deleteRow_(sheetName, rowNum) {
   sheet.deleteRow(rowNum);
 }
 
+// 条件に合う行をまとめて消す（ロックの中で呼ぶ）。残す行を上に詰めて1回で書き、余った下の行を1回で消す。
+// 1行ずつ deleteRow すると本物のシートでは遅く、その間ロックを握り続けるため。消した行数を返す。
+function db_deleteRowsWhere_(sheetName, shouldDelete) {
+  var rows = db_readAllRows_(sheetName);
+  var kept = rows.filter(function (r) { return !shouldDelete(r); });
+  var removed = rows.length - kept.length;
+  if (!removed) return 0;
+  var sheet = db_getSheet_(db_getShiftDb_(), sheetName);
+  if (kept.length) {
+    var cols = db_columns_(sheet, sheetName);
+    sheet.getRange(2, 1, kept.length, cols.length).setValues(kept.map(function (r) { return db_rowValues_(cols, r); }));
+  }
+  sheet.deleteRows(kept.length + 2, removed);
+  return removed;
+}
+
 function db_logAudit_(action, userId, role, studentId, yearMonth, version, details) {
   var ss = db_getAuditLogDb_();
   var sheet = db_getSheet_(ss, 'AUDIT_LOG');

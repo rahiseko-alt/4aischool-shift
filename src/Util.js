@@ -285,3 +285,22 @@ function util_jpHolidaysOfMonth_(yearMonth) {
   Object.keys(all).forEach(function (k) { if (k.slice(0, 7) === yearMonth) out[k] = all[k]; });
   return out;
 }
+
+// 窓口で想定外のエラーが起きたときに記録する（Apps Script の「実行数」の画面に残る）。
+// 画面には INTERNAL（システムエラー）としか出ないので、原因はここを見て調べる。
+function util_logError_(err) {
+  try {
+    if (typeof console !== 'undefined' && console.error) console.error(err && err.stack ? err.stack : String(err));
+  } catch (e) {}
+}
+
+// 表に入っている JSON を読む。壊れていたら fallback を返し、記録に残す（その月だけでなく前後の月まで開けなくなるのを防ぐ）
+function util_parseJson_(text, fallback) {
+  if (text === undefined || text === null || text === '') return fallback;
+  try {
+    return JSON.parse(text);
+  } catch (e) {
+    util_logError_(new Error('壊れた JSON を読み飛ばした: ' + String(text).slice(0, 80)));
+    return fallback;
+  }
+}

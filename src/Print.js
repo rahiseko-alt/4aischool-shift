@@ -321,6 +321,7 @@ function api_adminPrintHtml(token, params) {
       }
     };
   } catch (err) {
+    util_logError_(err);
     return { ok: false, error: 'INTERNAL' };
   }
 }

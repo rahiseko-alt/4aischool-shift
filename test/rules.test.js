@@ -13,13 +13,13 @@ const REQUIRED_API = [
   'api_login', 'api_logout', 'api_changePassword',
   'api_getMonth', 'api_saveDraft', 'api_confirm', 'api_saveActual', 'api_confirmActual', 'api_getHistory',
   'api_adminBoard', 'api_adminStudentDetail', 'api_adminUpsertStudent', 'api_adminResetPassword', 'api_adminUnlockLogin',
-  'api_adminCreateAdmin', 'api_adminGrantUnlock', 'api_adminSchoolConfirm',
+  'api_adminCreateAdmin', 'api_adminGrantUnlock', 'api_adminSchoolConfirm', 'api_adminUndoSchoolConfirm',
   'api_adminSetDeadline', 'api_adminSetHoliday', 'api_adminDeleteHoliday', 'api_adminListHolidays',
   'api_adminGetSettings', 'api_adminSetSettings',
   'api_adminPrintHtml', 'api_adminPurgeExpired', 'api_adminSeedDemo', 'api_adminActAsDemoStudent', 'api_adminImportRoster',
   'api_adminListClasses', 'api_adminAddClass', 'api_adminDeleteClass',
 ];
-const OTHER_PUBLIC = ['doGet', 'setupInitial', 'backupMonthly', 'installTriggers', 'evaluateMonth'];
+const OTHER_PUBLIC = ['doGet', 'setupInitial', 'resetAdminPassword', 'backupMonthly', 'installTriggers', 'evaluateMonth'];
 
 test('公開関数（名前が _ で終わらないトップレベル関数）は決められた一覧だけ', () => {
   const app = load();

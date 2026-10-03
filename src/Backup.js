@@ -31,6 +31,7 @@ function backupMonthly() {
   auditLogFile.makeCopy('AuditLog_' + currentYm, folder);
 
   props.setProperty('LAST_BACKUP_YM', currentYm);
+  props.setProperty('LAST_BACKUP_AT', util_nowJst_()); // 管理画面の「最後のバックアップ」に出す
   Logger.log('Backup completed for: ' + currentYm);
 }
 

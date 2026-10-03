@@ -46,7 +46,14 @@ html = html.replace('<head>', '<head><script>' + shim + '</script>');
   const dialogs = [];
   const promptAnswer = [];
   await page.clock.setFixedTime(new Date('2026-09-10T01:00:00Z'));
-  await page.exposeFunction('__api', async (name, args) => JSON.stringify(api(name, ...JSON.parse(args))));
+  // slowGetMonth: 月の読み込みを遅らせて、読み込み中の画面を確かめる。savedYm: 最後に保存した月
+  let slowGetMonth = 0; let savedYm = null;
+  await page.exposeFunction('__api', async (name, args) => {
+    const xs = JSON.parse(args);
+    if (name === 'api_getMonth' && slowGetMonth) await new Promise((r) => setTimeout(r, slowGetMonth));
+    if (name === 'api_saveDraft' || name === 'api_confirm') savedYm = xs[1];
+    return JSON.stringify(api(name, ...xs));
+  });
   await page.setContent(html);
   const step = (s) => console.log('▶ ' + s);
   const wait = () => page.waitForFunction(() => document.getElementById('global-spinner').hidden, null, { timeout: 5000 });
@@ -196,6 +203,19 @@ html = html.replace('<head>', '<head><script>' + shim + '</script>');
   const v = await row(2).locator('.sh-end').inputValue();
   if (v !== '18:15') throw new Error('保存したシフトが表示されない: ' + v);
   if ((await totalText()) !== '勤務予定時間合計: 20時間15分') throw new Error('読み込み直した合計: ' + (await totalText()));
+
+  step('月を切り替えた直後は、読み込み終わるまで表が空で保存できない。保存は表に出ている月で送る');
+  slowGetMonth = 800;
+  await page.click('#btn-next-month');
+  if (!(await page.isDisabled('#btn-save-draft'))) throw new Error('読み込み中に保存ボタンが押せる');
+  if ((await page.$$eval('#shifts-table tr.plan-row', (xs) => xs.length)) !== 0) throw new Error('読み込み中に前の月の表が残っている');
+  await page.click('#btn-prev-month');
+  await page.waitForTimeout(1000); await wait();
+  slowGetMonth = 0;
+  if ((await page.textContent('#st-year-month')) !== '2026-10') throw new Error('月が戻らない');
+  if ((await row(2).locator('.sh-end').inputValue()) !== '18:15') throw new Error('遅れて届いた11月の表で上書きされた');
+  await page.click('#btn-save-draft'); await wait();
+  if (savedYm !== '2026-10') throw new Error('保存した月がずれた: ' + savedYm);
 
   step('学生で確定: 1日8時間超の日があると止まり、その日が赤くなる。直せば確定できる');
   if ((await page.textContent('#st-confirm-state')) !== '未確定') throw new Error('確定前に「未確定」が出ない: ' + (await page.textContent('#st-confirm-state')));
