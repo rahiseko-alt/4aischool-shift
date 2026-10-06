@@ -327,6 +327,64 @@ function api_changePassword(token, currentPassword, newPassword) {
   }
 }
 
+// 管理者が自分のログインIDとパスワードを変える（2026-10-06）。params: { currentPassword, newLoginId|null, newPassword|null }。
+// 空欄の項目はそのまま。IDは英数字と . _ - の4〜32文字で、他の管理者のIDや学籍番号（大文字小文字を問わない）と重ねない
+// （学籍番号のログインが先に効くため、重なると管理者が入れなくなる）。今のログインは切らない。
+function api_adminChangeCredentials(token, params) {
+  try {
+    var auth = auth_verifySession_(token, 'admin');
+    if (!auth.ok) return auth;
+    var p = params || {};
+    var newId = typeof p.newLoginId === 'string' && p.newLoginId.trim() ? p.newLoginId.trim() : null;
+    var newPw = typeof p.newPassword === 'string' && p.newPassword ? p.newPassword : null;
+    if (!p.currentPassword || typeof p.currentPassword !== 'string') return { ok: false, error: 'BAD_REQUEST' };
+    if (!newId && !newPw) return { ok: false, error: 'BAD_REQUEST' };
+    if (newId && !/^[A-Za-z0-9._-]{4,32}$/.test(newId)) return { ok: false, error: 'BAD_REQUEST', details: { reason: 'ID_FORMAT' } };
+    if (newPw && newPw.length < 10) return { ok: false, error: 'BAD_REQUEST', details: { reason: 'PASSWORD_SHORT' } };
+
+    var lock = LockService.getScriptLock();
+    if (!lock.tryLock(5000)) return { ok: false, error: 'BUSY' };
+    try {
+      var users = db_readAllRows_('USERS');
+      var user = users.filter(function (u) { return u.login_id === auth.user.login_id; })[0];
+      if (!user) return { ok: false, error: 'AUTH_REQUIRED' };
+      var pepper = PropertiesService.getScriptProperties().getProperty('PASSWORD_PEPPER');
+      var iter = Number(user.hash_iterations) || 10000;
+      if (!util_constantTimeEquals_(util_hashPassword_(p.currentPassword, user.password_salt, pepper, iter), user.password_hash)) {
+        return { ok: false, error: 'LOGIN_FAILED' };
+      }
+      var oldId = user.login_id;
+      if (newId && newId !== oldId) {
+        var key = newId.toUpperCase();
+        var taken = users.some(function (u) { return u !== user && String(u.login_id).toUpperCase() === key; }) ||
+          db_readAllRows_('STUDENTS').some(function (st) { return String(st.student_id).toUpperCase() === key; });
+        if (taken) return { ok: false, error: 'BAD_REQUEST', details: { reason: 'ID_TAKEN' } };
+        user.login_id = newId;
+      }
+      if (newPw) {
+        user.password_salt = util_generateSalt_();
+        user.password_hash = util_hashPassword_(newPw, user.password_salt, pepper, 10000);
+        user.hash_iterations = '10000';
+        user.force_password_change = 'false';
+      }
+      db_updateRow_('USERS', user._rowNum, user);
+      // ログイン中の記録もIDを付け替える（今の画面のログインを切らない）
+      if (user.login_id !== oldId) {
+        db_readAllRows_('SESSIONS').forEach(function (s) {
+          if (s.login_id === oldId) { s.login_id = user.login_id; db_updateRow_('SESSIONS', s._rowNum, s); }
+        });
+      }
+      db_logAudit_('ADMIN_CREDENTIALS_CHANGE', user.login_id, 'admin', '', '', null, { oldLoginId: oldId, idChanged: user.login_id !== oldId, passwordChanged: !!newPw });
+      return { ok: true, data: { loginId: user.login_id } };
+    } finally {
+      lock.releaseLock();
+    }
+  } catch (err) {
+    util_logError_(err);
+    return { ok: false, error: 'INTERNAL' };
+  }
+}
+
 function auth_verifySession_(token, requiredRole, allowMustChange) {
   if (!token || typeof token !== 'string') return { ok: false, error: 'AUTH_REQUIRED' };
 

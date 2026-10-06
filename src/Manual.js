@@ -3,7 +3,7 @@
 // 中身を変えたら MANUAL_VERSION_ を上げること。1行が1セル（A列）になる。
 // 行頭の = + - @ は表計算の式として読まれるので使わない（箇条書きは「・」）。
 
-var MANUAL_VERSION_ = '2026-10-03c';
+var MANUAL_VERSION_ = '2026-10-06';
 var MANUAL_APP_URL_ = 'https://script.google.com/macros/s/AKfycbzloK9Wgxf_aQnaXZ2k_MOz-VbQK7HFhUXQVTS0VH2Ug6T2wd5-Eoq0fgebtq0nQ-HR/exec';
 var MANUAL_SCRIPT_URL_ = 'https://script.google.com/d/1DilT1riEfEt9GmY2eiO425EOrC3OTdyx6DLxlAEip9V0sROG556dyshN/edit';
 var MANUAL_REPO_URL_ = 'https://github.com/rahiseko-alt/4aischool-shift';
@@ -30,7 +30,8 @@ function manual_lines_() {
     '5. 月が終わったら「実績確認」の欄で、予定どおり働いたかを確認して「実績を確定」。',
     '',
     '■ 管理者（先生）の使い方',
-    '・ログイン: 管理者のログインIDとパスワードを入れる。',
+    '・ログイン: ログイン画面の「管理者の方はこちら」を押してパスワード欄を出し、管理者のログインIDとパスワードを入れる。',
+    '・自分のログインIDとパスワードは、設定の「管理者のID・パスワード変更」で変えられる（今のパスワードが要る。空欄の項目はそのまま。IDは学籍番号と同じにできない）。',
     '・上の「< 2026-10 >」で月を切り替える。',
     '・1行の集計（確定済・未提出など）を押すと、その状態の学生だけに絞り込める。',
     '・学生の行を押すと「学生詳細」が開く。学生情報の編集、その月の入力内容の確認、印刷、締切後の修正許可、学校確定（退学・休学などで対象外にする）ができる。',

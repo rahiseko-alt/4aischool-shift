@@ -31,12 +31,14 @@
         <label id="lbl-loginId" data-i18n="label.loginNumber">学籍番号</label>
         <input type="text" id="inp-loginId" autocomplete="username" placeholder="AIBC26001">
       </div>
-      <div class="field">
+      <!-- パスワード欄は管理者だけが使うので、ふだんは出さない（下の「管理者の方はこちら」で出す） -->
+      <div class="field" id="field-password" hidden>
         <label id="lbl-password" data-i18n="label.passwordAdminOnly">パスワード（管理者のみ）</label>
         <input type="password" id="inp-password" autocomplete="current-password" placeholder="">
       </div>
       <p id="login-error" class="error-msg" hidden></p>
       <button id="btn-login" class="btn-primary" style="width: 100%; margin-top: 0.5rem;" data-i18n="button.login">ログイン</button>
+      <p class="login-admin-link"><a href="#" id="btn-show-password" data-i18n="label.adminLogin">管理者の方はこちら</a></p>
     </div>
   </div>
 
@@ -185,6 +187,7 @@
           <button id="btn-open-deadline" class="adm-link">入力期限設定</button>
           <button id="btn-open-holiday" class="adm-link">長期休業設定</button>
           <button id="btn-open-settings" class="adm-link">その他 設定</button>
+          <button id="btn-open-credentials" class="adm-link">管理者のID・パスワード変更</button>
           <button id="btn-purge-expired" class="adm-link adm-danger">保存期限を過ぎたデータを削除</button>
         </div>
       </section>

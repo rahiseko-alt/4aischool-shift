@@ -60,6 +60,8 @@ html = html.replace('<head>', '<head><script>' + shim + '</script>');
 
   // --- 管理者: 初回ログイン → パスワード変更 ---
   step('管理者ログイン');
+  if (!(await page.isHidden('#inp-password'))) throw new Error('ログイン画面にパスワード欄が最初から出ている');
+  await page.click('#btn-show-password');
   await page.fill('#inp-loginId', ADMIN.id); await page.fill('#inp-password', ADMIN.pw); await page.click('#btn-login'); await wait();
   await page.waitForSelector('#change-password-screen:not([hidden])');
   await page.fill('#inp-cur-password', ADMIN.pw); await page.fill('#inp-new-password', 'admin-pass-0001'); await page.click('#btn-change-password'); await wait();
@@ -106,7 +108,7 @@ html = html.replace('<head>', '<head><script>' + shim + '</script>');
 
   step('ログアウト → 学生ログイン（学籍番号だけ・パスワード無し）');
   await page.click('#btn-logout-admin');
-  await page.fill('#inp-loginId', stId); await page.fill('#inp-password', ''); await page.click('#btn-login'); await wait();
+  await page.fill('#inp-loginId', stId); await page.click('#btn-login'); await wait();
   await page.waitForSelector('#student-screen:not([hidden])');
   await page.click('#btn-next-month'); await wait(); // 9月 → 10月
   if ((await page.textContent('#st-year-month')) !== '2026-10') throw new Error('月の切替');
@@ -233,7 +235,7 @@ html = html.replace('<head>', '<head><script>' + shim + '</script>');
     await page.click('#btn-prev-month'); await wait();
     await page.waitForSelector('#login-screen:not([hidden])');
     if (!(await page.textContent('#login-error')).includes('ログイン')) throw new Error('期限切れの案内が出ない');
-    await page.fill('#inp-loginId', stId); await page.fill('#inp-password', ''); await page.click('#btn-login'); await wait();
+    await page.fill('#inp-loginId', stId); await page.click('#btn-login'); await wait();
     await page.click('#btn-next-month'); await wait();
   };
   step('締切後は入力できない（セッション切れ → 入り直し）');
@@ -263,6 +265,8 @@ html = html.replace('<head>', '<head><script>' + shim + '</script>');
 
   step('管理者: 学校設定・印刷（ポップアップ）');
   await page.click('#btn-logout-st');
+  if (!(await page.isHidden('#inp-password'))) throw new Error('ログアウト後にパスワード欄が出たまま');
+  await page.click('#btn-show-password');
   await page.fill('#inp-loginId', ADMIN.id); await page.fill('#inp-password', 'admin-pass-0001'); await page.click('#btn-login'); await wait();
   await page.click('#btn-open-settings'); await wait();
   await page.fill('[data-key="retentionMonths"]', '1');
@@ -307,6 +311,19 @@ html = html.replace('<head>', '<head><script>' + shim + '</script>');
   await page.click('#btn-back-admin'); await wait();
   await page.waitForSelector('#admin-screen:not([hidden])');
   if (!(await page.isHidden('#btn-back-admin'))) throw new Error('管理者に戻った後もボタンが残る');
+
+  step('管理者のID・パスワード変更: 変えたあと、新しいIDとパスワードで入れる');
+  await page.click('#btn-open-credentials');
+  await page.fill('[data-key="currentPassword"]', 'admin-pass-0001');
+  await page.fill('[data-key="newLoginId"]', 'sensei01');
+  await page.fill('[data-key="newPassword"]', 'new-admin-pass-01');
+  await page.fill('[data-key="newPassword2"]', 'new-admin-pass-01');
+  await page.click('[data-act="submit"]'); await wait();
+  if (!dialogs.some((m) => m.includes('sensei01'))) throw new Error('IDの変更が知らされない');
+  await page.click('#btn-logout-admin');
+  await page.click('#btn-show-password');
+  await page.fill('#inp-loginId', 'sensei01'); await page.fill('#inp-password', 'new-admin-pass-01'); await page.click('#btn-login'); await wait();
+  await page.waitForSelector('#admin-screen:not([hidden])');
 
   await browser.close();
   if (errors.length) { console.log(errors.join('\n')); process.exit(1); }
