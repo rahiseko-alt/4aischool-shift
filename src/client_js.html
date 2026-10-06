@@ -106,6 +106,8 @@
     state.token = null; state.role = null; state.studentId = null; state.adminToken = null;
     state.monthData = null;
     el('btn-back-admin').hidden = true;
+    el('field-password').hidden = true;
+    el('btn-show-password').parentNode.hidden = false;
   }
 
   // ---- 言語 ----
@@ -136,6 +138,14 @@
       loadStudentMonth();
     }
   }
+
+  // 管理者だけがパスワード欄を開く
+  el('btn-show-password').addEventListener('click', function (ev) {
+    ev.preventDefault();
+    el('field-password').hidden = false;
+    el('btn-show-password').parentNode.hidden = true;
+    el('inp-password').focus();
+  });
 
   el('btn-login').addEventListener('click', function () {
     hideError('login-error');
@@ -649,7 +659,7 @@
       } else if (f.type === 'bool') {
         input = '<input type="checkbox" data-key="' + esc(f.key) + '"' + (v === true ? ' checked' : '') + '>';
       } else {
-        var type = f.type === 'date' ? 'date' : f.type === 'number' ? 'number' : f.type === 'ym' ? 'month' : 'text';
+        var type = f.type === 'date' ? 'date' : f.type === 'number' ? 'number' : f.type === 'ym' ? 'month' : f.type === 'password' ? 'password' : 'text';
         var ph = f.type === 'datetime' ? 'YYYY-MM-DD HH:MM' : f.type === 'ym' ? 'YYYY-MM' : (f.hint || '');
         input = '<input type="' + type + '" data-key="' + esc(f.key) + '" value="' + esc(v) + '" placeholder="' + esc(ph) + '">';
       }
@@ -721,6 +731,29 @@
     });
   }
   el('btn-open-classes').addEventListener('click', openClasses);
+
+  // ---- 管理者のID・パスワード変更（空欄の項目はそのまま） ----
+  el('btn-open-credentials').addEventListener('click', function () {
+    var fields = [
+      { key: 'currentPassword', label: '今のパスワード', type: 'password', required: true },
+      { key: 'newLoginId', label: '新しいログインID（変えないなら空欄）', type: 'text', hint: '英数字 4〜32文字' },
+      { key: 'newPassword', label: '新しいパスワード（変えないなら空欄）', type: 'password', hint: '10文字以上' },
+      { key: 'newPassword2', label: '新しいパスワード（もう一度）', type: 'password' }
+    ];
+    openForm('管理者のID・パスワード変更', fields, '変更する', function (v) {
+      if (!v.newLoginId && !v.newPassword) { showMsg('admin-form-error', '新しいログインIDか新しいパスワードを入れてください。', true); return; }
+      if ((v.newPassword || '') !== (v.newPassword2 || '')) { showMsg('admin-form-error', '新しいパスワードが2回で違います。', true); return; }
+      call('api_adminChangeCredentials', [state.token, { currentPassword: v.currentPassword, newLoginId: v.newLoginId, newPassword: v.newPassword }]).then(function (r) {
+        if (r.ok) { closeDialog(); alert('変更しました。次からのログインID: ' + r.data.loginId); return; }
+        var reason = r.details && r.details.reason;
+        var msg = r.error === 'LOGIN_FAILED' ? '今のパスワードが違います。'
+          : reason === 'ID_TAKEN' ? 'そのログインIDは使えません（他の管理者か学籍番号と同じです）。'
+          : reason === 'ID_FORMAT' ? 'ログインIDは英数字（. _ - も可）の4〜32文字にしてください。'
+          : reason === 'PASSWORD_SHORT' ? '新しいパスワードは10文字以上にしてください。' : null;
+        if (msg) showMsg('admin-form-error', msg, true); else formError(r);
+      });
+    });
+  });
 
   // ---- 学生の追加・編集 ----
   function studentFields(s) {
