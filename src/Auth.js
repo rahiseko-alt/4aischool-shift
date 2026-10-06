@@ -226,10 +226,29 @@ function api_login(loginId, password) {
 }
 
 // 学籍番号（前後の空白・大文字小文字は問わない）に当たる学生がいれば、その学生のセッションを出す。いなければ null
-function auth_loginByStudentNumber_(input) {
+// ログインの短い番号（2026-10-06 利用者の判断）: クラス名に含む語 → 頭文字。番号は 頭文字＋学籍番号の下2桁（例 K01・S21）
+var AUTH_LOGIN_PREFIXES_ = [{ prefix: 'K', classWord: '国際' }, { prefix: 'S', classWord: '総合' }];
+
+// その学生の短いログイン番号。クラスが対象外なら null
+function auth_loginCodeOf_(student) {
+  var cls = String(student['class'] || '');
+  var p = AUTH_LOGIN_PREFIXES_.filter(function (x) { return cls.indexOf(x.classWord) >= 0; })[0];
+  return p ? p.prefix + String(student.student_id).slice(-2) : null;
+}
+
+// 学籍番号、または短いログイン番号に当たる学生。短い番号で2人以上当たるときは、取り違えを防ぐため null
+function auth_findStudentForLogin_(input) {
   var number = input.trim().toUpperCase();
-  var student = null;
-  db_readAllRows_('STUDENTS').forEach(function (s) { if (String(s.student_id).toUpperCase() === number) student = s; });
+  var students = db_readAllRows_('STUDENTS');
+  var exact = students.filter(function (s) { return String(s.student_id).toUpperCase() === number; });
+  if (exact.length) return exact[0];
+  if (!/^[A-Z]\d{2}$/.test(number)) return null;
+  var hits = students.filter(function (s) { return auth_loginCodeOf_(s) === number; });
+  return hits.length === 1 ? hits[0] : null;
+}
+
+function auth_loginByStudentNumber_(input) {
+  var student = auth_findStudentForLogin_(input);
   if (!student) return null;
   var user = null;
   db_readAllRows_('USERS').forEach(function (u) { if (u.role === 'student' && u.student_id === student.student_id) user = u; });

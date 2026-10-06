@@ -839,7 +839,7 @@
       ]) +
       '<div class="field"><label>名簿</label><textarea id="roster-text" rows="8" placeholder="1\tAIBC26001\tADHIKARI GOMA DEVI\tアディカリ ゴマ デヴィ"></textarea></div>' +
       '<div id="roster-preview"></div>' +
-      '<p class="detail-empty">生年月日は空のまま登録します。資格外活動許可は「あり」で登録します。学生は学籍番号だけでログインできます。</p>' +
+      '<p class="detail-empty">生年月日は空のまま登録します。資格外活動許可は「あり」で登録します。学生はログイン番号（国際ビジネス科は K＋学籍番号の下2桁、総合ビジネス科は S＋下2桁）か学籍番号だけでログインできます。</p>' +
       '<div class="dialog-actions"><button type="button" class="btn-outline" data-act="rosterCheck">読み取って確認</button>' +
       '<button type="button" class="btn-primary" data-act="rosterSave" disabled id="roster-save">この内容で登録</button></div>';
     openDialog('名簿から一括登録', html);
@@ -926,7 +926,7 @@
         s.nameKana ? ['カナ', s.nameKana] : null, ['クラス', s.className], ['状態', s.status], ['生年月日', s.birthDate], ['入学', s.enrollmentDate],
         s.graduationDate ? ['卒業', s.graduationDate] : null, s.withdrawalDate ? ['退学', s.withdrawalDate] : null,
         ['資格外活動許可', s.workPermission ? 'あり（期限 ' + (s.permissionExpires || '未登録') + '）' : 'なし'],
-        ['ログイン', '学籍番号だけで入れます']
+        ['ログイン', s.loginCode ? s.loginCode + '（または学籍番号）' : '学籍番号']
       ].filter(Boolean);
       var html = '<div class="dt-head"><h2 class="dt-name">' + esc(s.name) + '</h2><span class="dt-id">' + esc(s.studentId) + '</span></div>' +
         '<section class="dt-sec"><h3 class="dt-sec-title">学生情報</h3>' +

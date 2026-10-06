@@ -161,7 +161,7 @@ src/
 
 | 関数 | 引数 | 成功時の data | 主なエラー |
 | --- | --- | --- | --- |
-| `api_login` | `loginId, password` | `{ token, role: 'student'\|'admin', mustChangePassword, studentId: string\|null }` | `LOGIN_FAILED`（IDが無い・パスワード違いを区別しない）、`LOGIN_LOCKED`（`details.lockedUntil`） |（2026-10-01: 学生は `loginId` に学籍番号を入れればパスワード無しで入れる。管理者は従来どおり）
+| `api_login` | `loginId, password` | `{ token, role: 'student'\|'admin', mustChangePassword, studentId: string\|null }` | `LOGIN_FAILED`（IDが無い・パスワード違いを区別しない）、`LOGIN_LOCKED`（`details.lockedUntil`） |（2026-10-01: 学生は `loginId` に学籍番号を入れればパスワード無しで入れる。2026-10-06: クラス名に「国際」を含む学生は K＋学籍番号の下2桁、「総合」を含む学生は S＋下2桁でも入れる（大文字小文字は問わない。同じ番号に2人以上当たるときは入れない）。管理者は従来どおり）
 | `api_logout` | `token` | `null` | `AUTH_REQUIRED` |
 | `api_changePassword` | `token, currentPassword, newPassword` | `null` | `LOGIN_FAILED`（現在のパスワード違い）、`BAD_REQUEST`（新しいパスワードが10文字未満、または現在と同じ） |
 

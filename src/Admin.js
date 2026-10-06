@@ -573,6 +573,7 @@ function api_adminStudentDetail(token, studentId) {
       name: targetStudent.name,
       nameKana: targetStudent.name_kana || '',
       className: targetStudent.class,
+      loginCode: auth_loginCodeOf_(targetStudent),
       birthDate: targetStudent.birth_date || '',
       language: targetStudent.language || 'ja',
       enrollmentDate: targetStudent.enrollment_date || '',
