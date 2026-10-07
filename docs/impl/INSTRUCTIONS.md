@@ -109,7 +109,7 @@ src/
 - 画面・スプレッドシート・現在時刻・乱数に触れない。`new Date()`（引数なし）・`Date.now()`・`Math.random`・GAS の機能を Core.js に書かない（テストが検出する）。日付の計算は `new Date(Date.UTC(年, 月-1, 日))` を使う。
 - `shifts` のキーは `"1"`〜`"31"` の文字列。`result.shifts` は入力と同じキーと同じ並び順（配列の添字 = `shiftIndex`）で返す。入力エラーのシフトは計算しない。
 - `result.daily` は**対象月の全日**のキーを持つ（働かない日は 0）。前月・翌月の日は入れない。
-- `codes` の各要素は `{ code, severity, date?, shiftIndex? }`。シフトに関するものは `date` と `shiftIndex`、日に関するものは `date`、7日間に関するものは `date` に**その7日間の初日**を入れる。`NO_PERMIT`・`PREV_MONTH_DRAFT`・`ACTUAL_OVER` は `date` なし。
+- `codes` の各要素は `{ code, severity, date?, shiftIndex? }`。シフトに関するものは `date` と `shiftIndex`、日に関するものは `date`、7日間に関するものは `date` に**その7日間の初日**を入れ、`windowEnd` に最終日を入れる（2026-10-07 追加。画面はこれを使って「10/26〜11/3」のように出し、その月の中の日の行を赤くする）。`NO_PERMIT`・`PREV_MONTH_DRAFT`・`ACTUAL_OVER` は `date` なし。
 - 休憩の位置: `休憩開始 = 開始 + floor(((拘束 − 休憩) ÷ 2) ÷ 15) × 15`。`breakStart`・`breakEnd` は `"HH:MM"`（24時を過ぎたら 00:00 から数え直す）。休憩が0分なら両方 `null`。
 - 深夜帯は、開始日の 0:00〜5:00 と 22:00〜翌5:00。休憩と重なる分は数えない（18歳未満の深夜の判定に使う）。
 - 7日間の窓は「対象月の初日の6日前」から「対象月の末日」までの各日を初日として作る。

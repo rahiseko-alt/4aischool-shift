@@ -242,15 +242,16 @@ function evaluateMonth(input) {
       maxRolling7 = windowTotal;
     }
 
+    // 7日間のコードは date に初日、windowEnd に最終日を入れる（画面は月の中の日に直して出す。2026-10-07）
     if (!allHolidays && windowTotal > 1680) {
-      codes.push({ code: 'OVER_28H', severity: 'block', date: curWindow });
+      codes.push({ code: 'OVER_28H', severity: 'block', date: curWindow, windowEnd: core_addDays_(curWindow, 6) });
     }
 
     if (windowTotal > 2400) {
       if (hasMinor) {
-        codes.push({ code: 'MINOR_OVER', severity: 'block', date: curWindow });
+        codes.push({ code: 'MINOR_OVER', severity: 'block', date: curWindow, windowEnd: core_addDays_(curWindow, 6) });
       } else {
-        codes.push({ code: 'LABOR_HOURS', severity: 'warn', date: curWindow });
+        codes.push({ code: 'LABOR_HOURS', severity: 'warn', date: curWindow, windowEnd: core_addDays_(curWindow, 6) });
       }
     }
 
