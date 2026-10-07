@@ -61,28 +61,64 @@
   function showError(elId, code) { showMsg(elId, tErr(code), true); }
   function hideError(elId) { var x = el(elId); if (x) x.hidden = true; }
   // 通信中の数を数え、全部終わるまで覆いを消さない
+  // 覆いはマウスを止めるが、キーボード（ボタンにフォーカスがあるときの Enter・スペース）は止めない。
+  // 通信中は、覆いを出すときにフォーカスを外し、Enter・スペースとクリックを先回りで捨てる（二重送信を防ぐ。2026-10-07）
   var spinnerCount = 0;
-  function showSpinner() { spinnerCount++; el('global-spinner').hidden = false; }
+  function showSpinner() {
+    spinnerCount++;
+    el('global-spinner').hidden = false;
+    if (document.activeElement && document.activeElement !== document.body && document.activeElement.blur) document.activeElement.blur();
+  }
   function hideSpinner() { spinnerCount = Math.max(0, spinnerCount - 1); if (!spinnerCount) el('global-spinner').hidden = true; }
+  function swallowWhileBusy(ev) {
+    if (!spinnerCount) return;
+    if (ev.type !== 'click' && ev.key !== 'Enter' && ev.key !== ' ' && ev.key !== 'Spacebar') return;
+    ev.preventDefault();
+    ev.stopPropagation();
+  }
+  ['keydown', 'keypress', 'keyup', 'click'].forEach(function (type) { window.addEventListener(type, swallowWhileBusy, true); });
 
-  // ---- サーバ呼び出し（通信失敗・BUSY は 2秒・4秒・8秒待って最大3回やり直す） ----
-  // データの削除は、届いたか分からないまま何度も送らないよう、やり直さない
+  // ---- サーバ呼び出し ----
+  // BUSY（サーバは何もしていない）は、どの呼び出しも 2秒・4秒・8秒待って最大3回やり直す。
+  // 通信失敗は、サーバで済んだかどうか分からない。やり直すのは読むだけの呼び出し（何度送っても同じ）に限り、
+  // 書き込みは送り直さず CONN_LOST を返す（2026-10-07。確定が二重になったり、版の食い違いで「未確定」に見えたりしないため）。
+  // 90秒たっても返事が無ければ TIMEOUT を返して覆いを外す。遅れて届いた返事は捨てる。
   var NO_RETRY = ['api_adminPurgeExpired'];
+  var RETRY_ON_FAILURE = ['api_getMonth', 'api_getHistory', 'api_adminBoard', 'api_adminStudentDetail', 'api_adminListHolidays',
+    'api_adminListClasses', 'api_adminGetSettings', 'api_adminPrintHtml', 'api_login', 'api_logout'];
+  var CALL_TIMEOUT_MS = 90000;
   function callServer(fn, args) {
     var delays = NO_RETRY.indexOf(fn) >= 0 ? [] : [2000, 4000, 8000];
+    var readOnly = RETRY_ON_FAILURE.indexOf(fn) >= 0;
     return new Promise(function (resolve) {
+      var done = false, timer = null;
+      function finish(result) {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        resolve(result);
+      }
+      function retryLater(n) {
+        clearTimeout(timer);
+        setTimeout(function () { if (!done) attempt(n + 1); }, delays[n]);
+      }
       function attempt(n) {
+        var settled = false; // この回の返事を1度だけ受ける
+        clearTimeout(timer);
+        timer = setTimeout(function () { finish({ ok: false, error: 'TIMEOUT' }); }, CALL_TIMEOUT_MS);
         var runner = google.script.run
           .withSuccessHandler(function (result) {
-            if (result && result.ok === false && result.error === 'BUSY' && n < delays.length) {
-              setTimeout(function () { attempt(n + 1); }, delays[n]);
-            } else {
-              resolve(result || { ok: false, error: 'INTERNAL' });
-            }
+            if (done || settled) return;
+            settled = true;
+            if (result && result.ok === false && result.error === 'BUSY' && n < delays.length) retryLater(n);
+            else finish(result || { ok: false, error: 'INTERNAL' });
           })
           .withFailureHandler(function () {
-            if (n < delays.length) setTimeout(function () { attempt(n + 1); }, delays[n]);
-            else resolve({ ok: false, error: 'BUSY' });
+            if (done || settled) return;
+            settled = true;
+            if (!readOnly) finish({ ok: false, error: 'CONN_LOST' });
+            else if (n < delays.length) retryLater(n);
+            else finish({ ok: false, error: 'BUSY' });
           });
         runner[fn].apply(runner, args);
       }
@@ -484,6 +520,18 @@
     if (containerId) {
       el(containerId).querySelectorAll('tr.row-error').forEach(function (r) { r.classList.remove('row-error'); });
     }
+    // 版の食い違い: ほかの画面か、返事の届かなかったさっきの操作で、先に保存されている。
+    // ブラウザの再読み込み（ログアウトになる）を求めず、その場でサーバの最新を読み直して見せる（2026-10-07）
+    if (!res.ok && res.error === 'VERSION_CONFLICT') {
+      showMsg(errId, t('label.conflictReloaded'), true);
+      reloadKeepMessage();
+      return false;
+    }
+    // 通信が切れた・応答が無い: 保存されたかどうか分からない（「確定できません」とは言わない）
+    if (!res.ok && (res.error === 'CONN_LOST' || res.error === 'TIMEOUT')) {
+      showMsg(errId, tErr(res.error), true);
+      return false;
+    }
     if (!res.ok) {
       var codes = res.details ? mergeWindows((res.details.inputErrors || []).concat(res.details.codes || [])) : [];
       var ym = state.monthData ? state.monthData.yearMonth : state.yearMonth;
@@ -635,6 +683,8 @@
   // =====================================================================
   // サーバが理由を返したときはそれを出す（2026-10-07）。学籍番号が管理者のログインIDと重なるときは、何が悪いかを日本語で出す
   function adminErrText(res) {
+    if (res.error === 'CONN_LOST') return '通信が切れました。保存されたか分かりません。一覧や詳細を開き直して、保存されたか確かめてください。';
+    if (res.error === 'TIMEOUT') return 'サーバから応答がありません（90秒）。通信を確かめ、一覧や詳細を開き直して、保存されたか確かめてください。';
     if (res.details && res.details.reason === 'ID_TAKEN' && res.details.studentId) {
       return '学籍番号「' + res.details.studentId + '」は管理者のログインIDと同じなので登録できません。学籍番号を確かめるか、管理者のログインIDを変えてから登録してください。';
     }
@@ -648,7 +698,15 @@
 
   el('btn-admin-prev-month').addEventListener('click', function () { state.yearMonth = addMonth(state.yearMonth, -1); loadAdminBoard(); });
   el('btn-admin-next-month').addEventListener('click', function () { state.yearMonth = addMonth(state.yearMonth, 1); loadAdminBoard(); });
-  el('btn-admin-search').addEventListener('click', loadAdminBoard);
+  el('btn-admin-search').addEventListener('click', function () { loadAdminBoard(); });
+  // 検索欄で Enter を押しても検索する（日本語の変換を決める Enter では検索しない）
+  el('admin-query').addEventListener('keydown', function (ev) {
+    if (ev.key !== 'Enter' || ev.isComposing || ev.keyCode === 229) return;
+    ev.preventDefault();
+    loadAdminBoard();
+  });
+  // 状態の選択を変えたら読み直す（集計の札の「選択中」も、この選択から描くのでそろう）
+  el('admin-status-filter').addEventListener('change', function () { loadAdminBoard(); });
 
   function boardFilter() {
     var f = {};
@@ -660,11 +718,21 @@
 
   el('admin-class-filter').addEventListener('change', function () { loadAdminBoard(); });
 
+  // 最後に頼んだ読み込みの返事だけを使う（月や絞り込みを続けて変えたとき、遅れて届いた前の返事で上書きしない。2026-10-07）。
+  // 読み込み中は表と集計を空にし、「表示中を印刷」が見出しの月と違う行を印刷しないようにする。
+  var boardSeq = 0;
   function loadAdminBoard() {
-    el('admin-year-month').textContent = state.yearMonth;
-    call('api_adminBoard', [state.token, state.yearMonth, boardFilter()]).then(function (res) {
+    var seq = ++boardSeq, ym = state.yearMonth, token = state.token;
+    el('admin-year-month').textContent = ym;
+    state.admin.boardRows = [];
+    state.admin.boardYm = null;
+    el('admin-counts').innerHTML = '';
+    el('admin-board').innerHTML = '';
+    call('api_adminBoard', [token, ym, boardFilter()]).then(function (res) {
+      if (seq !== boardSeq || ym !== state.yearMonth || token !== state.token || state.role !== 'admin') return;
       if (!adminAlert(res)) return;
       state.admin.boardRows = res.data.rows;
+      state.admin.boardYm = ym;
       renderAdminBoard(res.data);
     });
   }
@@ -1460,8 +1528,19 @@
   });
 
   // ---- 生徒モード（試用の学生 生徒A（クラス DEMO）の画面にすぐ入る。管理者のトークンは手元に残し、「管理者に戻る」で戻す） ----
+  // 2回押されても（Enter の連打など）管理者のトークンを学生のトークンで上書きしない。
+  // 管理者の画面にいて、まだ生徒モードに入っていないときだけ頼み、返事も、頼んだときの管理者のままのときだけ使う（2026-10-07）
+  var studentModePending = false;
   el('btn-student-mode').addEventListener('click', function () {
-    call('api_adminActAsDemoStudent', [state.token, 'DEMO-A']).then(function (res) {
+    if (studentModePending || state.role !== 'admin' || state.adminToken) return;
+    studentModePending = true;
+    var adminToken = state.token;
+    call('api_adminActAsDemoStudent', [adminToken, 'DEMO-A']).then(function (res) {
+      studentModePending = false;
+      if (state.role !== 'admin' || state.adminToken || state.token !== adminToken) {
+        if (res.ok) callServer('api_logout', [res.data.token]); // 使わない学生のセッションは閉じる
+        return;
+      }
       if (!adminAlert(res)) return;
       if (res.data.newStudents.length) {
         alert('試用の生徒を作りました。スマホなどから直接ログインするときは、学籍番号「' + res.data.studentId + '」だけを入れてください。');
@@ -1512,8 +1591,8 @@
 
   el('btn-print-board').addEventListener('click', function () {
     var sids = state.admin.boardRows.map(function (r) { return r.studentId; });
-    if (!sids.length) { alert('表示中の学生がいません。'); return; }
-    printPages(sids, [state.yearMonth]);
+    if (!sids.length || state.admin.boardYm !== state.yearMonth) { alert('表示中の学生がいません。'); return; }
+    printPages(sids, [state.admin.boardYm]);
   });
 
 })();
