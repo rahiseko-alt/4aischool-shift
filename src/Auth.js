@@ -126,11 +126,15 @@ function auth_sessionTtlMinutes_() {
 function api_login(loginId, password) {
   try {
     // 学生は学籍番号だけで入れる（パスワード不要。2026-10-01 利用者の判断。管理者は従来どおりパスワードが要る）
-    if (typeof loginId === 'string' && loginId.trim()) {
+    // パスワードが入っていて、管理者のID（大文字小文字は問わない）と同じなら、学籍番号より管理者を先に見る
+    // （学籍番号が管理者のIDと重なっても、管理者が学生の画面に入ってしまわないように。2026-10-07）
+    var hasPassword = typeof password === 'string' && password !== '';
+    var adminByCase = typeof loginId === 'string' && hasPassword ? auth_findAdminByLoginId_(loginId) : null;
+    if (typeof loginId === 'string' && loginId.trim() && !adminByCase) {
       var byNumber = auth_loginByStudentNumber_(loginId);
       if (byNumber) return byNumber;
     }
-    if (!loginId || typeof loginId !== 'string' || !password || typeof password !== 'string') {
+    if (!loginId || typeof loginId !== 'string' || !hasPassword) {
       return { ok: false, error: 'LOGIN_FAILED' };
     }
 
@@ -147,6 +151,8 @@ function api_login(loginId, password) {
           break;
         }
       }
+      // 管理者は大文字小文字を違えて入れても同じ人として扱う（ロックの中で読み直したものを使う）
+      if (!user && adminByCase) user = auth_findAdminByLoginId_(loginId, users);
 
       var now = util_nowJst_();
 
@@ -225,6 +231,73 @@ function api_login(loginId, password) {
   }
 }
 
+// 管理者のログインID（前後の空白・大文字小文字は問わない）に当たる管理者の行。いなければ null。users を渡せば読み直さない
+function auth_findAdminByLoginId_(id, users) {
+  if (typeof id !== 'string' || !id.trim()) return null;
+  var key = id.trim().toUpperCase();
+  var rows = users || db_readAllRows_('USERS');
+  for (var i = 0; i < rows.length; i++) {
+    if (rows[i].role === 'admin' && String(rows[i].login_id).toUpperCase() === key) return rows[i];
+  }
+  return null;
+}
+
+// 学籍番号として使えないID（管理者のログインIDと大文字小文字を問わず同じ）か。学生の追加・名簿の一括登録で使う
+function auth_isAdminLoginId_(id) {
+  return !!auth_adminLoginIdAmong_([id]);
+}
+
+// ids のうち、管理者のログインIDと同じ（大文字小文字を問わない）最初のもの。無ければ null（管理者の行は1回だけ読む）
+function auth_adminLoginIdAmong_(ids) {
+  var users = db_readAllRows_('USERS');
+  for (var i = 0; i < ids.length; i++) {
+    if (auth_findAdminByLoginId_(ids[i], users)) return ids[i];
+  }
+  return null;
+}
+
+// 学生の追加・名簿の一括登録で、学籍番号が管理者のIDと重なるときの返事
+function auth_idTakenError_(studentId) {
+  return { ok: false, error: 'BAD_REQUEST', details: { reason: 'ID_TAKEN', studentId: studentId } };
+}
+
+// ログイン中の本人確認（今のパスワード）。ログインと同じく失敗を数え、5回でロックする。成功すれば数を0に戻す。
+// ロックの中で、読み直した user を渡す。合っていれば null、違えば返すエラーを返す（行の更新もここでする）
+function auth_checkCurrentPassword_(user, password) {
+  var now = util_nowJst_();
+  if (user.locked_until && user.locked_until > now) {
+    return { ok: false, error: 'LOGIN_LOCKED', details: { lockedUntil: user.locked_until } };
+  }
+  if (user.locked_until) {
+    user.locked_until = '';
+    user.failed_login_count = '0';
+  }
+  var pepper = PropertiesService.getScriptProperties().getProperty('PASSWORD_PEPPER');
+  var iter = Number(user.hash_iterations) || 10000;
+  if (util_constantTimeEquals_(util_hashPassword_(password, user.password_salt, pepper, iter), user.password_hash)) {
+    if (user.failed_login_count && user.failed_login_count !== '0') {
+      user.failed_login_count = '0';
+      db_updateRow_('USERS', user._rowNum, user);
+    }
+    return null;
+  }
+  var fails = (Number(user.failed_login_count) || 0) + 1;
+  user.failed_login_count = String(fails);
+  user.locked_until = fails >= 5 ? util_addMinutesToJst_(now, 15) : '';
+  db_updateRow_('USERS', user._rowNum, user);
+  db_logAudit_('LOGIN_FAIL', user.login_id, user.role, user.student_id, '', null, { fails: fails, via: 'current_password' });
+  if (fails >= 5) return { ok: false, error: 'LOGIN_LOCKED', details: { lockedUntil: user.locked_until } };
+  return { ok: false, error: 'LOGIN_FAILED' };
+}
+
+// 新しいパスワードの形の確認。よければ null、だめなら返すエラー（details.reason 付き）
+function auth_newPasswordError_(currentPassword, newPassword) {
+  if (newPassword.trim() === '') return { ok: false, error: 'BAD_REQUEST', details: { reason: 'PASSWORD_BLANK' } };
+  if (newPassword.length < 10) return { ok: false, error: 'BAD_REQUEST', details: { reason: 'PASSWORD_SHORT' } };
+  if (newPassword === currentPassword) return { ok: false, error: 'BAD_REQUEST', details: { reason: 'SAME_PASSWORD' } };
+  return null;
+}
+
 // 学籍番号（前後の空白・大文字小文字は問わない）に当たる学生がいれば、その学生のセッションを出す。いなければ null
 // ログインの短い番号（2026-10-06 利用者の判断）: クラス名に含む語 → 頭文字。番号は 頭文字＋学籍番号の下2桁（例 K01・S21）
 var AUTH_LOGIN_PREFIXES_ = [{ prefix: 'K', classWord: '国際' }, { prefix: 'S', classWord: '総合' }];
@@ -236,6 +309,28 @@ function auth_loginCodeOf_(student) {
   return p ? p.prefix + String(student.student_id).slice(-2) : null;
 }
 
+// 短い番号で数える学生: 在籍・休学で、卒業日・退学日を過ぎていない学生だけ（卒業生と新入生が重ならないように。2026-10-07）
+function auth_isCurrentForCode_(student, today) {
+  if (student.status !== '在籍' && student.status !== '休学') return false;
+  if (student.withdrawal_date && student.withdrawal_date < today) return false;
+  if (student.graduation_date && student.graduation_date < today) return false;
+  return true;
+}
+
+// 短い番号に当たる、いまの学生の一覧
+function auth_studentsWithCode_(students, code, today) {
+  return students.filter(function (s) { return auth_loginCodeOf_(s) === code && auth_isCurrentForCode_(s, today); });
+}
+
+// その学生の短い番号と、使えるか。{ code: 'K01'|null, usable: 1人に決まるか, conflict: ほかの学生と重なって使えないか }
+function auth_loginCodeStatus_(student, students) {
+  var code = auth_loginCodeOf_(student);
+  var today = util_todayJst_();
+  if (!code || !auth_isCurrentForCode_(student, today)) return { code: code, usable: false, conflict: false };
+  var hits = auth_studentsWithCode_(students, code, today);
+  return { code: code, usable: hits.length === 1, conflict: hits.length > 1 };
+}
+
 // 学籍番号、または短いログイン番号に当たる学生。短い番号で2人以上当たるときは、取り違えを防ぐため null
 function auth_findStudentForLogin_(input) {
   var number = input.trim().toUpperCase();
@@ -243,7 +338,7 @@ function auth_findStudentForLogin_(input) {
   var exact = students.filter(function (s) { return String(s.student_id).toUpperCase() === number; });
   if (exact.length) return exact[0];
   if (!/^[A-Z]\d{2}$/.test(number)) return null;
-  var hits = students.filter(function (s) { return auth_loginCodeOf_(s) === number; });
+  var hits = auth_studentsWithCode_(students, number, util_todayJst_());
   return hits.length === 1 ? hits[0] : null;
 }
 
@@ -312,32 +407,34 @@ function api_changePassword(token, currentPassword, newPassword) {
   try {
     if (!token || typeof token !== 'string') return { ok: false, error: 'AUTH_REQUIRED' };
     if (!currentPassword || typeof currentPassword !== 'string') return { ok: false, error: 'BAD_REQUEST' };
-    if (!newPassword || typeof newPassword !== 'string' || newPassword.length < 10) {
-      return { ok: false, error: 'BAD_REQUEST' };
-    }
-    if (currentPassword === newPassword) return { ok: false, error: 'BAD_REQUEST' };
+    if (!newPassword || typeof newPassword !== 'string') return { ok: false, error: 'BAD_REQUEST', details: { reason: 'PASSWORD_SHORT' } };
+    var bad = auth_newPasswordError_(currentPassword, newPassword);
+    if (bad) return bad;
 
     var auth = auth_verifySession_(token, null, true); // パスワード変更画面なので mustChangePassword を許容
     if (!auth.ok) return auth;
 
-    var user = auth.user;
-    var pepper = PropertiesService.getScriptProperties().getProperty('PASSWORD_PEPPER');
-    var iter = Number(user.hash_iterations) || 10000;
-    var currentHash = util_hashPassword_(currentPassword, user.password_salt, pepper, iter);
+    var lock = LockService.getScriptLock();
+    if (!lock.tryLock(5000)) return { ok: false, error: 'BUSY' };
+    try {
+      // ロックの中で読み直す（失敗の回数を数えるため）
+      var user = db_readAllRows_('USERS').filter(function (u) { return u.login_id === auth.user.login_id; })[0];
+      if (!user) return { ok: false, error: 'AUTH_REQUIRED' };
+      var wrong = auth_checkCurrentPassword_(user, currentPassword);
+      if (wrong) return wrong;
 
-    if (!util_constantTimeEquals_(currentHash, user.password_hash)) {
-      return { ok: false, error: 'LOGIN_FAILED' };
+      var pepper = PropertiesService.getScriptProperties().getProperty('PASSWORD_PEPPER');
+      var iter = Number(user.hash_iterations) || 10000;
+      var newSalt = util_generateSalt_();
+      user.password_salt = newSalt;
+      user.password_hash = util_hashPassword_(newPassword, newSalt, pepper, iter);
+      user.force_password_change = 'false';
+      db_updateRow_('USERS', user._rowNum, user);
+
+      db_logAudit_('PASSWORD_CHANGE', user.login_id, user.role, user.student_id, '', null, {});
+    } finally {
+      lock.releaseLock();
     }
-
-    var newSalt = util_generateSalt_();
-    var newHash = util_hashPassword_(newPassword, newSalt, pepper, iter);
-
-    user.password_salt = newSalt;
-    user.password_hash = newHash;
-    user.force_password_change = 'false';
-    db_updateRow_('USERS', user._rowNum, user);
-
-    db_logAudit_('PASSWORD_CHANGE', user.login_id, user.role, user.student_id, '', null, {});
 
     return { ok: true, data: null };
   } catch (err) {
@@ -347,7 +444,8 @@ function api_changePassword(token, currentPassword, newPassword) {
 }
 
 // 管理者が自分のログインIDとパスワードを変える（2026-10-06）。params: { currentPassword, newLoginId|null, newPassword|null }。
-// 空欄の項目はそのまま。IDは英数字と . _ - の4〜32文字で、他の管理者のIDや学籍番号（大文字小文字を問わない）と重ねない
+// 空欄の項目はそのまま。新しいパスワードは10文字以上・空白だけでない・今と違うこと。今のパスワード違いはログインと同じく数え、5回でロック。
+// IDは英数字と . _ - の4〜32文字で、他の管理者のIDや学籍番号（大文字小文字を問わない）と重ねない
 // （学籍番号のログインが先に効くため、重なると管理者が入れなくなる）。今のログインは切らない。
 function api_adminChangeCredentials(token, params) {
   try {
@@ -359,7 +457,10 @@ function api_adminChangeCredentials(token, params) {
     if (!p.currentPassword || typeof p.currentPassword !== 'string') return { ok: false, error: 'BAD_REQUEST' };
     if (!newId && !newPw) return { ok: false, error: 'BAD_REQUEST' };
     if (newId && !/^[A-Za-z0-9._-]{4,32}$/.test(newId)) return { ok: false, error: 'BAD_REQUEST', details: { reason: 'ID_FORMAT' } };
-    if (newPw && newPw.length < 10) return { ok: false, error: 'BAD_REQUEST', details: { reason: 'PASSWORD_SHORT' } };
+    if (newPw) {
+      var badPw = auth_newPasswordError_(p.currentPassword, newPw);
+      if (badPw) return badPw;
+    }
 
     var lock = LockService.getScriptLock();
     if (!lock.tryLock(5000)) return { ok: false, error: 'BUSY' };
@@ -368,10 +469,8 @@ function api_adminChangeCredentials(token, params) {
       var user = users.filter(function (u) { return u.login_id === auth.user.login_id; })[0];
       if (!user) return { ok: false, error: 'AUTH_REQUIRED' };
       var pepper = PropertiesService.getScriptProperties().getProperty('PASSWORD_PEPPER');
-      var iter = Number(user.hash_iterations) || 10000;
-      if (!util_constantTimeEquals_(util_hashPassword_(p.currentPassword, user.password_salt, pepper, iter), user.password_hash)) {
-        return { ok: false, error: 'LOGIN_FAILED' };
-      }
+      var wrong = auth_checkCurrentPassword_(user, p.currentPassword);
+      if (wrong) return wrong;
       var oldId = user.login_id;
       if (newId && newId !== oldId) {
         var key = newId.toUpperCase();

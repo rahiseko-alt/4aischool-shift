@@ -105,12 +105,12 @@ test('8: 管理一覧の応答にバックアップの状態が入り、未設�
   const w = world();
   w.env.drive.driveFail = true; // ドライブが使えず、自動で用意できない場合
   const backup = () => ok(w.api('api_adminBoard', w.admin, '2026-10', {})).backup;
-  assert.deepEqual(backup(), { configured: false, lastAt: null, warn: true });
+  assert.deepEqual(backup(), { configured: false, lastAt: null, warn: true, reason: 'NO_FOLDER' }); // reason は 2026-10-07 追加
   w.env.properties.set('BACKUP_FOLDER_ID', 'folder-1');
   w.env.properties.set('BACKUP_TRIGGER_OK', 'true');
   assert.equal(backup().warn, true); // 一度も取っていない
   w.env.properties.set('LAST_BACKUP_AT', '2026-09-01 03:00');
-  assert.deepEqual(backup(), { configured: true, lastAt: '2026-09-01 03:00', warn: false });
+  assert.deepEqual(backup(), { configured: true, lastAt: '2026-09-01 03:00', warn: false, reason: null });
   w.env.properties.set('LAST_BACKUP_AT', '2026-07-01 03:00');
   assert.equal(backup().warn, true);
 });

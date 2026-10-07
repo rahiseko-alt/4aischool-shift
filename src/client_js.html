@@ -61,28 +61,64 @@
   function showError(elId, code) { showMsg(elId, tErr(code), true); }
   function hideError(elId) { var x = el(elId); if (x) x.hidden = true; }
   // 通信中の数を数え、全部終わるまで覆いを消さない
+  // 覆いはマウスを止めるが、キーボード（ボタンにフォーカスがあるときの Enter・スペース）は止めない。
+  // 通信中は、覆いを出すときにフォーカスを外し、Enter・スペースとクリックを先回りで捨てる（二重送信を防ぐ。2026-10-07）
   var spinnerCount = 0;
-  function showSpinner() { spinnerCount++; el('global-spinner').hidden = false; }
+  function showSpinner() {
+    spinnerCount++;
+    el('global-spinner').hidden = false;
+    if (document.activeElement && document.activeElement !== document.body && document.activeElement.blur) document.activeElement.blur();
+  }
   function hideSpinner() { spinnerCount = Math.max(0, spinnerCount - 1); if (!spinnerCount) el('global-spinner').hidden = true; }
+  function swallowWhileBusy(ev) {
+    if (!spinnerCount) return;
+    if (ev.type !== 'click' && ev.key !== 'Enter' && ev.key !== ' ' && ev.key !== 'Spacebar') return;
+    ev.preventDefault();
+    ev.stopPropagation();
+  }
+  ['keydown', 'keypress', 'keyup', 'click'].forEach(function (type) { window.addEventListener(type, swallowWhileBusy, true); });
 
-  // ---- サーバ呼び出し（通信失敗・BUSY は 2秒・4秒・8秒待って最大3回やり直す） ----
-  // データの削除は、届いたか分からないまま何度も送らないよう、やり直さない
+  // ---- サーバ呼び出し ----
+  // BUSY（サーバは何もしていない）は、どの呼び出しも 2秒・4秒・8秒待って最大3回やり直す。
+  // 通信失敗は、サーバで済んだかどうか分からない。やり直すのは読むだけの呼び出し（何度送っても同じ）に限り、
+  // 書き込みは送り直さず CONN_LOST を返す（2026-10-07。確定が二重になったり、版の食い違いで「未確定」に見えたりしないため）。
+  // 90秒たっても返事が無ければ TIMEOUT を返して覆いを外す。遅れて届いた返事は捨てる。
   var NO_RETRY = ['api_adminPurgeExpired'];
+  var RETRY_ON_FAILURE = ['api_getMonth', 'api_getHistory', 'api_adminBoard', 'api_adminStudentDetail', 'api_adminListHolidays',
+    'api_adminListClasses', 'api_adminGetSettings', 'api_adminPrintHtml', 'api_login', 'api_logout'];
+  var CALL_TIMEOUT_MS = 90000;
   function callServer(fn, args) {
     var delays = NO_RETRY.indexOf(fn) >= 0 ? [] : [2000, 4000, 8000];
+    var readOnly = RETRY_ON_FAILURE.indexOf(fn) >= 0;
     return new Promise(function (resolve) {
+      var done = false, timer = null;
+      function finish(result) {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        resolve(result);
+      }
+      function retryLater(n) {
+        clearTimeout(timer);
+        setTimeout(function () { if (!done) attempt(n + 1); }, delays[n]);
+      }
       function attempt(n) {
+        var settled = false; // この回の返事を1度だけ受ける
+        clearTimeout(timer);
+        timer = setTimeout(function () { finish({ ok: false, error: 'TIMEOUT' }); }, CALL_TIMEOUT_MS);
         var runner = google.script.run
           .withSuccessHandler(function (result) {
-            if (result && result.ok === false && result.error === 'BUSY' && n < delays.length) {
-              setTimeout(function () { attempt(n + 1); }, delays[n]);
-            } else {
-              resolve(result || { ok: false, error: 'INTERNAL' });
-            }
+            if (done || settled) return;
+            settled = true;
+            if (result && result.ok === false && result.error === 'BUSY' && n < delays.length) retryLater(n);
+            else finish(result || { ok: false, error: 'INTERNAL' });
           })
           .withFailureHandler(function () {
-            if (n < delays.length) setTimeout(function () { attempt(n + 1); }, delays[n]);
-            else resolve({ ok: false, error: 'BUSY' });
+            if (done || settled) return;
+            settled = true;
+            if (!readOnly) finish({ ok: false, error: 'CONN_LOST' });
+            else if (n < delays.length) retryLater(n);
+            else finish({ ok: false, error: 'BUSY' });
           });
         runner[fn].apply(runner, args);
       }
@@ -102,9 +138,16 @@
       return res;
     });
   }
+  // ログアウト・セッション切れ: 前の人の画面を残さない（開いたままの管理者のダイアログ・一覧・パスワード欄を消す）
   function resetState() {
     state.token = null; state.role = null; state.studentId = null; state.adminToken = null;
     state.monthData = null;
+    state.admin.boardRows = [];
+    closeDialog();
+    el('admin-board').innerHTML = '';
+    el('inp-password').value = '';
+    ['inp-cur-password', 'inp-new-password', 'inp-new-password2'].forEach(function (id) { el(id).value = ''; });
+    hideError('change-password-error');
     el('btn-back-admin').hidden = true;
     el('field-password').hidden = true;
     el('btn-show-password').parentNode.hidden = false;
@@ -147,13 +190,39 @@
     el('inp-password').focus();
   });
 
+  // ロック中は「いつまで」かを出す。パスワード欄を開かずに失敗したら、管理者向けに「管理者の方はこちら」を案内する
+  function lockedText(res) {
+    var until = res.details && res.details.lockedUntil;
+    return until ? t('error.LOGIN_LOCKED_UNTIL').replace('{time}', until) : tErr('LOGIN_LOCKED');
+  }
+  function showLoginError(res) {
+    var msg = res.error === 'LOGIN_LOCKED' ? lockedText(res) : tErr(res.error);
+    if (res.error === 'LOGIN_FAILED' && el('field-password').hidden) msg += ' ' + t('label.adminLoginHint');
+    showMsg('login-error', msg, true);
+  }
+  // 理由（details.reason）があれば、その言葉を出す
+  function reasonText(res) {
+    var reason = res && res.details && res.details.reason;
+    return (reason && t('error.reason.' + reason)) || '';
+  }
+  // Enter キーで送る（ログイン・パスワード変更）
+  function onEnter(ids, buttonId) {
+    ids.forEach(function (id) {
+      el(id).addEventListener('keydown', function (ev) {
+        if (ev.key === 'Enter' && !ev.isComposing) { ev.preventDefault(); el(buttonId).click(); }
+      });
+    });
+  }
+  onEnter(['inp-loginId', 'inp-password'], 'btn-login');
+  onEnter(['inp-cur-password', 'inp-new-password', 'inp-new-password2'], 'btn-change-password');
+
   el('btn-login').addEventListener('click', function () {
     hideError('login-error');
     var loginId = el('inp-loginId').value.trim();
     var password = el('inp-password').value;
     if (!loginId) return; // 学生は学籍番号だけで入れる（パスワードは管理者だけ）
     call('api_login', [loginId, password]).then(function (res) {
-      if (!res.ok) { showError('login-error', res.error); return; }
+      if (!res.ok) { showLoginError(res); return; }
       el('inp-password').value = '';
       state.token = res.data.token;
       state.role = res.data.role;
@@ -163,12 +232,19 @@
     });
   });
 
+  // パスワードは前後の空白も含めてそのまま送る（削らない）。確認欄と違う・空白だけ・短い・今と同じは、理由を出す
   el('btn-change-password').addEventListener('click', function () {
     hideError('change-password-error');
-    call('api_changePassword', [state.token, el('inp-cur-password').value, el('inp-new-password').value]).then(function (res) {
-      if (!res.ok) { showError('change-password-error', res.error); return; }
-      el('inp-cur-password').value = '';
-      el('inp-new-password').value = '';
+    var cur = el('inp-cur-password').value, pw = el('inp-new-password').value;
+    var local = pw !== '' && pw.trim() === '' ? 'PASSWORD_BLANK' : pw.length < 10 ? 'PASSWORD_SHORT'
+      : pw !== el('inp-new-password2').value ? 'PASSWORD_MISMATCH' : pw === cur ? 'SAME_PASSWORD' : null;
+    if (local) { showMsg('change-password-error', t('error.reason.' + local), true); return; }
+    call('api_changePassword', [state.token, cur, pw]).then(function (res) {
+      if (!res.ok) {
+        showMsg('change-password-error', res.error === 'LOGIN_LOCKED' ? lockedText(res) : reasonText(res) || tErr(res.error), true);
+        return;
+      }
+      ['inp-cur-password', 'inp-new-password', 'inp-new-password2'].forEach(function (id) { el(id).value = ''; });
       afterLogin();
     });
   });
@@ -177,6 +253,8 @@
     if (state.token) callServer('api_logout', [state.token]);
     if (state.adminToken) callServer('api_logout', [state.adminToken]);
     resetState();
+    el('inp-loginId').value = '';
+    hideError('login-error');
     showScreen('login-screen');
   }
   el('btn-logout-st').addEventListener('click', doLogout);
@@ -392,12 +470,18 @@
   function renderShifts() {
     var data = state.monthData;
     if (!data) return;
-    var closed = !!data.closed || data.status === '学校確定';
+    var schoolConfirmed = data.status === '学校確定';
+    var closed = !!data.closed || schoolConfirmed;
     var ev = data.evaluation || { shifts: {}, codes: [] };
 
-    el('st-deadline-info').textContent = t('label.deadline') + ': ' + (data.deadlineAt || '—');
+    // 締切後に修正許可が出ていれば、過ぎた締切ではなく許可の期限を出す（2026-10-07）
+    el('st-deadline-info').textContent = data.unlockActive && data.unlockUntil
+      ? t('label.unlockUntil').replace('{t}', data.unlockUntil.slice(5, 7) + '/' + data.unlockUntil.slice(8))
+      : t('label.deadline') + ': ' + (data.deadlineAt || '—');
+    // 学校確定の月は「対象外」、締切の行が無い月は「まだ受付していない」、それ以外の閉じた月は「締切済み」
+    var notice = schoolConfirmed ? t('label.schoolConfirmedNotice') : (data.notOpen ? t('label.notOpen') : t('label.closed'));
     el('st-closed-notice').hidden = !closed;
-    el('st-closed-notice').textContent = closed ? t('label.closed') : '';
+    el('st-closed-notice').textContent = closed ? notice : '';
     el('btn-save-draft').disabled = closed;
     el('btn-confirm-shift').disabled = closed;
     // 月全体のコード（日付の無いもの）は表の上、日付のあるものはその日の行の下に出す。
@@ -435,6 +519,18 @@
   function handleSaveResult(res, errId, msgKey, containerId, confirmMode) {
     if (containerId) {
       el(containerId).querySelectorAll('tr.row-error').forEach(function (r) { r.classList.remove('row-error'); });
+    }
+    // 版の食い違い: ほかの画面か、返事の届かなかったさっきの操作で、先に保存されている。
+    // ブラウザの再読み込み（ログアウトになる）を求めず、その場でサーバの最新を読み直して見せる（2026-10-07）
+    if (!res.ok && res.error === 'VERSION_CONFLICT') {
+      showMsg(errId, t('label.conflictReloaded'), true);
+      reloadKeepMessage();
+      return false;
+    }
+    // 通信が切れた・応答が無い: 保存されたかどうか分からない（「確定できません」とは言わない）
+    if (!res.ok && (res.error === 'CONN_LOST' || res.error === 'TIMEOUT')) {
+      showMsg(errId, tErr(res.error), true);
+      return false;
     }
     if (!res.ok) {
       var codes = res.details ? mergeWindows((res.details.inputErrors || []).concat(res.details.codes || [])) : [];
@@ -499,11 +595,13 @@
     var aev = actual.evaluation || { shifts: {}, codes: [] };
 
     // 実績確認の進み具合（未確認・予定どおり等）は生徒には出さない（利用者の判断）
-    el('actual-codes').innerHTML = codesHtml((aev.codes || []).filter(function (c) { return c.code !== 'ACTUAL_OVER' && !c.date; }));
+    // 「前月未確定」は予定の欄と同じく出さない（2026-10-07）
+    var aCodes = (aev.codes || []).filter(function (c) { return c.code !== 'ACTUAL_OVER' && c.code !== 'PREV_MONTH_DRAFT'; });
+    el('actual-codes').innerHTML = codesHtml(aCodes.filter(function (c) { return !c.date; }));
 
     el('actual-table').innerHTML = shiftTableHtml(data.yearMonth, actual.shifts || plan, {
       rowClass: 'actual-shift-row', timeLabel: 'label.actualTime', totalLabel: 'label.actualTotal',
-      disabled: false, codes: (aev.codes || []).filter(function (c) { return c.code !== 'ACTUAL_OVER'; }),
+      disabled: false, codes: aCodes,
       holidays: data.holidays || [], planShifts: plan
     });
     refreshTotals('actual-table');
@@ -583,15 +681,32 @@
   // =====================================================================
   // 管理画面（日本語だけ）
   // =====================================================================
+  // サーバが理由を返したときはそれを出す（2026-10-07）。学籍番号が管理者のログインIDと重なるときは、何が悪いかを日本語で出す
+  function adminErrText(res) {
+    if (res.error === 'CONN_LOST') return '通信が切れました。保存されたか分かりません。一覧や詳細を開き直して、保存されたか確かめてください。';
+    if (res.error === 'TIMEOUT') return 'サーバから応答がありません（90秒）。通信を確かめ、一覧や詳細を開き直して、保存されたか確かめてください。';
+    if (res.details && res.details.reason === 'ID_TAKEN' && res.details.studentId) {
+      return '学籍番号「' + res.details.studentId + '」は管理者のログインIDと同じなので登録できません。学籍番号を確かめるか、管理者のログインIDを変えてから登録してください。';
+    }
+    return 'エラー: ' + ((res.details && res.details.message) || tErr(res.error));
+  }
   function adminAlert(res, okText) {
-    if (!res.ok) { alert('エラー: ' + tErr(res.error)); return false; }
+    if (!res.ok) { alert(adminErrText(res)); return false; }
     if (okText) alert(okText);
     return true;
   }
 
   el('btn-admin-prev-month').addEventListener('click', function () { state.yearMonth = addMonth(state.yearMonth, -1); loadAdminBoard(); });
   el('btn-admin-next-month').addEventListener('click', function () { state.yearMonth = addMonth(state.yearMonth, 1); loadAdminBoard(); });
-  el('btn-admin-search').addEventListener('click', loadAdminBoard);
+  el('btn-admin-search').addEventListener('click', function () { loadAdminBoard(); });
+  // 検索欄で Enter を押しても検索する（日本語の変換を決める Enter では検索しない）
+  el('admin-query').addEventListener('keydown', function (ev) {
+    if (ev.key !== 'Enter' || ev.isComposing || ev.keyCode === 229) return;
+    ev.preventDefault();
+    loadAdminBoard();
+  });
+  // 状態の選択を変えたら読み直す（集計の札の「選択中」も、この選択から描くのでそろう）
+  el('admin-status-filter').addEventListener('change', function () { loadAdminBoard(); });
 
   function boardFilter() {
     var f = {};
@@ -603,13 +718,33 @@
 
   el('admin-class-filter').addEventListener('change', function () { loadAdminBoard(); });
 
+  // 最後に頼んだ読み込みの返事だけを使う（月や絞り込みを続けて変えたとき、遅れて届いた前の返事で上書きしない。2026-10-07）。
+  // 読み込み中は表と集計を空にし、「表示中を印刷」が見出しの月と違う行を印刷しないようにする。
+  var boardSeq = 0;
   function loadAdminBoard() {
-    el('admin-year-month').textContent = state.yearMonth;
-    call('api_adminBoard', [state.token, state.yearMonth, boardFilter()]).then(function (res) {
+    var seq = ++boardSeq, ym = state.yearMonth, token = state.token;
+    el('admin-year-month').textContent = ym;
+    state.admin.boardRows = [];
+    state.admin.boardYm = null;
+    el('admin-counts').innerHTML = '';
+    el('admin-board').innerHTML = '';
+    call('api_adminBoard', [token, ym, boardFilter()]).then(function (res) {
+      if (seq !== boardSeq || ym !== state.yearMonth || token !== state.token || state.role !== 'admin') return;
       if (!adminAlert(res)) return;
       state.admin.boardRows = res.data.rows;
+      state.admin.boardYm = ym;
       renderAdminBoard(res.data);
     });
+  }
+
+  // バックアップの赤い注意。理由ごとに文を分け、直し方の要点を添える（詳しくはマニュアルの同じ見出し。2026-10-07）
+  function backupWarnText(b) {
+    var see = '（詳しくはマニュアルの「バックアップの赤い注意が出たとき」）';
+    var reason = b.reason || (!b.configured ? 'NO_FOLDER' : (!b.lastAt ? 'NEVER' : 'OLD'));
+    if (reason === 'NO_FOLDER') return 'バックアップの保存先が未設定です。Apps Script で installTriggers を実行して許可してください' + see;
+    if (reason === 'NEVER') return 'まだ一度もバックアップできていません。1日1回自動でやり直します。翌日も出るなら、ドライブの容量と「ShiftDB バックアップ」フォルダを確かめてください' + see;
+    if (reason === 'BAD_DATE') return '最後のバックアップの日時が読めません（記録: ' + (b.lastAt || '') + '）。スクリプト プロパティの LAST_BACKUP_AT を消すと取り直します' + see;
+    return 'バックアップが40日以上取られていません（最後: ' + (b.lastAt || 'なし') + '）。Apps Script のトリガーに backupMonthly があるか確かめてください' + see;
   }
 
   // 集計は1行の小さな札。状態の札を押すとその状態で絞り込む（もう一度押すと解除）。
@@ -624,11 +759,7 @@
     var c = data.counts;
     var b = data.backup;
     el('admin-backup').hidden = !(b && b.warn);
-    if (b && b.warn) {
-      el('admin-backup').textContent = !b.configured
-        ? 'バックアップの保存先が未設定です（マニュアルの「バックアップ」を参照）'
-        : 'バックアップが40日以上取られていません（最後: ' + (b.lastAt || 'なし') + '）';
-    }
+    if (b && b.warn) el('admin-backup').textContent = backupWarnText(b);
     el('admin-counts').innerHTML =
       chip('学生', c.students) + chip('確定済', c.confirmed, '確定済') + chip('下書き', c.draft, '下書き') +
       chip('未提出', c.notSubmitted, '未提出') + chip('エラー', c.error, null, c.error ? 'stat-error' : '') +
@@ -703,7 +834,7 @@
       } else {
         var type = f.type === 'date' ? 'date' : f.type === 'number' ? 'number' : f.type === 'ym' ? 'month' : f.type === 'password' ? 'password' : 'text';
         var ph = f.type === 'datetime' ? 'YYYY-MM-DD HH:MM' : f.type === 'ym' ? 'YYYY-MM' : (f.hint || '');
-        input = '<input type="' + type + '" data-key="' + esc(f.key) + '" value="' + esc(v) + '" placeholder="' + esc(ph) + '">';
+        input = '<input type="' + type + '" data-key="' + esc(f.key) + '" value="' + esc(v) + '" placeholder="' + esc(ph) + '"' + (f.readonly ? ' readonly' : '') + '>';
       }
       return '<div class="field"><label>' + esc(f.label) + (f.required ? ' *' : '') + '</label>' + input + '</div>';
     }).join('') + '<p id="admin-form-error" class="error-msg" hidden></p></div>';
@@ -714,7 +845,9 @@
       var node = el('admin-dialog-body').querySelector('[data-key="' + f.key + '"]');
       if (!node) return;
       if (f.type === 'bool') out[f.key] = node.checked;
-      else if (f.type === 'number') out[f.key] = node.value === '' ? null : Number(node.value);
+      // 数字として読めない打ち込み（ブラウザは空として返す）は NaN にして、「必須項目」でなく「数字で」と知らせる
+      else if (f.type === 'number') out[f.key] = node.validity && node.validity.badInput ? NaN : (node.value.trim() === '' ? null : Number(node.value));
+      else if (f.type === 'password') out[f.key] = node.value === '' ? null : node.value; // パスワードは空白を削らない
       else out[f.key] = node.value.trim() === '' ? null : node.value.trim();
     });
     return out;
@@ -729,19 +862,24 @@
       onSubmit(values);
     };
   }
-  function formError(res) { showMsg('admin-form-error', 'エラー: ' + tErr(res.error), true); }
+  function formError(res) { showMsg('admin-form-error', adminErrText(res), true); }
 
   // ---- クラス（登録したクラスから選ぶ。学生・名簿・入力期限・絞り込みで同じ名前を使う） ----
+  // 試用の DEMO クラスは、本物の学生の選択肢に出さない。DEMO の学生を編集するときは DEMO だけ（2026-10-07）
+  var DEMO_CLASS = 'DEMO';
   function classOptions(current) {
-    var opts = (state.admin.classes || []).map(function (c) { return c.name; });
+    if (current === DEMO_CLASS) return [{ value: DEMO_CLASS, label: DEMO_CLASS }];
+    var opts = (state.admin.classes || []).map(function (c) { return c.name; }).filter(function (n) { return n !== DEMO_CLASS; });
     if (current && opts.indexOf(current) < 0) opts.unshift(current);
     return opts.map(function (n) { return { value: n, label: n }; });
   }
+  // 絞り込みで選んでいたクラスが無くなったら「全クラス」に戻し、一覧も読み直す（2026-10-07）
   function fillClassFilter() {
     var sel = el('admin-class-filter'), cur = sel.value;
     sel.innerHTML = '<option value="">全クラス</option>' + (state.admin.classes || []).map(function (c) {
       return '<option value="' + esc(c.name) + '"' + (c.name === cur ? ' selected' : '') + '>' + esc(c.name) + '</option>';
     }).join('');
+    if (sel.value !== cur && state.yearMonth) loadAdminBoard();
   }
   function withClasses(cb) {
     call('api_adminListClasses', [state.token]).then(function (r) {
@@ -764,7 +902,11 @@
       dialogHandlers.addClass = function () {
         var v = formValues([{ key: 'name', type: 'text' }]);
         if (!v.name) { showMsg('admin-form-error', 'クラス名を入れてください。', true); return; }
-        call('api_adminAddClass', [state.token, v.name]).then(function (r) { if (r.ok) openClasses(); else formError(r); });
+        call('api_adminAddClass', [state.token, v.name]).then(function (r) {
+          if (!r.ok) { formError(r); return; }
+          if (r.data && r.data.exists) { showMsg('admin-form-error', '「' + r.data.name + '」はすでにあります。', true); return; }
+          openClasses();
+        });
       };
       dialogHandlers.delClass = function (b) {
         if (!confirm('クラス「' + b.getAttribute('data-name') + '」を削除します。')) return;
@@ -785,10 +927,15 @@
     openForm('管理者のID・パスワード変更', fields, '変更する', function (v) {
       if (!v.newLoginId && !v.newPassword) { showMsg('admin-form-error', '新しいログインIDか新しいパスワードを入れてください。', true); return; }
       if ((v.newPassword || '') !== (v.newPassword2 || '')) { showMsg('admin-form-error', '新しいパスワードが2回で違います。', true); return; }
+      if (v.newPassword && v.newPassword.trim() === '') { showMsg('admin-form-error', '空白だけのパスワードは使えません。', true); return; }
+      if (v.newPassword && v.newPassword === v.currentPassword) { showMsg('admin-form-error', '新しいパスワードが今のパスワードと同じです。別のパスワードにしてください。', true); return; }
       call('api_adminChangeCredentials', [state.token, { currentPassword: v.currentPassword, newLoginId: v.newLoginId, newPassword: v.newPassword }]).then(function (r) {
         if (r.ok) { closeDialog(); alert('変更しました。次からのログインID: ' + r.data.loginId); return; }
         var reason = r.details && r.details.reason;
         var msg = r.error === 'LOGIN_FAILED' ? '今のパスワードが違います。'
+          : r.error === 'LOGIN_LOCKED' ? '今のパスワードを何度も間違えたため、ロックされました（' + ((r.details && r.details.lockedUntil) || '') + ' まで）。'
+          : reason === 'SAME_PASSWORD' ? '新しいパスワードが今のパスワードと同じです。別のパスワードにしてください。'
+          : reason === 'PASSWORD_BLANK' ? '空白だけのパスワードは使えません。'
           : reason === 'ID_TAKEN' ? 'そのログインIDは使えません（他の管理者か学籍番号と同じです）。'
           : reason === 'ID_FORMAT' ? 'ログインIDは英数字（. _ - も可）の4〜32文字にしてください。'
           : reason === 'PASSWORD_SHORT' ? '新しいパスワードは10文字以上にしてください。' : null;
@@ -798,13 +945,15 @@
   });
 
   // ---- 学生の追加・編集 ----
+  // 編集では学籍番号は変えられない（読み取りだけ）。生年月日は任意（名簿で入れた学生には無い。2026-10-07）
   function studentFields(s) {
+    var editing = !!s;
     s = s || {};
     return [
-      { key: 'studentId', label: '学籍番号', type: 'text', value: s.studentId, required: true, hint: '例: 251001' },
+      { key: 'studentId', label: editing ? '学籍番号（変えられません）' : '学籍番号', type: 'text', value: s.studentId, required: !editing, readonly: editing, hint: '例: 251001' },
       { key: 'name', label: '氏名', type: 'text', value: s.name, required: true },
-      { key: 'className', label: 'クラス', type: 'select', value: s.className || '', options: classOptions(s.className), required: true },
-      { key: 'birthDate', label: '生年月日', type: 'date', value: s.birthDate, required: true },
+      { key: 'className', label: 'クラス', type: 'select', value: s.className || '', options: (editing ? [] : [{ value: '', label: '選んでください' }]).concat(classOptions(s.className)), required: true },
+      { key: 'birthDate', label: '生年月日（分かれば）', type: 'date', value: s.birthDate },
       { key: 'language', label: '言語', type: 'select', value: s.language || 'ja', options: [{ value: 'ja', label: '日本語' }, { value: 'en', label: '英語' }, { value: 'ne', label: 'ネパール語' }, { value: 'vi', label: 'ベトナム語' }, { value: 'my', label: 'ミャンマー語' }, { value: 'si', label: 'シンハラ語（スリランカ）' }, { value: 'bn', label: 'ベンガル語（バングラデシュ）' }] },
       { key: 'enrollmentDate', label: '入学日', type: 'date', value: s.enrollmentDate, required: true },
       { key: 'graduationDate', label: '卒業日', type: 'date', value: s.graduationDate },
@@ -815,17 +964,31 @@
       { key: 'permissionCheckedAt', label: '許可確認日', type: 'date', value: s.permissionCheckedAt }
     ];
   }
+  // 追加は mode: 'create'（同じ学籍番号がいれば断られる）。編集は mode: 'update' と、開いたときの版（ほかの画面の更新を上書きしない）
   function openStudentForm(existing) {
     var fields = studentFields(existing);
     openForm(existing ? '学生情報の編集' : '学生の追加', fields, existing ? '更新' : '追加', function (v) {
-      if (existing) v.studentId = existing.studentId;
+      el('admin-dialog-body').querySelectorAll('.field-invalid').forEach(function (n) { n.classList.remove('field-invalid'); });
+      if (existing) {
+        v.studentId = existing.studentId;
+        v.mode = 'update';
+        v.expectedVersion = existing.version || '';
+      } else {
+        v.mode = 'create';
+        v.studentId = String(v.studentId || '').normalize('NFKC').trim(); // 全角の数字は半角に（サーバでもそろえる）
+      }
       call('api_adminUpsertStudent', [state.token, v]).then(function (res) {
-        if (!res.ok) { formError(res); return; }
+        if (!res.ok) {
+          formError(res);
+          var bad = res.details && res.details.field && el('admin-dialog-body').querySelector('[data-key="' + res.details.field + '"]');
+          if (bad) { bad.classList.add('field-invalid'); bad.focus(); }
+          return;
+        }
         if (res.data.created) {
           openDialog('学生を追加しました',
             '<p>学籍番号: <strong>' + esc(res.data.studentId) + '</strong></p><p>学生は、ログイン画面で学籍番号だけを入れればログインできます（パスワードは要りません）。</p>');
         } else {
-          openStudentDetail(v.studentId);
+          openStudentDetail(res.data.studentId);
         }
         loadAdminBoard();
       });
@@ -833,50 +996,108 @@
   }
   el('btn-open-student-form').addEventListener('click', function () {
     withClasses(function () {
-      if (!state.admin.classes.length) { alert('先に「クラス設定」でクラスを登録してください。'); return; }
+      if (!classOptions().length) { alert('先に「クラス設定」でクラスを登録してください。'); return; }
       openStudentForm(null);
     });
   });
 
   // ---- 名簿から一括登録（Excel などからコピーした表を貼り付ける） ----
-  // Excel のコピーはタブ区切りで、セルの中の改行は "…" で囲まれて来る。それを1行ずつの [番号, 学籍番号, ローマ字, カナ] に戻す。
+  // ==== 名簿の読み取り（ここから） ====
+  // 画面に触れない関数だけを置く（test/api/qa-students-2026-10-07.test.js が、この区切りの中をそのまま動かして確かめる）。
+  // Excel のコピーはタブ区切りで、セルの中の改行・タブ・" があるセルは "…" で囲まれて来る（中の " は ""）。
+  // 囲みとみなすのは、セルが " で始まり、閉じる "（直後がタブ・改行・終わり）が3行以内にあるときだけ。
+  // それ以外の " はそのままの文字として読む（閉じていない " が後ろの行を飲み込まないように。2026-10-07）
+  var ROSTER_MAX_ROWS = 300;
+  var ROSTER_CELL_MAX_LINES = 3;
+  var ROSTER_ID_RE = /^[A-Za-z]{2,}[A-Za-z0-9-]*\d$/;
+  var ROSTER_HEADER_RE = /学籍|氏名|名前|カナ|かな|フリガナ|ふりがな|ローマ字|番号|^no\.?$|^id$|name/i;
+  // ログインの短い番号の頭文字（Auth.js の AUTH_LOGIN_PREFIXES_ と同じ）
+  var ROSTER_CODE_PREFIXES = [{ prefix: 'K', classWord: '国際' }, { prefix: 'S', classWord: '総合' }];
+
+  // text の i 文字目の " から始まる囲みのセル。囲みとみなせなければ null
+  function rosterQuotedCell(text, i) {
+    var value = '', lines = 1;
+    for (var j = i + 1; j < text.length; j++) {
+      var ch = text.charAt(j);
+      if (ch === '"') {
+        if (text.charAt(j + 1) === '"') { value += '"'; j++; continue; }
+        var after = text.charAt(j + 1);
+        if (after === '' || after === '\t' || after === '\n') return { value: value, end: j + 1, lines: lines - 1 };
+        return null;
+      }
+      if (ch === '\n' && ++lines > ROSTER_CELL_MAX_LINES) return null;
+      value += ch;
+    }
+    return null;
+  }
+  // 1行ずつ { line: 何行目（1から。セル内改行の行は始まりの行）, cells: [...] } にする
   function parseTsv(text) {
-    var rows = [], row = [], cell = '', q = false;
+    var rows = [], cells = [], cell = '', line = 1, start = 1, atCellStart = true;
     text = String(text || '').replace(/\r\n?/g, '\n');
     for (var i = 0; i < text.length; i++) {
       var ch = text.charAt(i);
-      if (q) {
-        if (ch === '"' && text.charAt(i + 1) === '"') { cell += '"'; i++; }
-        else if (ch === '"') q = false;
-        else cell += ch;
-      } else if (ch === '"' && cell === '') q = true;
-      else if (ch === '\t') { row.push(cell); cell = ''; }
-      else if (ch === '\n') { row.push(cell); rows.push(row); row = []; cell = ''; }
+      if (ch === '"' && atCellStart) {
+        var qc = rosterQuotedCell(text, i);
+        if (qc) { cell = qc.value; line += qc.lines; i = qc.end - 1; atCellStart = false; continue; }
+      }
+      atCellStart = false;
+      if (ch === '\t') { cells.push(cell); cell = ''; atCellStart = true; }
+      else if (ch === '\n') { cells.push(cell); rows.push({ line: start, cells: cells }); cells = []; cell = ''; line++; start = line; atCellStart = true; }
       else cell += ch;
     }
-    if (cell !== '' || row.length) { row.push(cell); rows.push(row); }
+    if (cell !== '' || cells.length) { cells.push(cell); rows.push({ line: start, cells: cells }); }
     return rows;
   }
-  // 学籍番号の形（英字2文字以上＋数字）のセルを探し、その右をローマ字氏名・カナとみなす。番号の列や空行は無視する。
+  // 全角の英数字・空白を半角に、見えない文字を取り除く
+  function rosterNorm(s) { return String(s).normalize('NFKC').replace(/[​-‍⁠﻿᠎]/g, ''); }
+  // 学籍番号の形（英字2文字以上＋数字）のセルを探し、その右をローマ字氏名・カナとみなす。番号の列はあっても無くてもよい。
+  // 空行と、先頭の見出しの行だけは読み飛ばす。それ以外で読み取れない行は、何行目かと理由を errors に入れる（黙って捨てない。2026-10-07）
   function parseRoster(text) {
-    var out = [];
-    parseTsv(text).forEach(function (cells) {
-      cells = cells.map(function (c) { return c.replace(/\s+/g, ' ').trim(); });
-      for (var k = 0; k < cells.length; k++) {
-        if (/^[A-Za-z]{2,}[A-Za-z0-9-]*\d$/.test(cells[k])) {
-          var name = (cells[k + 1] || '').replace(/\s+/g, ' ').trim();
-          var kana = (cells[k + 2] || '').replace(/\s+/g, '　').trim();
-          if (name) out.push({ studentId: cells[k].toUpperCase(), name: name, nameKana: kana });
-          return;
-        }
+    var rows = [], errors = [], seen = {};
+    parseTsv(text).forEach(function (r) {
+      var cells = r.cells.map(function (c) { return rosterNorm(c).replace(/\s+/g, ' ').trim(); });
+      if (!cells.some(function (c) { return c !== ''; })) return;
+      var k = -1;
+      for (var i = 0; i < cells.length; i++) { if (ROSTER_ID_RE.test(cells[i])) { k = i; break; } }
+      if (k < 0) {
+        if (!rows.length && !errors.length && cells.some(function (c) { return ROSTER_HEADER_RE.test(c); })) return;
+        errors.push({ line: r.line, message: '学籍番号（英字2文字以上＋数字。例 AIBC26001）が見つかりません: ' + cells.join(' ').slice(0, 40) });
+        return;
       }
+      var id = cells[k].toUpperCase(), name = cells[k + 1] || '', kana = (cells[k + 2] || '').replace(/ /g, '　');
+      var msg = id.length > 20 ? '学籍番号は20文字までです（' + id + '）'
+        : !name ? '氏名（ローマ字）がありません（' + id + '）'
+        : name.length > 100 ? '氏名は100文字までです（' + id + '）'
+        : kana.length > 100 ? 'カナは100文字までです（' + id + '）'
+        : seen[id] ? '学籍番号 ' + id + ' が名簿の中で重複しています（' + seen[id] + '行目と同じ）' : null;
+      if (msg) { errors.push({ line: r.line, message: msg }); return; }
+      seen[id] = r.line;
+      rows.push({ line: r.line, studentId: id, name: name, nameKana: kana });
     });
-    return out;
+    if (rows.length > ROSTER_MAX_ROWS) errors.unshift({ line: 0, message: '名簿は1回' + ROSTER_MAX_ROWS + '人までです（今は' + rows.length + '人）。分けて登録してください' });
+    return { rows: rows, errors: errors };
+  }
+  // 名簿の中で、ログインの短い番号（K01 など）が重なる学生。[{ code, studentIds }]
+  function rosterCodeClashes(rows, className) {
+    var p = ROSTER_CODE_PREFIXES.filter(function (x) { return String(className || '').indexOf(x.classWord) >= 0; })[0];
+    if (!p) return [];
+    var byCode = {}, order = [];
+    rows.forEach(function (r) {
+      var c = p.prefix + r.studentId.slice(-2);
+      if (!byCode[c]) { byCode[c] = []; order.push(c); }
+      byCode[c].push(r.studentId);
+    });
+    return order.filter(function (c) { return byCode[c].length > 1; }).map(function (c) { return { code: c, studentIds: byCode[c] }; });
+  }
+  // ==== 名簿の読み取り（ここまで） ====
+
+  function codeClashText(list) {
+    return list.map(function (c) { return c.code + '（' + c.studentIds.join('・') + '）'; }).join('、');
   }
   function openRoster() {
     var html = '<p>Excel などの名簿（学籍番号・ローマ字氏名・カナの列）をそのままコピーして貼り付けてください。番号の列はあっても無くてもかまいません。</p>' +
       formHtml([
-        { key: 'className', label: 'クラス（学科）', type: 'select', value: '', options: classOptions(), required: true },
+        { key: 'className', label: 'クラス（学科）', type: 'select', value: '', options: [{ value: '', label: '選んでください' }].concat(classOptions()), required: true },
         { key: 'enrollmentDate', label: '入学日', type: 'date', value: '2026-04-01', required: true }
       ]) +
       '<div class="field"><label>名簿</label><textarea id="roster-text" rows="8" placeholder="1\tAIBC26001\tADHIKARI GOMA DEVI\tアディカリ ゴマ デヴィ"></textarea></div>' +
@@ -885,25 +1106,54 @@
       '<div class="dialog-actions"><button type="button" class="btn-outline" data-act="rosterCheck">読み取って確認</button>' +
       '<button type="button" class="btn-primary" data-act="rosterSave" disabled id="roster-save">この内容で登録</button></div>';
     openDialog('名簿から一括登録', html);
-    var parsed = [];
-    var onEdit = function () { el('roster-save').disabled = true; el('roster-preview').innerHTML = ''; };
+    var parsed = [], checked = null;
+    var current = function () { return formValues([{ key: 'className', type: 'select' }, { key: 'enrollmentDate', type: 'date' }]); };
+    // 名簿・クラス・入学日のどれかを変えたら、読み取りからやり直す（確認した内容と違うものを登録しない。2026-10-07）
+    var onEdit = function () { el('roster-save').disabled = true; el('roster-preview').innerHTML = ''; checked = null; };
     el('roster-text').addEventListener('input', onEdit);
+    el('admin-dialog-body').querySelectorAll('[data-key="className"], [data-key="enrollmentDate"]').forEach(function (n) {
+      n.addEventListener('change', onEdit);
+      n.addEventListener('input', onEdit);
+    });
     dialogHandlers.rosterCheck = function () {
-      parsed = parseRoster(el('roster-text').value);
-      if (!parsed.length) { el('roster-preview').innerHTML = '<p class="error-msg">学籍番号の列が見つかりません。</p>'; return; }
-      el('roster-preview').innerHTML = '<p><strong>' + parsed.length + '人</strong>を読み取りました。内容を確かめてから登録してください。</p>' +
-        '<div class="adm-table-wrap"><table class="admin-table"><thead><tr><th>学籍番号</th><th>氏名</th><th>カナ</th></tr></thead><tbody>' +
-        parsed.map(function (r) { return '<tr><td class="nowrap">' + esc(r.studentId) + '</td><td>' + esc(r.name) + '</td><td>' + esc(r.nameKana) + '</td></tr>'; }).join('') +
-        '</tbody></table></div>';
+      var v = current();
+      el('roster-save').disabled = true;
+      checked = null;
+      if (!v.className) { el('roster-preview').innerHTML = '<p class="error-msg">クラス（学科）を選んでください。</p>'; return; }
+      if (!v.enrollmentDate) { el('roster-preview').innerHTML = '<p class="error-msg">入学日を入れてください。</p>'; return; }
+      var res = parseRoster(el('roster-text').value);
+      parsed = res.rows;
+      if (!parsed.length && !res.errors.length) { el('roster-preview').innerHTML = '<p class="error-msg">名簿が空です。</p>'; return; }
+      var clashes = rosterCodeClashes(parsed, v.className);
+      var html = '';
+      if (res.errors.length) {
+        html += '<div class="error-msg"><p><strong>読み取れない行が' + res.errors.length + '件あります。</strong>名簿を直してから、もう一度「読み取って確認」を押してください（1人も登録していません）。</p><ul>' +
+          res.errors.map(function (e) { return '<li>' + (e.line ? esc(e.line) + '行目: ' : '') + esc(e.message) + '</li>'; }).join('') + '</ul></div>';
+      }
+      html += '<p>クラス <strong>' + esc(v.className) + '</strong>　入学日 <strong>' + esc(v.enrollmentDate) + '</strong>　<strong>' + parsed.length + '人</strong>を読み取りました。' +
+        (res.errors.length ? '' : '内容を確かめてから登録してください。') + '</p>';
+      if (clashes.length) html += '<p class="error-msg">ログイン番号が名簿の中で重なります（この学生は学籍番号で入ります）: ' + esc(codeClashText(clashes)) + '</p>';
+      if (parsed.length) {
+        html += '<div class="adm-table-wrap"><table class="admin-table"><thead><tr><th>行</th><th>学籍番号</th><th>氏名</th><th>カナ</th></tr></thead><tbody>' +
+          parsed.map(function (r) { return '<tr><td>' + esc(r.line) + '</td><td class="nowrap">' + esc(r.studentId) + '</td><td>' + esc(r.name) + '</td><td>' + esc(r.nameKana) + '</td></tr>'; }).join('') +
+          '</tbody></table></div>';
+      }
+      el('roster-preview').innerHTML = html;
+      if (res.errors.length || !parsed.length) return;
+      checked = v;
       el('roster-save').disabled = false;
     };
     dialogHandlers.rosterSave = function () {
-      var v = formValues([{ key: 'className', type: 'select' }, { key: 'enrollmentDate', type: 'date' }]);
-      if (!v.className) { alert('クラス（学科）を入れてください。'); return; }
-      call('api_adminImportRoster', [state.token, { className: v.className, enrollmentDate: v.enrollmentDate, rows: parsed }]).then(function (r) {
-        if (!adminAlert(r)) return;
+      var v = current();
+      // 確認したときのクラス・入学日と違えば登録しない
+      if (!checked || checked.className !== v.className || checked.enrollmentDate !== v.enrollmentDate) { onEdit(); alert('クラスか入学日が変わりました。もう一度「読み取って確認」を押してください。'); return; }
+      var rows = parsed.map(function (r) { return { studentId: r.studentId, name: r.name, nameKana: r.nameKana }; });
+      call('api_adminImportRoster', [state.token, { className: v.className, enrollmentDate: v.enrollmentDate, rows: rows }]).then(function (r) {
+        if (!r.ok) { el('roster-preview').innerHTML = '<p class="error-msg">' + esc(adminErrText(r)) + '</p>'; return; }
+        var conflicts = r.data.codeConflicts || [];
         openDialog('名簿から一括登録', '<p>' + r.data.created.length + '人を登録しました。</p>' +
           (r.data.skipped.length ? '<p>すでに登録済み・名簿の中で重複のため飛ばした学籍番号: ' + esc(r.data.skipped.join('、')) + '</p>' : '') +
+          (conflicts.length ? '<p class="error-msg">ログイン番号がほかの学生と重なるため、次の学生は短い番号では入れません（学籍番号で入ってください）: ' + esc(codeClashText(conflicts)) + '</p>' : '') +
           '<p>学生は学籍番号だけでログインできます。</p>');
         withClasses(function () { el('admin-class-filter').value = v.className; loadAdminBoard(); });
       });
@@ -911,7 +1161,7 @@
   }
   el('btn-open-roster').addEventListener('click', function () {
     withClasses(function () {
-      if (!state.admin.classes.length) { alert('先に「クラス設定」でクラスを登録してください。'); return; }
+      if (!classOptions().length) { alert('先に「クラス設定」でクラスを登録してください。'); return; }
       openRoster();
     });
   });
@@ -934,7 +1184,7 @@
     };
     var html = '<p class="detail-sum">状態 <strong>' + esc(m.status) + '</strong>　予定の合計 <strong>' + esc(dur(m.totalMinutes || 0, true)) + '</strong>' +
       '　実績 <strong>' + esc(m.actualStatus) + '</strong>' + (hasActual ? '　実績の合計 <strong>' + esc(dur(m.actualTotalMinutes || 0, true)) + '</strong>' : '') +
-      (m.unlockUntil ? '　修正許可 ' + esc(m.unlockUntil) + ' まで' : '') + '</p>';
+      (m.unlockUntil ? '　修正許可 ' + esc(m.unlockUntil) + ' まで' + (m.unlockExpired ? '（期限切れ）' : '') : '') + '</p>';
     // 保存されているコードは文字列（'OVER_28H'）。日付は無いので、どの日かは下の表で見る
     var codes = (m.codes || []).concat(m.actualCodes || []).map(function (c) { return typeof c === 'string' ? { code: c } : c; })
       .filter(function (c) { return c.code !== 'PREV_MONTH_DRAFT'; });
@@ -959,7 +1209,34 @@
     return html + '</tbody></table></div>';
   }
 
-  function openStudentDetail(studentId) {
+  // サーバが断った理由（details.reason）を、管理者に分かる言葉にする（2026-10-07）
+  var REASON_TEXT = {
+    STUDENT_ENROLLED: '在籍中の学生には使えません（退学・休学・卒業の学生だけに使えます）。',
+    ALREADY_ENTERED: '入力済みの月には使えません（学生が下書きか確定をしています）。',
+    ALREADY_SCHOOL_CONFIRMED: 'この月はすでに学校確定（対象外）です。',
+    BEFORE_ENROLLMENT: '入学より前の月には使えません。',
+    NOT_SCHOOL_CONFIRMED: 'この月は学校確定ではありません。',
+    UNTIL_FORMAT: '期限の形が違います。YYYY-MM-DD HH:MM（例: 2026-10-15 18:00）か、日付だけ YYYY-MM-DD で入れてください。',
+    UNTIL_NOT_FUTURE: '期限は今より後の日時にしてください。',
+    ACTUAL_BEFORE_MONTH_END: '実績確認の期限は、対象月の末日より後の日にしてください（実績は月が終わってから入れます）。',
+    ACTUAL_BEFORE_PLAN: '実績確認の期限は、予定の入力期限より後の日にしてください。',
+    UNKNOWN_CLASS: 'そのクラスは登録されていません（「クラス設定」で登録してください）。'
+  };
+  function reasonText(res) { return (res && res.details && REASON_TEXT[res.details.reason]) || null; }
+
+  // 修正許可の期限の打ち込みをそろえる: 2026/10/5 9:00 → 2026-10-05 09:00。日付だけならそのまま（サーバが 23:59 にする）
+  function normUntil(v) {
+    var m = /^(\d{4})[-\/.](\d{1,2})[-\/.](\d{1,2})(?:[ T]+(\d{1,2}):(\d{2}))?$/.exec(String(v || '').trim().replace(/[０-９：／]/g, function (c) {
+      return c === '：' ? ':' : c === '／' ? '/' : String.fromCharCode(c.charCodeAt(0) - 0xFEE0);
+    }));
+    if (!m) return String(v || '').trim();
+    var date = m[1] + '-' + pad2(+m[2]) + '-' + pad2(+m[3]);
+    return m[4] === undefined ? date : date + ' ' + pad2(+m[4]) + ':' + m[5];
+  }
+
+  // selectedYm: 開いたときに選んでおく月（無ければ一覧の月）
+  function openStudentDetail(studentId, selectedYm) {
+    var startYm = selectedYm || state.yearMonth;
     call('api_adminStudentDetail', [state.token, studentId]).then(function (res) {
       if (!adminAlert(res)) return;
       var d = res.data, s = d.student;
@@ -968,7 +1245,7 @@
         s.nameKana ? ['カナ', s.nameKana] : null, ['クラス', s.className], ['状態', s.status], ['生年月日', s.birthDate], ['入学', s.enrollmentDate],
         s.graduationDate ? ['卒業', s.graduationDate] : null, s.withdrawalDate ? ['退学', s.withdrawalDate] : null,
         ['資格外活動許可', s.workPermission ? 'あり（期限 ' + (s.permissionExpires || '未登録') + '）' : 'なし'],
-        ['ログイン', s.loginCode ? s.loginCode + '（または学籍番号）' : '学籍番号']
+        ['ログイン', s.loginCode ? s.loginCode + '（または学籍番号）' : s.loginCodeConflict ? '（重複のため使えません。学籍番号で入ってください）' : '学籍番号']
       ].filter(Boolean);
       var html = '<div class="dt-head"><h2 class="dt-name">' + esc(s.name) + '</h2><span class="dt-id">' + esc(s.studentId) + '</span></div>' +
         '<section class="dt-sec"><h3 class="dt-sec-title">学生情報</h3>' +
@@ -977,20 +1254,25 @@
         '<button type="button" class="btn-outline btn-sm adm-btn" data-act="edit">学生情報を編集</button>' +
         '</div></section>';
 
-      // 月を選ぶと、その月に学生が入れた中身（予定・実績）を表で出す
+      // 月を選ぶと、その月に学生が入れた中身（予定・実績）を表で出す。
+      // 一覧にはデータのある月と開いた月を並べ、横の月の欄で入学の月〜3か月先の好きな月も選べる（2026-10-07）
+      var enrollYm = s.enrollmentDate ? s.enrollmentDate.slice(0, 7) : '';
+      var maxYm = addMonth(todayYm(), 3);
       var yms = d.months.map(function (m) { return m.yearMonth; });
-      if (yms.indexOf(state.yearMonth) < 0) yms.push(state.yearMonth);
+      if (yms.indexOf(startYm) < 0) yms.push(startYm);
       yms.sort().reverse();
       html += '<section class="dt-sec"><h3 class="dt-sec-title">申告の中身</h3>' +
         '<div class="dt-month">対象月 <select id="detail-ym">' +
-        yms.map(function (y) { return '<option value="' + esc(y) + '"' + (y === state.yearMonth ? ' selected' : '') + '>' + esc(y) + '</option>'; }).join('') +
-        '</select></div>' +
+        yms.map(function (y) { return '<option value="' + esc(y) + '"' + (y === startYm ? ' selected' : '') + '>' + esc(y) + '</option>'; }).join('') +
+        '</select> <label class="dt-month-pick">ほかの月 <input type="month" id="detail-ym-pick"' +
+        (enrollYm ? ' min="' + esc(enrollYm) + '"' : '') + ' max="' + esc(maxYm) + '"></label></div>' +
         '<div id="detail-month"></div>' +
         '<div class="dt-actions">' +
         '<button type="button" class="btn-outline btn-sm adm-btn" data-act="printMonth">この月を印刷</button>' +
-        '<button type="button" class="btn-outline btn-sm adm-btn" data-act="print2y">2年分を印刷</button>' +
+        '<button type="button" class="btn-outline btn-sm adm-btn" data-act="print2y">2年分を印刷（この月まで）</button>' +
         '<button type="button" class="btn-outline btn-sm adm-btn" data-act="unlock">締切後の修正を許可</button>' +
-        '<button type="button" class="btn-outline btn-sm adm-btn" data-act="schoolConfirm">学校確定（対象外にする）</button>' +
+        // 学校確定は退学・休学・卒業の学生だけ（在籍中の学生にはボタンを出さない）
+        (s.status === '在籍' ? '' : '<button type="button" class="btn-outline btn-sm adm-btn" data-act="schoolConfirm" id="btn-school-confirm">学校確定（対象外にする）</button>') +
         '<button type="button" class="btn-outline btn-sm adm-btn" data-act="undoSchoolConfirm" id="btn-undo-school-confirm" hidden>学校確定を取り消す</button>' +
         '</div></section>';
 
@@ -1000,34 +1282,64 @@
         var m = d.months.filter(function (x) { return x.yearMonth === ym(); })[0];
         el('detail-month').innerHTML = detailMonthHtml(ym(), m);
         el('btn-undo-school-confirm').hidden = !(m && m.status === '学校確定');
+        if (el('btn-school-confirm')) el('btn-school-confirm').hidden = !!(m && m.status !== '未入力');
       };
       el('detail-ym').addEventListener('change', showMonth);
+      el('detail-ym-pick').addEventListener('change', function () {
+        var v = el('detail-ym-pick').value;
+        if (!/^\d{4}-\d{2}$/.test(v)) return;
+        if ((enrollYm && v < enrollYm) || v > maxYm) { alert('選べるのは ' + (enrollYm || '入学') + ' 〜 ' + maxYm + ' の月です。'); return; }
+        var sel = el('detail-ym');
+        if (!sel.querySelector('option[value="' + v + '"]')) {
+          var opt = document.createElement('option');
+          opt.value = v; opt.textContent = v;
+          sel.appendChild(opt);
+        }
+        sel.value = v;
+        showMonth();
+      });
       showMonth();
+      // 操作の結果: 成功なら同じ月で詳細を開き直す。断られたら理由を出し、画面が古ければ最新の内容で開き直す
+      var afterAction = function (r, okText, cur) {
+        if (r.ok) {
+          if (okText) alert(okText);
+          openStudentDetail(studentId, cur);
+          loadAdminBoard();
+          return;
+        }
+        var stale = r.error === 'FORBIDDEN' || r.error === 'NOT_FOUND';
+        var msg = reasonText(r) || (stale ? 'この月の状態が、詳細を開いたあとに変わっています。' : tErr(r.error));
+        alert('エラー: ' + msg + (stale ? '\n詳細を最新の内容で開き直します。' : ''));
+        if (stale) openStudentDetail(studentId, cur);
+      };
       dialogHandlers = {
         schoolConfirm: function () {
-          if (!confirm(ym() + ' を学校確定（対象外）にします。退学・休学・卒業の学生の未入力の月にだけ使えます。')) return;
-          call('api_adminSchoolConfirm', [state.token, studentId, ym()]).then(function (r) {
-            if (adminAlert(r, '学校確定しました。')) { openStudentDetail(studentId); loadAdminBoard(); }
-          });
+          var cur = ym();
+          if (!confirm(cur + ' を学校確定（対象外）にします。退学・休学・卒業の学生の未入力の月にだけ使えます。')) return;
+          call('api_adminSchoolConfirm', [state.token, studentId, cur]).then(function (r) { afterAction(r, '学校確定しました。', cur); });
         },
         undoSchoolConfirm: function () {
-          if (!confirm(ym() + ' の学校確定を取り消し、未入力に戻します。学生がまた入力できるようになります。')) return;
-          call('api_adminUndoSchoolConfirm', [state.token, studentId, ym()]).then(function (r) {
-            if (adminAlert(r, '学校確定を取り消しました。')) { openStudentDetail(studentId); loadAdminBoard(); }
-          });
+          var cur = ym();
+          if (!confirm(cur + ' の学校確定を取り消し、未入力に戻します。学生がまた入力できるようになります。')) return;
+          call('api_adminUndoSchoolConfirm', [state.token, studentId, cur]).then(function (r) { afterAction(r, '学校確定を取り消しました。', cur); });
         },
         unlock: function () {
-          var until = prompt('修正許可の期限（YYYY-MM-DD HH:MM）');
-          if (!until) return;
-          call('api_adminGrantUnlock', [state.token, studentId, ym(), until.trim()]).then(function (r) {
-            if (adminAlert(r, '修正許可を出しました。')) openStudentDetail(studentId);
-          });
+          var cur = ym();
+          var until = prompt(cur + ' 分の、締切後の修正を許可します。許可の期限を入れてください。\n' +
+            '形式: YYYY-MM-DD HH:MM（例: 2026-10-15 18:00）\n日付だけ（例: 2026-10-15）なら、その日の 23:59 までです。');
+          if (!until || !until.trim()) return;
+          call('api_adminGrantUnlock', [state.token, studentId, cur, normUntil(until)]).then(function (r) { afterAction(r, '修正許可を出しました。', cur); });
         },
         printMonth: function () { printPages([studentId], [ym()]); },
         edit: function () { openStudentForm(s); },
+        // 選んでいる月までの24か月。入学より前の月は印刷しない
         print2y: function () {
-          var months = [];
-          for (var i = 23; i >= 0; i--) months.push(addMonth(todayYm(), -i));
+          var end = ym(), months = [];
+          for (var i = 23; i >= 0; i--) {
+            var y = addMonth(end, -i);
+            if (!enrollYm || y >= enrollYm) months.push(y);
+          }
+          if (!months.length) { alert('入学（' + enrollYm + '）より前の月です。印刷する月がありません。'); return; }
           printPages([studentId], months);
         }
       };
@@ -1035,91 +1347,200 @@
   }
 
   // ---- 入力期限 ----
+  // 下に登録済みの期限（新しい月から24件）を出し、行を押すとその内容を上の欄に入れる（2026-10-07）
   el('btn-open-deadline').addEventListener('click', function () {
     withClasses(function () {
       if (!state.admin.classes.length) { alert('先に「クラス設定」でクラスを登録してください。'); return; }
-      var fields = [
-        { key: 'yearMonth', label: '対象年月', type: 'ym', value: state.yearMonth, required: true },
-        { key: 'className', label: 'クラス', type: 'select', value: '*', options: [{ value: '*', label: '全クラス' }].concat(classOptions()), required: true },
-        { key: 'deadlineAt', label: '予定の入力期限（空欄なら対象月の末日。時刻は 23:59）', type: 'date' },
-        { key: 'actualDeadlineAt', label: '実績確認の期限（空欄なら翌月の既定日。時刻は 23:59）', type: 'date' }
-      ];
-      openForm('入力期限設定', fields, '保存', function (v) {
-        if (!v.yearMonth) { showMsg('admin-form-error', '対象年月を選んでください。', true); return; }
-        var targets = v.className === '*' ? state.admin.classes.map(function (c) { return c.name; }) : [v.className];
-        var next = function (i) {
-          if (i >= targets.length) { closeDialog(); alert('入力期限を保存しました（' + targets.join('・') + '）。'); return; }
-          call('api_adminSetDeadline', [state.token, { yearMonth: v.yearMonth, className: targets[i], deadlineAt: v.deadlineAt, actualDeadlineAt: v.actualDeadlineAt }])
-            .then(function (r) { if (r.ok) next(i + 1); else formError(r); });
+      call('api_adminListDeadlines', [state.token]).then(function (lr) {
+        if (!adminAlert(lr)) return;
+        var fields = [
+          { key: 'yearMonth', label: '対象年月', type: 'ym', value: state.yearMonth, required: true },
+          { key: 'className', label: 'クラス', type: 'select', value: '*', options: [{ value: '*', label: '全クラス' }].concat(classOptions()), required: true },
+          { key: 'deadlineAt', label: '予定の入力期限（空欄なら対象月の末日。時刻は 23:59）', type: 'date' },
+          { key: 'actualDeadlineAt', label: '実績確認の期限（空欄なら今の設定のまま。初めてなら翌月の既定日。時刻は 23:59）', type: 'date' },
+          { key: 'resetActual', label: '実績確認の期限を既定（翌月の既定日）に戻す', type: 'bool' }
+        ];
+        openForm('入力期限設定', fields, '保存', function (v) {
+          if (!v.yearMonth) { showMsg('admin-form-error', '対象年月を選んでください。', true); return; }
+          var targets = v.className === '*' ? classOptions().map(function (o) { return o.value; }) : [v.className]; // 全クラスに DEMO は入れない（2026-10-07）
+          // 実績確認の期限: 空欄（null）は登録済みのまま、既定に戻すときだけ空文字を送る
+          var actual = v.resetActual ? '' : v.actualDeadlineAt;
+          var next = function (i) {
+            if (i >= targets.length) { closeDialog(); alert('入力期限を保存しました（' + targets.join('・') + '）。'); return; }
+            call('api_adminSetDeadline', [state.token, { yearMonth: v.yearMonth, className: targets[i], deadlineAt: v.deadlineAt, actualDeadlineAt: actual }])
+              .then(function (r) {
+                if (r.ok) { next(i + 1); return; }
+                showMsg('admin-form-error', 'エラー（' + targets[i] + '）: ' + (reasonText(r) || tErr(r.error)), true);
+              });
+          };
+          next(0);
+        });
+        var rows = lr.data.slice(0, 24);
+        el('admin-dialog-body').insertAdjacentHTML('beforeend', '<h4 style="margin-top: 1.2rem;">登録済みの期限（新しい月から' + rows.length + '件' +
+          (lr.data.length > rows.length ? '。全' + lr.data.length + '件' : '') + '）</h4>' +
+          (rows.length ? '<p class="detail-empty">行を押すと、その内容が上の欄に入ります。</p>' +
+            '<div class="adm-table-wrap"><table class="admin-table deadline-list"><thead><tr><th>対象年月</th><th>クラス</th><th>予定の期限</th><th>実績確認の期限</th></tr></thead><tbody>' +
+            rows.map(function (dl, i) {
+              return '<tr class="board-row" data-act="pickDeadline" data-i="' + i + '"><td class="nowrap">' + esc(dl.yearMonth) + '</td><td>' + esc(dl.className) + '</td>' +
+                '<td class="nowrap">' + esc(dl.deadlineAt || '—') + '</td><td class="nowrap">' + esc(dl.actualDeadlineAt || '既定（翌月の既定日）') + '</td></tr>';
+            }).join('') + '</tbody></table></div>'
+            : '<p class="detail-empty">まだ登録はありません。</p>'));
+        dialogHandlers.pickDeadline = function (b) {
+          var dl = rows[+b.getAttribute('data-i')];
+          if (!dl) return;
+          var body = el('admin-dialog-body');
+          var set = function (key, val) { var n = body.querySelector('[data-key="' + key + '"]'); if (n) n.value = val; };
+          set('yearMonth', dl.yearMonth);
+          var sel = body.querySelector('[data-key="className"]');
+          if (!Array.prototype.some.call(sel.options, function (o) { return o.value === dl.className; })) {
+            var opt = document.createElement('option');
+            opt.value = dl.className; opt.textContent = dl.className;
+            sel.appendChild(opt);
+          }
+          sel.value = dl.className;
+          set('deadlineAt', dl.deadlineAt ? dl.deadlineAt.slice(0, 10) : '');
+          set('actualDeadlineAt', dl.actualDeadlineAt ? dl.actualDeadlineAt.slice(0, 10) : '');
+          body.querySelector('[data-key="resetActual"]').checked = false;
+          hideError('admin-form-error');
+          body.scrollTop = 0;
         };
-        next(0);
       });
     });
   });
 
-  // ---- 長期休業（一覧・追加・削除） ----
+  // ---- 長期休業（一覧・追加・編集・削除） ----
+  // 年度は4月〜翌年3月（2027-01 は 2026年度）
+  function schoolYearOf(dateStr) { var y = +dateStr.slice(0, 4), m = +dateStr.slice(5, 7); return m >= 4 ? y : y - 1; }
+  // 画面で先に確かめる（サーバの BAD_REQUEST より先に、どこが悪いかを知らせる）。問題なければ null
+  function holidayProblem(v, fields) {
+    var missing = fields.filter(function (f) { return v[f.key] === null || v[f.key] === ''; });
+    if (missing.length) return '必須項目: ' + missing.map(function (f) { return f.label; }).join('、');
+    if (v.name.length > 50) return '名称は50文字以内にしてください（いま' + v.name.length + '文字）。';
+    if (v.endDate < v.startDate) return '終了日が開始日より前です。';
+    if (isNaN(v.schoolYear)) return '年度は数字で入れてください。';
+    if (Math.floor(v.schoolYear) !== v.schoolYear || v.schoolYear < 2000 || v.schoolYear > 2100) return '年度は2000〜2100の整数で入れてください（例: 2026）。';
+    return null;
+  }
   function openHolidays() {
     call('api_adminListHolidays', [state.token]).then(function (res) {
       if (!adminAlert(res)) return;
-      var fields = [
-        { key: 'name', label: '名称', type: 'text', required: true, hint: '例: 冬季休業' },
-        { key: 'startDate', label: '開始日', type: 'date', required: true },
-        { key: 'endDate', label: '終了日', type: 'date', required: true },
-        { key: 'schoolYear', label: '年度', type: 'number', required: true, value: +todayYm().slice(0, 4) }
-      ];
-      var list = res.data.map(function (h) {
-        return '<div class="month-row"><div>' + esc(h.name) + ' ' + esc(h.startDate) + '〜' + esc(h.endDate) + '（' + esc(h.schoolYear) + '年度）</div>' +
-          '<div><button type="button" class="btn-danger btn-sm" data-act="del" data-id="' + esc(h.holidayId) + '">削除</button></div></div>';
-      }).join('') || '<p>登録なし</p>';
-      openDialog('長期休業設定', '<h4>登録済み</h4>' + list + '<h4>追加</h4>' + formHtml(fields) +
-        '<div class="dialog-actions"><button type="button" class="btn-primary" data-act="add">追加</button></div>');
-      dialogHandlers = {
-        del: function (b) {
-          if (!confirm('この長期休業を削除します。')) return;
-          call('api_adminDeleteHoliday', [state.token, b.getAttribute('data-id')]).then(function (r) { if (adminAlert(r)) openHolidays(); });
-        },
-        add: function () {
-          call('api_adminSetHoliday', [state.token, formValues(fields)]).then(function (r) { if (r.ok) openHolidays(); else formError(r); });
-        }
-      };
+      renderHolidays(res.data, null);
     });
+  }
+  // editing: 編集中の休業（null なら追加）
+  function renderHolidays(holidays, editing) {
+    var e = editing || {};
+    var fields = [
+      { key: 'name', label: '名称', type: 'text', required: true, hint: '例: 冬季休業', value: e.name },
+      { key: 'startDate', label: '開始日', type: 'date', required: true, value: e.startDate },
+      { key: 'endDate', label: '終了日', type: 'date', required: true, value: e.endDate },
+      { key: 'schoolYear', label: '年度（4月〜翌年3月）', type: 'number', required: true, value: editing ? e.schoolYear : schoolYearOf(jstNow()) }
+    ];
+    var list = holidays.map(function (h) {
+      return '<div class="month-row' + (editing && h.holidayId === e.holidayId ? ' is-editing' : '') + '"><div>' + esc(h.name) + ' ' + esc(h.startDate) + '〜' + esc(h.endDate) + '（' + esc(h.schoolYear) + '年度）</div>' +
+        '<div class="nowrap"><button type="button" class="btn-outline btn-sm" data-act="edit" data-id="' + esc(h.holidayId) + '">編集</button> ' +
+        '<button type="button" class="btn-danger btn-sm" data-act="del" data-id="' + esc(h.holidayId) + '">削除</button></div></div>';
+    }).join('') || '<p>登録なし</p>';
+    openDialog('長期休業設定', '<h4>登録済み</h4>' + list + '<h4>' + (editing ? '編集: ' + esc(e.name) : '追加') + '</h4>' + formHtml(fields) +
+      '<div class="dialog-actions">' + (editing ? '<button type="button" class="btn-outline" data-act="cancel">やめる</button>' : '') +
+      '<button type="button" class="btn-primary" data-act="add">' + (editing ? '更新' : '追加') + '</button></div>');
+    dialogHandlers = {
+      edit: function (b) {
+        var h = holidays.filter(function (x) { return x.holidayId === b.getAttribute('data-id'); })[0];
+        if (h) renderHolidays(holidays, h);
+      },
+      cancel: function () { renderHolidays(holidays, null); },
+      del: function (b) {
+        if (!confirm('この長期休業を削除します。')) return;
+        call('api_adminDeleteHoliday', [state.token, b.getAttribute('data-id')]).then(function (r) { if (adminAlert(r)) openHolidays(); });
+      },
+      add: function () {
+        var v = formValues(fields);
+        var problem = holidayProblem(v, fields);
+        if (problem) { showMsg('admin-form-error', problem, true); return; }
+        var sy = schoolYearOf(v.startDate);
+        if (v.schoolYear !== sy && !confirm('年度（' + v.schoolYear + '年度）が開始日 ' + v.startDate + ' の年度（' + sy + '年度）と違います。このまま保存しますか？')) return;
+        if (editing) v.holidayId = e.holidayId;
+        call('api_adminSetHoliday', [state.token, v]).then(function (r) {
+          if (r.ok) { openHolidays(); return; }
+          if (r.error === 'NOT_FOUND') { showMsg('admin-form-error', 'この長期休業は見つかりません（別の画面で消されたかもしれません）。開き直してください。', true); return; }
+          formError(r);
+        });
+      }
+    };
   }
   el('btn-open-holiday').addEventListener('click', openHolidays);
 
-  // ---- 学校設定 ----
+  // ---- その他 設定 ----
+  // 項目と受け付ける範囲（サーバの SETTINGS_RULES_ と同じ）。見出しに範囲を出す。
+  // 学校名（schoolName）はどこにも使っていないので出さない（サーバは受け付けたまま。2026-10-07）
+  var SETTINGS_FIELDS = [
+    { key: 'retentionMonths', name: '保存期間', unit: '月', min: 24, max: 120 },
+    { key: 'sessionTtlMinutes', name: 'ログインの有効時間', unit: '分', min: 5, max: 720 },
+    { key: 'actualConfirmDefaultDay', name: '実績確認の既定の期限日', unit: '翌月の何日', min: 1, max: 28 },
+    { key: 'allowLeaveOfAbsence', name: '休学中でも確定できる', type: 'bool' }
+  ];
+  function settingLabel(r) { return r.type === 'bool' ? r.name : r.name + '（' + r.unit + ', ' + r.min + '〜' + r.max + '）'; }
   el('btn-open-settings').addEventListener('click', function () {
     call('api_adminGetSettings', [state.token]).then(function (res) {
       if (!adminAlert(res)) return;
       var s = res.data;
       state.admin.settings = s;
-      var fields = [
-        { key: 'schoolName', label: '学校名', type: 'text', value: s.schoolName },
-        { key: 'retentionMonths', label: '保存期間（月、24以上）', type: 'number', value: s.retentionMonths, required: true },
-        { key: 'sessionTtlMinutes', label: 'ログインの有効時間（分）', type: 'number', value: s.sessionTtlMinutes, required: true },
-        { key: 'actualConfirmDefaultDay', label: '実績確認の既定の期限日（翌月の何日、1〜28）', type: 'number', value: s.actualConfirmDefaultDay, required: true },
-        { key: 'allowLeaveOfAbsence', label: '休学中でも確定できる', type: 'bool', value: s.allowLeaveOfAbsence }
-      ];
+      var fields = SETTINGS_FIELDS.map(function (r) {
+        return { key: r.key, label: settingLabel(r), type: r.type || 'number', value: s[r.key], required: r.type !== 'bool' };
+      });
       openForm('その他 設定', fields, '保存', function (v) {
-        if (v.schoolName === null) v.schoolName = '';
-        call('api_adminSetSettings', [state.token, v]).then(function (r) { if (r.ok) { closeDialog(); alert('設定を保存しました。'); } else formError(r); });
+        var problems = [], changed = {}, n = 0;
+        SETTINGS_FIELDS.forEach(function (r) {
+          var x = v[r.key];
+          if (r.type !== 'bool') {
+            if (isNaN(x)) { problems.push(settingLabel(r) + ': 数字で入れてください'); return; }
+            if (Math.floor(x) !== x || x < r.min || x > r.max) { problems.push(settingLabel(r) + ': ' + r.min + '〜' + r.max + 'の整数で入れてください'); return; }
+          }
+          // 開いたときの値から変えた項目だけを送る（古い画面から、他の人が変えた項目を戻さない）
+          if (x !== s[r.key]) { changed[r.key] = x; n++; }
+        });
+        if (problems.length) { showMsg('admin-form-error', problems.join('、'), true); return; }
+        if (!n) { showMsg('admin-form-error', '変更はありません。', false); return; }
+        call('api_adminSetSettings', [state.token, changed]).then(function (r) {
+          if (r.ok) { closeDialog(); alert('設定を保存しました。'); return; }
+          var bad = r.details && SETTINGS_FIELDS.filter(function (x) { return x.key === r.details.field; })[0];
+          if (bad) showMsg('admin-form-error', settingLabel(bad) + ': ' + (bad.type === 'bool' ? '正しくありません' : bad.min + '〜' + bad.max + 'の整数で入れてください'), true);
+          else formError(r);
+        });
       });
     });
   });
 
   // ---- 保存期限超過の削除 ----
+  // 消す範囲（どの月より前か・件数）をサーバに出してもらって確認し、確認で見せた保存期間と境目を送る。
+  // 確認の後に保存期間が変わっていたら、サーバが消さずに断る（2026-10-07）
   el('btn-purge-expired').addEventListener('click', function () {
-    call('api_adminGetSettings', [state.token]).then(function (res) {
+    call('api_adminPurgeExpired', [state.token, { preview: true }]).then(function (res) {
       if (!adminAlert(res)) return;
-      if (!confirm('保存期間（' + res.data.retentionMonths + 'か月）より前の月の申告データを完全に削除します。元に戻せません。よろしいですか？')) return;
-      call('api_adminPurgeExpired', [state.token]).then(function (r) {
+      var p = res.data;
+      if (!confirm('保存期間は' + p.retentionMonths + 'か月です。' + p.cutoffYm + ' より前を削除します（' + p.count + '件）。元に戻せません。よろしいですか？')) return;
+      call('api_adminPurgeExpired', [state.token, { retentionMonths: p.retentionMonths, cutoffYm: p.cutoffYm }]).then(function (r) {
+        if (!r.ok && r.details && r.details.reason === 'SETTINGS_CHANGED') { alert('設定が変わりました。開き直してください'); return; }
         if (adminAlert(r, r.ok ? r.data.deletedRows + '件を削除しました。' : '')) loadAdminBoard();
       });
     });
   });
 
   // ---- 生徒モード（試用の学生 生徒A（クラス DEMO）の画面にすぐ入る。管理者のトークンは手元に残し、「管理者に戻る」で戻す） ----
+  // 2回押されても（Enter の連打など）管理者のトークンを学生のトークンで上書きしない。
+  // 管理者の画面にいて、まだ生徒モードに入っていないときだけ頼み、返事も、頼んだときの管理者のままのときだけ使う（2026-10-07）
+  var studentModePending = false;
   el('btn-student-mode').addEventListener('click', function () {
-    call('api_adminActAsDemoStudent', [state.token, 'DEMO-A']).then(function (res) {
+    if (studentModePending || state.role !== 'admin' || state.adminToken) return;
+    studentModePending = true;
+    var adminToken = state.token;
+    call('api_adminActAsDemoStudent', [adminToken, 'DEMO-A']).then(function (res) {
+      studentModePending = false;
+      if (state.role !== 'admin' || state.adminToken || state.token !== adminToken) {
+        if (res.ok) callServer('api_logout', [res.data.token]); // 使わない学生のセッションは閉じる
+        return;
+      }
       if (!adminAlert(res)) return;
       if (res.data.newStudents.length) {
         alert('試用の生徒を作りました。スマホなどから直接ログインするときは、学籍番号「' + res.data.studentId + '」だけを入れてください。');
@@ -1170,8 +1591,8 @@
 
   el('btn-print-board').addEventListener('click', function () {
     var sids = state.admin.boardRows.map(function (r) { return r.studentId; });
-    if (!sids.length) { alert('表示中の学生がいません。'); return; }
-    printPages(sids, [state.yearMonth]);
+    if (!sids.length || state.admin.boardYm !== state.yearMonth) { alert('表示中の学生がいません。'); return; }
+    printPages(sids, [state.admin.boardYm]);
   });
 
 })();

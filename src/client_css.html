@@ -145,10 +145,11 @@ a {
   border: 1px solid var(--danger-border);
 }
 
+/* 長期休業の印は緑（エラーの赤と見分けるため。2026-10-07） */
 .badge-holiday {
-  background: #fee2e2;
-  color: var(--danger-strong);
-  border: 1px solid #fca5a5;
+  background: #d1fae5;
+  color: #065f46;
+  border: 1px solid #6ee7b7;
   font-weight: 700;
 }
 
@@ -615,12 +616,12 @@ button:disabled {
 .shift-table tr.dow-sun td.col-date { background: #fff5f5; }
 .shift-table tr.dow-sat td.col-date { background: #eff6ff; }
 
-/* 長期休暇の日: 行全体に色を付け、日付の下に印 */
+/* 長期休暇の日: 行全体に薄い緑を付け、日付の下に印。エラーの行（薄い赤＋左の赤い線）と見分けられるよう、赤は使わない（2026-10-07） */
 .shift-table tr.holiday-day td {
-  background: #fff1f2;
+  background: #ecfdf5;
 }
 .shift-table tr.holiday-day td.col-date {
-  border-left: 3px solid var(--danger);
+  border-left: 3px solid #34d399;
 }
 .hol-mark {
   display: block;
@@ -896,6 +897,8 @@ a.adm-stat.is-active { color: var(--navy); text-decoration: underline; font-weig
 .dt-actions .btn-outline { color: var(--navy); border-color: #cbd5e1; background: var(--surface); }
 .dt-month { font-size: 0.88rem; color: var(--text-sub); margin-bottom: 0.4rem; }
 .dt-month select { width: auto; display: inline-block; margin-left: 0.4rem; padding: 0.3rem 0.5rem; border-radius: 3px; font-size: 0.95rem; }
+.dt-month-pick { display: inline-block; margin-left: 0.6rem; white-space: nowrap; }
+.dt-month-pick input { width: auto; display: inline-block; margin-left: 0.3rem; padding: 0.25rem 0.4rem; border-radius: 3px; font-size: 0.9rem; }
 
 .adm-bottom { margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid var(--border); }
 .adm-bottom button { width: auto; padding: 0.5rem 1.5rem; }
@@ -1085,9 +1088,13 @@ button.adm-link:hover { color: var(--navy-light); background: none; transform: n
 }
 [hidden] { display: none !important; }
 /* 確定できない日の行: はっきり分かる赤（2026-10-07 薄すぎたので濃くした） */
-tr.row-error td { background: #fdd8d8; }
-tr.row-error td:first-child { box-shadow: inset 4px 0 0 #d32f2f; }
+/* 長期休業の日でも、確定できなければ赤を優先する（.shift-table tr.holiday-day td より強く書く） */
+tr.row-error td, .shift-table tr.row-error td, .shift-table tr.row-error td.col-date { background: #fdd8d8; }
+tr.row-error td:first-child, .shift-table tr.row-error td:first-child { box-shadow: inset 4px 0 0 #d32f2f; }
+.month-row.is-editing { background: #eff6ff; }
 .time-invalid { border-color: #d32f2f !important; background: #fff4f4; }
+.admin-form .field-invalid { border-color: #d32f2f !important; background: #fff4f4; }
+.admin-form input[readonly] { background: #f2f2f2; color: #555; }
 .login-admin-link { text-align: right; margin-top: 0.75rem; font-size: 0.8rem; }
 .login-admin-link a { color: var(--text-sub); }
 </style>

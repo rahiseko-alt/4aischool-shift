@@ -14,7 +14,7 @@ const REQUIRED_API = [
   'api_getMonth', 'api_saveDraft', 'api_confirm', 'api_saveActual', 'api_confirmActual', 'api_getHistory',
   'api_adminBoard', 'api_adminStudentDetail', 'api_adminUpsertStudent', 'api_adminResetPassword', 'api_adminUnlockLogin',
   'api_adminCreateAdmin', 'api_adminGrantUnlock', 'api_adminSchoolConfirm', 'api_adminUndoSchoolConfirm',
-  'api_adminSetDeadline', 'api_adminSetHoliday', 'api_adminDeleteHoliday', 'api_adminListHolidays',
+  'api_adminSetDeadline', 'api_adminListDeadlines', 'api_adminSetHoliday', 'api_adminDeleteHoliday', 'api_adminListHolidays',
   'api_adminGetSettings', 'api_adminSetSettings',
   'api_adminPrintHtml', 'api_adminPurgeExpired', 'api_adminSeedDemo', 'api_adminActAsDemoStudent', 'api_adminImportRoster',
   'api_adminListClasses', 'api_adminAddClass', 'api_adminDeleteClass', 'api_adminChangeCredentials',

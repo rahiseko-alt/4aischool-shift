@@ -215,12 +215,11 @@ function api_getMonth(token, yearMonth) {
     var deadlineAt = dlRow && dlRow.deadline_at ? dlRow.deadline_at : null;
     var unlockUntil = sub && sub.unlock_until ? sub.unlock_until : null;
 
-    var closed = false;
-    if (deadlineAt && now > deadlineAt) {
-      if (!unlockUntil || now > unlockUntil) {
-        closed = true;
-      }
-    }
+    // 締切の行が無い月は、保存・確定・実績がすべて NOT_OPEN になる。画面でも「まだ受付していない」と出し、入力させない（2026-10-07）
+    var notOpen = !dlRow;
+    var unlockValid = !!unlockUntil && now <= unlockUntil;
+    var deadlinePassed = !!deadlineAt && now > deadlineAt;
+    var closed = notOpen || (deadlinePassed && !unlockValid);
 
     var version = sub ? Number(sub.version) || 0 : 0;
     var status = sub && sub.status ? sub.status : '未入力';
@@ -265,7 +264,8 @@ function api_getMonth(token, yearMonth) {
     });
 
     var nextMonthFirstDay = core_addDays_(core_buildDateStr_(yearMonth, daysInMonth), 1) + ' 00:00';
-    var actualOpen = now >= nextMonthFirstDay;
+    // api_saveActual・api_confirmActual と同じ条件で開く（締切の行が無い・学校確定の月は開かない。2026-10-07）
+    var actualOpen = !notOpen && status !== '学校確定' && now >= nextMonthFirstDay;
     var actualDeadlineAt = null;
     if (dlRow && dlRow.actual_deadline_at) {
       actualDeadlineAt = dlRow.actual_deadline_at;
@@ -274,11 +274,12 @@ function api_getMonth(token, yearMonth) {
       actualDeadlineAt = core_buildDateStr_(nextYmParts, settings.actualConfirmDefaultDay) + ' 23:59';
     }
 
-    if (now > actualDeadlineAt) {
-      if (!unlockUntil || now > unlockUntil) {
-        actualOpen = false;
-      }
+    var actualDeadlinePassed = now > actualDeadlineAt;
+    if (actualDeadlinePassed && !unlockValid) {
+      actualOpen = false;
     }
+    // 画面に「修正許可: 〜MM/DD HH:MM」を出すのは、締切（予定か、実績の期間中の実績の期限）を過ぎていて、許可がまだ有効なときだけ
+    var unlockActive = !notOpen && unlockValid && (deadlinePassed || (now >= nextMonthFirstDay && actualDeadlinePassed));
 
     var actualShifts = sub && sub.actual_json ? util_parseJson_(sub.actual_json, {}) : null;
     var actualEvaluation = actualShifts ? evaluateMonth({
@@ -300,8 +301,10 @@ function api_getMonth(token, yearMonth) {
         student: { studentId: student.student_id, name: student.name },
         status: status,
         closed: closed,
+        notOpen: notOpen,
         deadlineAt: deadlineAt,
         unlockUntil: unlockUntil,
+        unlockActive: unlockActive,
         version: version,
         shifts: shifts,
         evaluation: evaluation,
