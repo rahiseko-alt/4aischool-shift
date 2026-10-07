@@ -463,9 +463,11 @@ function api_adminSetSettings(token, params) {
     if (!auth.ok) return auth;
 
     if (!params || typeof params !== 'object' || Array.isArray(params)) return { ok: false, error: 'BAD_REQUEST' };
+    // 送られた項目だけを書き換える（画面は変えた項目だけを送る。古い画面から他の人の変更を戻さないため。2026-10-07）。
+    // 1つでも悪ければ何も変えず、どの項目かを details.field で返す。
     for (var pk in params) {
       if (!Object.prototype.hasOwnProperty.call(params, pk)) continue;
-      if (!settings_isValid_(pk, params[pk])) return { ok: false, error: 'BAD_REQUEST' };
+      if (!settings_isValid_(pk, params[pk])) return { ok: false, error: 'BAD_REQUEST', details: { field: pk } };
     }
 
     var lock = LockService.getScriptLock();
@@ -605,16 +607,17 @@ function api_adminStudentDetail(token, studentId) {
     var detailHolidays = db_readAllRows_('SCHOOL_HOLIDAYS').map(function (h) { return { startDate: h.start_date, endDate: h.end_date }; });
     var detailSettings = student_getSettings_();
     var monthsList = mySubs.map(function(s) {
+      var cur = admin_currentCodes_(targetStudent, s.year_month, s, subRows, detailHolidays, detailSettings);
       return {
         yearMonth: s.year_month,
         status: s.status,
         actualStatus: s.actual_status || '未確認',
         shifts: parse(s.shift_json, {}),
         totalMinutes: num(s.total_minutes),
-        codes: s.status === '学校確定' ? [] : admin_currentBlockCodes_(targetStudent, s.year_month, s, subRows, detailHolidays, detailSettings),
+        codes: cur.plan,
         actual: s.actual_json ? parse(s.actual_json, null) : null,
         actualTotalMinutes: s.actual_json ? num(s.actual_total_minutes) : null,
-        actualCodes: parse(s.actual_codes, []),
+        actualCodes: cur.actual,
         publicHolidays: util_jpHolidaysOfMonth_(s.year_month),
         unlockUntil: s.unlock_until || null
       };
@@ -633,17 +636,23 @@ function api_adminStudentDetail(token, studentId) {
   }
 }
 
-// バックアップの状態。保存先が未設定か、最後のバックアップが無い・40日以上前なら warn を立てる。
+// バックアップの状態。warn が立つときは reason で理由を分ける（画面の注意の文を変えるため。2026-10-07）:
+//   NO_FOLDER 保存先が未設定 / NEVER まだ一度も取れていない / BAD_DATE 最後の日時が読めない・未来 / OLD 40日以上前
 function admin_backupStatus_() {
   var props = PropertiesService.getScriptProperties();
   var configured = !!props.getProperty('BACKUP_FOLDER_ID');
   var lastAt = props.getProperty('LAST_BACKUP_AT') || null;
-  var days = null;
-  if (lastAt) {
-    var d = function (x) { var p = x.slice(0, 10).split('-'); return Date.UTC(Number(p[0]), Number(p[1]) - 1, Number(p[2])); };
-    days = Math.floor((d(util_todayJst_()) - d(lastAt)) / 86400000);
+  var reason = null;
+  if (!configured) reason = 'NO_FOLDER';
+  else if (!lastAt) reason = 'NEVER';
+  else {
+    var day = String(lastAt).slice(0, 10);
+    var d = function (x) { var p = x.split('-'); return Date.UTC(Number(p[0]), Number(p[1]) - 1, Number(p[2])); };
+    var days = util_isDate_(day) ? Math.floor((d(util_todayJst_()) - d(day)) / 86400000) : NaN;
+    if (!(days >= 0)) reason = 'BAD_DATE';
+    else if (days >= 40) reason = 'OLD';
   }
-  return { configured: configured, lastAt: lastAt, warn: !configured || days === null || days >= 40 };
+  return { configured: configured, lastAt: lastAt, warn: reason !== null, reason: reason };
 }
 
 function api_adminBoard(token, yearMonth, filters) {
@@ -745,22 +754,14 @@ function api_adminBoard(token, yearMonth, filters) {
           displayStatus = '未提出';
         }
 
-        // 確定を止める注意は、表示のたびにいまの学生情報・長期休業・前後の月で計算し直す（確定後の変更を見逃さない。2026-10-03）
-        if (cSub.status !== '学校確定') {
-          errorCodes = admin_currentBlockCodes_(cSt, yearMonth, cSub, allSubs, boardHolidays, boardSettings);
-        }
+        // 確定を止める注意と実績超過は、表示のたびにいまの学生情報・長期休業・前後の月で計算し直す
+        // （確定後の変更を見逃さない。2026-10-03。実績も 2026-10-07）
+        var cur = admin_currentCodes_(cSt, yearMonth, cSub, allSubs, boardHolidays, boardSettings);
+        errorCodes = cur.plan;
+        actualOver = cur.actual.indexOf('ACTUAL_OVER') !== -1;
 
         if (cSub.actual_status) {
           actualStatus = cSub.actual_status;
-        }
-
-        if (cSub.actual_codes) {
-          try {
-            var aParsed = JSON.parse(cSub.actual_codes);
-            if (Array.isArray(aParsed) && aParsed.indexOf('ACTUAL_OVER') !== -1) {
-              actualOver = true;
-            }
-          } catch (e) {}
         }
 
         if (cSub.updated_at) {
@@ -862,15 +863,15 @@ function api_adminSetHoliday(token, params) {
             break;
           }
         }
-        if (existing) {
-          existing.name = name;
-          existing.start_date = startDate;
-          existing.end_date = endDate;
-          existing.school_year = schoolYear != null ? String(schoolYear) : '';
-          db_updateRow_('SCHOOL_HOLIDAYS', existing._rowNum, existing);
-          db_logAudit_('MASTER_UPDATE', auth.user.login_id, 'admin', '', '', null, { op: 'update_holiday', holidayId: holidayId });
-          return { ok: true, data: { holidayId: holidayId } };
-        }
+        // 編集のつもりで知らない holidayId が来たら、新しく作らない（別の画面で消された休業が復活しないように。2026-10-07）
+        if (!existing) return { ok: false, error: 'NOT_FOUND' };
+        existing.name = name;
+        existing.start_date = startDate;
+        existing.end_date = endDate;
+        existing.school_year = String(schoolYear);
+        db_updateRow_('SCHOOL_HOLIDAYS', existing._rowNum, existing);
+        db_logAudit_('MASTER_UPDATE', auth.user.login_id, 'admin', '', '', null, { op: 'update_holiday', holidayId: holidayId });
+        return { ok: true, data: { holidayId: holidayId } };
       }
 
       var newId = 'HOL_' + util_uuid_().slice(0, 8);
@@ -943,6 +944,11 @@ function api_adminListHolidays(token) {
         schoolYear: h.school_year ? Number(h.school_year) : null
       };
     });
+    // 開始日の順（同じ日なら終了日の順）に並べる（2026-10-07）
+    list.sort(function (a, b) {
+      var ka = String(a.startDate) + String(a.endDate), kb = String(b.startDate) + String(b.endDate);
+      return ka < kb ? -1 : (ka > kb ? 1 : 0);
+    });
     return { ok: true, data: list };
   } catch (err) {
     util_logError_(err);
@@ -950,10 +956,21 @@ function api_adminListHolidays(token) {
   }
 }
 
-function api_adminPurgeExpired(token) {
+// 保存期限を過ぎたデータの削除。params（省略可）:
+//   { preview: true } → 消さずに { retentionMonths, cutoffYm（この月より前を消す）, count } を返す（確認の文に使う）。
+//   { retentionMonths, cutoffYm } → 確認で見せた値。今の設定・今日から出した値と違えば消さずに断る
+//   （確認の後に別の画面で保存期間を変えると、確認より多く消えてしまうため。2026-10-07）。
+function api_adminPurgeExpired(token, params) {
   try {
     var auth = auth_verifySession_(token, 'admin');
     if (!auth.ok) return auth;
+
+    var p = params === undefined || params === null ? {} : params;
+    if (typeof p !== 'object' || Array.isArray(p)) return { ok: false, error: 'BAD_REQUEST' };
+    var shown = p.retentionMonths !== undefined || p.cutoffYm !== undefined;
+    if (shown && (!settings_isValid_('retentionMonths', p.retentionMonths) || !util_isYearMonth_(p.cutoffYm))) {
+      return { ok: false, error: 'BAD_REQUEST' };
+    }
 
     var lock = LockService.getScriptLock();
     if (!lock.tryLock(5000)) return { ok: false, error: 'BUSY' };
@@ -961,18 +978,19 @@ function api_adminPurgeExpired(token) {
     try {
       var settings = student_getSettings_();
       var retentionMonths = settings.retentionMonths || 24;
+      var cutoffYm = admin_addMonths_(util_currentYearMonth_(), -retentionMonths);
 
-      var currentYm = util_currentYearMonth_();
-      var parts = currentYm.split('-');
-      var cy = Number(parts[0]);
-      var cm = Number(parts[1]);
-
-      var cutoffDate = new Date(Date.UTC(cy, cm - 1 - retentionMonths, 1));
-      var cutoffYm = cutoffDate.getUTCFullYear() + '-' + String(cutoffDate.getUTCMonth() + 1).padStart(2, '0');
+      if (p.preview === true) {
+        var count = db_readAllRows_('MONTHLY_SUBMISSIONS').filter(function (r) { return r.year_month < cutoffYm; }).length;
+        return { ok: true, data: { retentionMonths: retentionMonths, cutoffYm: cutoffYm, count: count } };
+      }
+      if (shown && (p.retentionMonths !== retentionMonths || p.cutoffYm !== cutoffYm)) {
+        return { ok: false, error: 'VERSION_CONFLICT', details: { reason: 'SETTINGS_CHANGED', retentionMonths: retentionMonths, cutoffYm: cutoffYm } };
+      }
 
       var deletedRows = db_deleteRowsWhere_('MONTHLY_SUBMISSIONS', function (r) { return r.year_month < cutoffYm; });
 
-      db_logAudit_('PURGE', auth.user.login_id, 'admin', '', '', null, { deletedRows: deletedRows });
+      db_logAudit_('PURGE', auth.user.login_id, 'admin', '', '', null, { deletedRows: deletedRows, retentionMonths: retentionMonths, cutoffYm: cutoffYm });
 
       return { ok: true, data: { deletedRows: deletedRows } };
     } finally {
@@ -1259,24 +1277,42 @@ function api_adminActAsDemoStudent(token, studentId) {
   }
 }
 
-// その月の予定を、いまの学生情報・長期休業・前後の月で計算し直し、確定を止める注意のコード（重複なし）を返す（2026-10-03）
-function admin_currentBlockCodes_(st, yearMonth, sub, allSubs, holidays, settings) {
-  var shifts = util_parseJson_(sub.shift_json, {});
+// 予定と実績の注意を、いまの学生情報・長期休業・前後の月で計算し直す（前後の月は1回だけ読む。2026-10-07）。
+// plan: 確定を止める注意（学校確定の月は空）。actual: 実績の注意（保存のときと同じ形の、重複なしのコード。実績が無ければ空）。
+function admin_currentCodes_(st, yearMonth, sub, allSubs, holidays, settings) {
   var prev = student_getAdjacentMonthData_(st, yearMonth, true, allSubs);
   var next = student_getAdjacentMonthData_(st, yearMonth, false, allSubs);
-  var ev = evaluateMonth({
-    yearMonth: yearMonth, mode: 'plan',
-    student: {
-      birthDate: st.birth_date, enrollmentDate: st.enrollment_date, withdrawalDate: st.withdrawal_date || null,
-      graduationDate: st.graduation_date || null, status: st.status, workPermission: st.work_permission === 'true',
-      permissionExpires: st.permission_expires || null
-    },
-    shifts: shifts, prevMonthDaily: prev.daily, prevMonthSource: prev.source, nextMonthDaily: student_nextDailyFor_(sub.status, next),
-    holidays: holidays, settings: settings
-  });
-  var seen = {}, out = [];
-  ev.codes.forEach(function (c) { if (c.severity === 'block' && !seen[c.code]) { seen[c.code] = true; out.push(c.code); } });
-  return out;
+  var student = {
+    birthDate: st.birth_date, enrollmentDate: st.enrollment_date, withdrawalDate: st.withdrawal_date || null,
+    graduationDate: st.graduation_date || null, status: st.status, workPermission: st.work_permission === 'true',
+    permissionExpires: st.permission_expires || null
+  };
+  var uniq = function (codes, onlyBlock) {
+    var seen = {}, out = [];
+    codes.forEach(function (c) {
+      if (onlyBlock && c.severity !== 'block') return;
+      if (!seen[c.code]) { seen[c.code] = true; out.push(c.code); }
+    });
+    return out;
+  };
+  var plan = [];
+  if (sub.status !== '学校確定') {
+    plan = uniq(evaluateMonth({
+      yearMonth: yearMonth, mode: 'plan', student: student,
+      shifts: util_parseJson_(sub.shift_json, {}), prevMonthDaily: prev.daily, prevMonthSource: prev.source,
+      nextMonthDaily: student_nextDailyFor_(sub.status, next), holidays: holidays, settings: settings
+    }).codes, true);
+  }
+  // 実績は学生が保存したときと同じ計算（翌月はそのまま数える）
+  var actual = [];
+  if (sub.actual_json) {
+    actual = uniq(evaluateMonth({
+      yearMonth: yearMonth, mode: 'actual', student: student,
+      shifts: util_parseJson_(sub.actual_json, {}), prevMonthDaily: prev.daily, prevMonthSource: prev.source,
+      nextMonthDaily: next.daily, holidays: holidays, settings: settings
+    }).codes, false);
+  }
+  return { plan: plan, actual: actual };
 }
 
 // 名簿の一括登録（2026-10-02）。rows: [{ studentId, name（ローマ字）, nameKana }]、最大300人。
