@@ -253,20 +253,54 @@
     return m + sp + t('label.minutes');
   }
 
+  // ---- 7日間のコード（OVER_28H など。date＝7日間の初日、windowEnd＝最終日） ----
+  // 重なる7日間は1つの期間にまとめ、「10/30〜11/8」のように月/日で出す。表ではその月の中の最後の日の行に出す
+  function md(dateStr) { return Number(dateStr.slice(5, 7)) + '/' + Number(dateStr.slice(8, 10)); }
+  function mergeWindows(codes) {
+    var out = [], last = {};
+    (codes || []).slice().sort(function (a, b) { return (a.date || '') < (b.date || '') ? -1 : ((a.date || '') > (b.date || '') ? 1 : 0); })
+      .forEach(function (c) {
+        if (!c.windowEnd) { out.push(c); return; }
+        var p = last[c.code];
+        if (p && c.date <= p.windowEnd) { if (c.windowEnd > p.windowEnd) p.windowEnd = c.windowEnd; return; }
+        var m = { code: c.code, severity: c.severity, date: c.date, windowEnd: c.windowEnd };
+        last[c.code] = m;
+        out.push(m);
+      });
+    return out;
+  }
+  function monthEdges(yearMonth) { return [yearMonth + '-01', yearMonth + '-' + pad2(daysInMonth(yearMonth))]; }
+  // そのコードを表のどの日の行に出すか（7日間なら、月の中に収めた最終日）
+  function anchorDate(c, yearMonth) {
+    if (!c.windowEnd) return c.date || null;
+    var e = monthEdges(yearMonth);
+    return c.windowEnd > e[1] ? e[1] : (c.windowEnd < e[0] ? e[0] : c.windowEnd);
+  }
+  // そのコードに当たる、その月の中の日（数字）
+  function codeDays(c, yearMonth) {
+    if (!c.date) return [];
+    if (!c.windowEnd) return c.date.slice(0, 7) === yearMonth ? [Number(c.date.slice(8, 10))] : [];
+    var e = monthEdges(yearMonth), from = c.date < e[0] ? e[0] : c.date, to = c.windowEnd > e[1] ? e[1] : c.windowEnd, out = [];
+    for (var d = Number(from.slice(8, 10)); from <= to && d <= Number(to.slice(8, 10)); d++) out.push(d);
+    return out;
+  }
+  function codeText(c) { return c.windowEnd ? md(c.date) + '〜' + md(c.windowEnd) + ' ' + tErr(c.code) : tErr(c.code); }
+
   function codesHtml(codes) {
     if (!codes || !codes.length) return '';
     var seen = {};
     var words = [];
     codes.forEach(function (c) {
-      if (seen[c.code]) return;
-      seen[c.code] = true;
-      words.push('<span class="badge ' + (c.severity === 'block' ? 'badge-error' : 'badge-draft') + '">' + esc(tErr(c.code)) + '</span>');
+      var text = codeText(c);
+      if (seen[text]) return;
+      seen[text] = true;
+      words.push('<span class="badge ' + (c.severity === 'block' ? 'badge-error' : 'badge-draft') + '">' + esc(text) + '</span>');
     });
     return '<div class="codes-bar">' + words.join(' ') + '</div>';
   }
 
-  function dayCodes(codes, dateStr) {
-    return (codes || []).filter(function (c) { return c.date === dateStr; });
+  function dayCodes(codes, dateStr, yearMonth) {
+    return (codes || []).filter(function (c) { return anchorDate(c, yearMonth) === dateStr; });
   }
 
   // 1日1行の表（紙の予定表と同じ形）: 日付(曜日) | 開始〜終了 | 休憩 | 実働。最後の行に月の合計。
@@ -280,6 +314,10 @@
       '<th class="col-break">' + esc(t('label.breakTime')) + '</th>' +
       '<th class="col-work">' + esc(t('label.workTime')) + '</th></tr></thead><tbody>';
     var dis = opts.disabled ? ' disabled' : '';
+    var merged = mergeWindows(opts.codes);
+    // 確定を止める理由のある日（7日間のものは、その月の中の7日間すべて）は、表を開いたときから赤くする
+    var errDays = {};
+    merged.forEach(function (c) { if (c.severity === 'block') codeDays(c, yearMonth).forEach(function (x) { errDays[x] = true; }); });
     for (var d = 1; d <= days; d++) {
       var dateStr = yearMonth + '-' + pad2(d);
       var isHoliday = (opts.holidays || []).indexOf(dateStr) >= 0;
@@ -289,11 +327,12 @@
       var dowClass = (di === 0 || phName) ? 'dow-sun' : (di === 6 ? 'dow-sat' : 'dow-weekday');
       var list = shifts[String(d)] || [];
       var rows = list.length ? list : [{}];
-      var codes = dayCodes(opts.codes, dateStr);
+      var codes = dayCodes(merged, dateStr, yearMonth);
       rows.forEach(function (sh, i) {
         var cls = ['day-row', opts.rowClass, dowClass];
         if (isHoliday) cls.push('holiday-day');
         if (codes.length) cls.push('has-codes');
+        if (errDays[d]) cls.push('row-error');
         html += '<tr class="' + cls.join(' ') + '" data-day="' + d + '">';
         html += '<td class="col-date">';
         if (i === 0) {
@@ -398,14 +437,17 @@
       el(containerId).querySelectorAll('tr.row-error').forEach(function (r) { r.classList.remove('row-error'); });
     }
     if (!res.ok) {
-      var codes = res.details ? (res.details.inputErrors || []).concat(res.details.codes || []) : [];
+      var codes = res.details ? mergeWindows((res.details.inputErrors || []).concat(res.details.codes || [])) : [];
+      var ym = state.monthData ? state.monthData.yearMonth : state.yearMonth;
       var lines = [];
       codes.forEach(function (c) {
-        var day = c.date ? Number(c.date.slice(8, 10)) : null;
-        var line = (day ? t('label.dayFmt').replace('{d}', day) + ': ' : '') + tErr(c.code);
+        var line = c.windowEnd ? md(c.date) + '〜' + md(c.windowEnd) + ': ' + tErr(c.code)
+          : (c.date ? t('label.dayFmt').replace('{d}', Number(c.date.slice(8, 10))) + ': ' : '') + tErr(c.code);
         if (lines.indexOf(line) < 0) lines.push(line);
-        if (day && containerId) {
-          el(containerId).querySelectorAll('tr.day-row[data-day="' + day + '"]').forEach(function (r) { r.classList.add('row-error'); });
+        if (containerId) {
+          codeDays(c, ym).forEach(function (day) {
+            el(containerId).querySelectorAll('tr.day-row[data-day="' + day + '"]').forEach(function (r) { r.classList.add('row-error'); });
+          });
         }
       });
       if (confirmMode) {
@@ -899,7 +941,7 @@
     if (codes.length) {
       var seen = {};
       html += '<p class="detail-codes">' + codes.map(function (c) {
-        var line = (c.date ? Number(c.date.slice(8, 10)) + '日 ' : '') + tErr(c.code);
+        var line = c.windowEnd ? md(c.date) + '〜' + md(c.windowEnd) + ' ' + tErr(c.code) : (c.date ? Number(c.date.slice(8, 10)) + '日 ' : '') + tErr(c.code);
         if (seen[line]) return '';
         seen[line] = true;
         return '<span class="badge ' + (c.severity === 'warn' ? 'badge-draft' : 'badge-error') + '">' + esc(line) + '</span>';
