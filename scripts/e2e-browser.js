@@ -64,7 +64,11 @@ html = html.replace('<head>', '<head><script>' + shim + '</script>');
   await page.click('#btn-show-password');
   await page.fill('#inp-loginId', ADMIN.id); await page.fill('#inp-password', ADMIN.pw); await page.click('#btn-login'); await wait();
   await page.waitForSelector('#change-password-screen:not([hidden])');
-  await page.fill('#inp-cur-password', ADMIN.pw); await page.fill('#inp-new-password', 'admin-pass-0001'); await page.click('#btn-change-password'); await wait();
+  // 確認欄と違えば理由を出して止まる。Enter キーでも送れる
+  await page.fill('#inp-cur-password', ADMIN.pw); await page.fill('#inp-new-password', 'admin-pass-0001'); await page.fill('#inp-new-password2', 'admin-pass-0002');
+  await page.click('#btn-change-password');
+  if (!(await page.textContent('#change-password-error')).includes('一致しません')) throw new Error('確認欄の不一致の理由が出ない');
+  await page.fill('#inp-new-password2', 'admin-pass-0001'); await page.press('#inp-new-password2', 'Enter'); await wait();
   await page.waitForSelector('#admin-screen:not([hidden])');
 
   step('最低賃金・勤務先の画面が無い');
@@ -320,9 +324,30 @@ html = html.replace('<head>', '<head><script>' + shim + '</script>');
   await page.fill('[data-key="newPassword2"]', 'new-admin-pass-01');
   await page.click('[data-act="submit"]'); await wait();
   if (!dialogs.some((m) => m.includes('sensei01'))) throw new Error('IDの変更が知らされない');
-  await page.click('#btn-logout-admin');
+  step('セッション切れ・ログアウトで前のダイアログ・一覧・ID欄が残らない。パスワード欄を開かずに失敗すると管理者向けの案内。Enter でログイン');
+  await page.click('#btn-open-credentials');
+  await page.fill('[data-key="currentPassword"]', 'new-admin-pass-01');
+  await page.fill('[data-key="newPassword"]', 'new-admin-pass-01'); await page.fill('[data-key="newPassword2"]', 'new-admin-pass-01');
+  await page.click('[data-act="submit"]');
+  if (!(await page.textContent('#admin-form-error')).includes('同じ')) throw new Error('今と同じパスワードを止めない');
+  // ダイアログを開いたままセッションが切れると、ログイン画面に戻り、ダイアログも閉じる
+  app.env.clock.set('2026-11-02 14:00');
+  await page.fill('[data-key="newPassword"]', 'other-admin-pass-1'); await page.fill('[data-key="newPassword2"]', 'other-admin-pass-1');
+  await page.click('[data-act="submit"]'); await wait();
+  await page.waitForSelector('#login-screen:not([hidden])');
+  if (!(await page.isHidden('#admin-dialog-overlay'))) throw new Error('セッション切れの後もダイアログが残る');
+  if ((await page.innerHTML('#admin-board')) !== '') throw new Error('セッション切れの後も一覧が残る');
   await page.click('#btn-show-password');
   await page.fill('#inp-loginId', 'sensei01'); await page.fill('#inp-password', 'new-admin-pass-01'); await page.click('#btn-login'); await wait();
+  await page.waitForSelector('#admin-screen:not([hidden])');
+  if (!(await page.isHidden('#admin-dialog-overlay'))) throw new Error('入り直した後に前のダイアログが出る');
+  await page.click('#btn-logout-admin');
+  if ((await page.inputValue('#inp-loginId')) !== '') throw new Error('ログアウト後もID欄が残る');
+  if ((await page.innerHTML('#admin-board')) !== '') throw new Error('ログアウト後も一覧が残る');
+  await page.fill('#inp-loginId', 'sensei01'); await page.press('#inp-loginId', 'Enter'); await wait();
+  if (!(await page.textContent('#login-error')).includes('管理者の方はこちら')) throw new Error('管理者向けの案内が出ない: ' + (await page.textContent('#login-error')));
+  await page.click('#btn-show-password');
+  await page.fill('#inp-loginId', 'sensei01'); await page.fill('#inp-password', 'new-admin-pass-01'); await page.press('#inp-password', 'Enter'); await wait();
   await page.waitForSelector('#admin-screen:not([hidden])');
 
   await browser.close();

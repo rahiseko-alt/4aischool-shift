@@ -73,6 +73,7 @@ function api_adminUpsertStudent(token, student) {
           }
         };
       } else {
+        if (auth_isAdminLoginId_(student.studentId)) return auth_idTakenError_(student.studentId); // 管理者のIDと同じ番号は登録しない（2026-10-07）
         var loginId = util_generateLoginId_();
         var initialPassword = util_generatePassword_(14);
         var salt = util_generateSalt_();
@@ -1297,6 +1298,7 @@ function api_adminImportRoster(token, params) {
       if (!util_isNonEmptyString_(r.name, 100)) return { ok: false, error: 'BAD_REQUEST' };
       if (r.nameKana !== undefined && r.nameKana !== null && (typeof r.nameKana !== 'string' || r.nameKana.length > 100)) return { ok: false, error: 'BAD_REQUEST' };
     }
+    var takenId = auth_adminLoginIdAmong_(rows.map(function (r) { return r.studentId; })); if (takenId) return auth_idTakenError_(takenId); // 管理者のIDと同じ番号は登録しない（2026-10-07）
 
     var lock = LockService.getScriptLock();
     if (!lock.tryLock(10000)) return { ok: false, error: 'BUSY' };

@@ -161,10 +161,12 @@ src/
 
 | 関数 | 引数 | 成功時の data | 主なエラー |
 | --- | --- | --- | --- |
-| `api_login` | `loginId, password` | `{ token, role: 'student'\|'admin', mustChangePassword, studentId: string\|null }` | `LOGIN_FAILED`（IDが無い・パスワード違いを区別しない）、`LOGIN_LOCKED`（`details.lockedUntil`） |（2026-10-01: 学生は `loginId` に学籍番号を入れればパスワード無しで入れる。2026-10-06: クラス名に「国際」を含む学生は K＋学籍番号の下2桁、「総合」を含む学生は S＋下2桁でも入れる（大文字小文字は問わない。同じ番号に2人以上当たるときは入れない）。管理者は従来どおり）
+| `api_login` | `loginId, password` | `{ token, role: 'student'\|'admin', mustChangePassword, studentId: string\|null }` | `LOGIN_FAILED`（IDが無い・パスワード違いを区別しない）、`LOGIN_LOCKED`（`details.lockedUntil`） |（2026-10-01: 学生は `loginId` に学籍番号を入れればパスワード無しで入れる。2026-10-06: クラス名に「国際」を含む学生は K＋学籍番号の下2桁、「総合」を含む学生は S＋下2桁でも入れる（大文字小文字は問わない。同じ番号に2人以上当たるときは入れない）。管理者は従来どおり。2026-10-07: パスワードが入っていて、管理者のログインID（大文字小文字は問わない）と同じなら、学籍番号より先に管理者として照合する）
 | `api_logout` | `token` | `null` | `AUTH_REQUIRED` |
-| `api_changePassword` | `token, currentPassword, newPassword` | `null` | `LOGIN_FAILED`（現在のパスワード違い）、`BAD_REQUEST`（新しいパスワードが10文字未満、または現在と同じ） |
+| `api_changePassword` | `token, currentPassword, newPassword` | `null` | `LOGIN_FAILED`（現在のパスワード違い）、`LOGIN_LOCKED`（`details.lockedUntil`）、`BAD_REQUEST`（`details.reason`: `PASSWORD_SHORT`＝10文字未満、`PASSWORD_BLANK`＝空白だけ、`SAME_PASSWORD`＝現在と同じ。2026-10-07） |
 
+- 2026-10-07: `api_changePassword`・`api_adminChangeCredentials` の「今のパスワード」の違いも、ログインの失敗と同じ回数に数える（5回でロック、ロック中は `LOGIN_LOCKED`、成功で0に戻す）。パスワードは前後の空白も含めてそのまま扱う（画面でも削らない）。
+- 2026-10-07: 管理者のログインIDと大文字小文字を問わず同じ学籍番号は、`api_adminUpsertStudent`（新規）・`api_adminImportRoster` で登録しない（`BAD_REQUEST`、`details: { reason: 'ID_TAKEN', studentId }`。名簿は1人も登録しない）。
 - 5回続けて失敗したら、その時点から15分ロック。ロック中は正しいパスワードでも `LOGIN_LOCKED`。ロック時刻を過ぎたら入れる。成功したら失敗回数を0に戻す。**ロック中の試行はパスワードを照合せず、失敗回数にも数えず、ロックを延ばさない。**
 - トークン: 128ビット以上のランダム値（`Utilities.getUuid()` を2つ使うなど）。**SESSIONS シートにはトークンの SHA-256 だけを保存する**（平文を保存しない）。有効期限はログイン時刻＋設定の分数（既定120分）。
 - パスワード: ユーザーごとのランダムな salt（32文字以上）と、Script Properties の `PASSWORD_PEPPER` を鍵にした HMAC-SHA256 を、ユーザーごとに保存した回数（既定10,000回）反復する。
@@ -228,7 +230,7 @@ src/
 | `api_adminStudentDetail` | `token, studentId` | `{ student, months: [{ yearMonth, status, actualStatus, shifts, totalMinutes, codes, actual: object\|null, actualTotalMinutes: number\|null, actualCodes, unlockUntil, publicHolidays }] }`（新しい月が先） |
 | `api_adminGrantUnlock` | `token, studentId, yearMonth, until` | `null`（行が無ければ未入力の行を作る。version は変えない） |
 | `api_adminSchoolConfirm` | `token, studentId, yearMonth` | `null` |
-| `api_adminChangeCredentials` | `token, { currentPassword, newLoginId\|null, newPassword\|null }` | `{ loginId }`（自分のIDとパスワードを変える。空欄はそのまま。今のパスワード違いは LOGIN_FAILED。IDは英数字と `._-` の4〜32文字で、他の利用者のIDや学籍番号と大文字小文字を問わず重ならないこと（重なれば BAD_REQUEST、`details.reason: 'ID_TAKEN'`）。パスワードは10文字以上。今のログインは切らない。2026-10-06 追加） |
+| `api_adminChangeCredentials` | `token, { currentPassword, newLoginId\|null, newPassword\|null }` | `{ loginId }`（自分のIDとパスワードを変える。空欄はそのまま。今のパスワード違いは LOGIN_FAILED。IDは英数字と `._-` の4〜32文字で、他の利用者のIDや学籍番号と大文字小文字を問わず重ならないこと（重なれば BAD_REQUEST、`details.reason: 'ID_TAKEN'`）。パスワードは10文字以上。今のログインは切らない。2026-10-06 追加。2026-10-07: 新しいパスワードが今と同じなら `details.reason: 'SAME_PASSWORD'`、空白だけなら `'PASSWORD_BLANK'`。今のパスワード違いは回数に数え、5回で LOGIN_LOCKED） |
 | `api_adminUndoSchoolConfirm` | `token, studentId, yearMonth` | `null`（学校確定の月を未入力に戻す。学校確定でなければ FORBIDDEN、行が無ければ NOT_FOUND。2026-10-03 追加） |
 | `api_adminBoard` | `token, yearMonth, { className?, status?, query? }` | 下記 |
 | `api_adminSetDeadline` | `token, { yearMonth, className, deadlineAt, actualDeadlineAt\|null }` | `null`（年月＋クラスで上書き） |

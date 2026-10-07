@@ -42,20 +42,24 @@
     </div>
   </div>
 
-  <!-- 初回パスワード変更画面 -->
+  <!-- 初回パスワード変更画面（Enter キーでも変更できる） -->
   <div id="change-password-screen" hidden>
     <div class="login-card">
       <div class="login-brand">
-        <h2 id="lbl-change-password-title" style="font-size: 1.2rem; color: var(--navy); margin-bottom: 0.25rem;">パスワードの変更</h2>
-        <p class="login-subtitle">初期パスワードを変更して利用を開始してください</p>
+        <h2 id="lbl-change-password-title" data-i18n="label.changePasswordTitle" style="font-size: 1.2rem; color: var(--navy); margin-bottom: 0.25rem;">パスワードの変更</h2>
+        <p class="login-subtitle" data-i18n="label.changePasswordLead">初期パスワードを変更して利用を開始してください</p>
       </div>
       <div class="field">
-        <label id="lbl-cur-password">現在のパスワード</label>
-        <input type="password" id="inp-cur-password" placeholder="現在のパスワード">
+        <label id="lbl-cur-password" for="inp-cur-password" data-i18n="label.currentPassword">現在のパスワード</label>
+        <input type="password" id="inp-cur-password" autocomplete="current-password">
       </div>
       <div class="field">
-        <label id="lbl-new-password">新しいパスワード</label>
-        <input type="password" id="inp-new-password" placeholder="新しいパスワード（10文字以上）">
+        <label id="lbl-new-password" for="inp-new-password" data-i18n="label.newPassword">新しいパスワード（10文字以上）</label>
+        <input type="password" id="inp-new-password" autocomplete="new-password">
+      </div>
+      <div class="field">
+        <label id="lbl-new-password2" for="inp-new-password2" data-i18n="label.newPasswordConfirm">新しいパスワード（確認）</label>
+        <input type="password" id="inp-new-password2" autocomplete="new-password">
       </div>
       <p id="change-password-error" class="error-msg" hidden></p>
       <button id="btn-change-password" class="btn-primary" style="width: 100%; margin-top: 0.5rem;" data-i18n="button.changePassword">変更してログイン</button>
