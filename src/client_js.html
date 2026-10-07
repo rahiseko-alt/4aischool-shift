@@ -625,12 +625,12 @@
   // =====================================================================
   // 管理画面（日本語だけ）
   // =====================================================================
-  // 学籍番号が管理者のログインIDと重なるときは、何が悪いかを日本語で出す（2026-10-07）
+  // サーバが理由を返したときはそれを出す（2026-10-07）。学籍番号が管理者のログインIDと重なるときは、何が悪いかを日本語で出す
   function adminErrText(res) {
     if (res.details && res.details.reason === 'ID_TAKEN' && res.details.studentId) {
       return '学籍番号「' + res.details.studentId + '」は管理者のログインIDと同じなので登録できません。学籍番号を確かめるか、管理者のログインIDを変えてから登録してください。';
     }
-    return 'エラー: ' + tErr(res.error);
+    return 'エラー: ' + ((res.details && res.details.message) || tErr(res.error));
   }
   function adminAlert(res, okText) {
     if (!res.ok) { alert(adminErrText(res)); return false; }
@@ -752,7 +752,7 @@
       } else {
         var type = f.type === 'date' ? 'date' : f.type === 'number' ? 'number' : f.type === 'ym' ? 'month' : f.type === 'password' ? 'password' : 'text';
         var ph = f.type === 'datetime' ? 'YYYY-MM-DD HH:MM' : f.type === 'ym' ? 'YYYY-MM' : (f.hint || '');
-        input = '<input type="' + type + '" data-key="' + esc(f.key) + '" value="' + esc(v) + '" placeholder="' + esc(ph) + '">';
+        input = '<input type="' + type + '" data-key="' + esc(f.key) + '" value="' + esc(v) + '" placeholder="' + esc(ph) + '"' + (f.readonly ? ' readonly' : '') + '>';
       }
       return '<div class="field"><label>' + esc(f.label) + (f.required ? ' *' : '') + '</label>' + input + '</div>';
     }).join('') + '<p id="admin-form-error" class="error-msg" hidden></p></div>';
@@ -782,16 +782,21 @@
   function formError(res) { showMsg('admin-form-error', adminErrText(res), true); }
 
   // ---- クラス（登録したクラスから選ぶ。学生・名簿・入力期限・絞り込みで同じ名前を使う） ----
+  // 試用の DEMO クラスは、本物の学生の選択肢に出さない。DEMO の学生を編集するときは DEMO だけ（2026-10-07）
+  var DEMO_CLASS = 'DEMO';
   function classOptions(current) {
-    var opts = (state.admin.classes || []).map(function (c) { return c.name; });
+    if (current === DEMO_CLASS) return [{ value: DEMO_CLASS, label: DEMO_CLASS }];
+    var opts = (state.admin.classes || []).map(function (c) { return c.name; }).filter(function (n) { return n !== DEMO_CLASS; });
     if (current && opts.indexOf(current) < 0) opts.unshift(current);
     return opts.map(function (n) { return { value: n, label: n }; });
   }
+  // 絞り込みで選んでいたクラスが無くなったら「全クラス」に戻し、一覧も読み直す（2026-10-07）
   function fillClassFilter() {
     var sel = el('admin-class-filter'), cur = sel.value;
     sel.innerHTML = '<option value="">全クラス</option>' + (state.admin.classes || []).map(function (c) {
       return '<option value="' + esc(c.name) + '"' + (c.name === cur ? ' selected' : '') + '>' + esc(c.name) + '</option>';
     }).join('');
+    if (sel.value !== cur && state.yearMonth) loadAdminBoard();
   }
   function withClasses(cb) {
     call('api_adminListClasses', [state.token]).then(function (r) {
@@ -814,7 +819,11 @@
       dialogHandlers.addClass = function () {
         var v = formValues([{ key: 'name', type: 'text' }]);
         if (!v.name) { showMsg('admin-form-error', 'クラス名を入れてください。', true); return; }
-        call('api_adminAddClass', [state.token, v.name]).then(function (r) { if (r.ok) openClasses(); else formError(r); });
+        call('api_adminAddClass', [state.token, v.name]).then(function (r) {
+          if (!r.ok) { formError(r); return; }
+          if (r.data && r.data.exists) { showMsg('admin-form-error', '「' + r.data.name + '」はすでにあります。', true); return; }
+          openClasses();
+        });
       };
       dialogHandlers.delClass = function (b) {
         if (!confirm('クラス「' + b.getAttribute('data-name') + '」を削除します。')) return;
@@ -853,13 +862,15 @@
   });
 
   // ---- 学生の追加・編集 ----
+  // 編集では学籍番号は変えられない（読み取りだけ）。生年月日は任意（名簿で入れた学生には無い。2026-10-07）
   function studentFields(s) {
+    var editing = !!s;
     s = s || {};
     return [
-      { key: 'studentId', label: '学籍番号', type: 'text', value: s.studentId, required: true, hint: '例: 251001' },
+      { key: 'studentId', label: editing ? '学籍番号（変えられません）' : '学籍番号', type: 'text', value: s.studentId, required: !editing, readonly: editing, hint: '例: 251001' },
       { key: 'name', label: '氏名', type: 'text', value: s.name, required: true },
-      { key: 'className', label: 'クラス', type: 'select', value: s.className || '', options: classOptions(s.className), required: true },
-      { key: 'birthDate', label: '生年月日', type: 'date', value: s.birthDate, required: true },
+      { key: 'className', label: 'クラス', type: 'select', value: s.className || '', options: (editing ? [] : [{ value: '', label: '選んでください' }]).concat(classOptions(s.className)), required: true },
+      { key: 'birthDate', label: '生年月日（分かれば）', type: 'date', value: s.birthDate },
       { key: 'language', label: '言語', type: 'select', value: s.language || 'ja', options: [{ value: 'ja', label: '日本語' }, { value: 'en', label: '英語' }, { value: 'ne', label: 'ネパール語' }, { value: 'vi', label: 'ベトナム語' }, { value: 'my', label: 'ミャンマー語' }, { value: 'si', label: 'シンハラ語（スリランカ）' }, { value: 'bn', label: 'ベンガル語（バングラデシュ）' }] },
       { key: 'enrollmentDate', label: '入学日', type: 'date', value: s.enrollmentDate, required: true },
       { key: 'graduationDate', label: '卒業日', type: 'date', value: s.graduationDate },
@@ -870,17 +881,31 @@
       { key: 'permissionCheckedAt', label: '許可確認日', type: 'date', value: s.permissionCheckedAt }
     ];
   }
+  // 追加は mode: 'create'（同じ学籍番号がいれば断られる）。編集は mode: 'update' と、開いたときの版（ほかの画面の更新を上書きしない）
   function openStudentForm(existing) {
     var fields = studentFields(existing);
     openForm(existing ? '学生情報の編集' : '学生の追加', fields, existing ? '更新' : '追加', function (v) {
-      if (existing) v.studentId = existing.studentId;
+      el('admin-dialog-body').querySelectorAll('.field-invalid').forEach(function (n) { n.classList.remove('field-invalid'); });
+      if (existing) {
+        v.studentId = existing.studentId;
+        v.mode = 'update';
+        v.expectedVersion = existing.version || '';
+      } else {
+        v.mode = 'create';
+        v.studentId = String(v.studentId || '').normalize('NFKC').trim(); // 全角の数字は半角に（サーバでもそろえる）
+      }
       call('api_adminUpsertStudent', [state.token, v]).then(function (res) {
-        if (!res.ok) { formError(res); return; }
+        if (!res.ok) {
+          formError(res);
+          var bad = res.details && res.details.field && el('admin-dialog-body').querySelector('[data-key="' + res.details.field + '"]');
+          if (bad) { bad.classList.add('field-invalid'); bad.focus(); }
+          return;
+        }
         if (res.data.created) {
           openDialog('学生を追加しました',
             '<p>学籍番号: <strong>' + esc(res.data.studentId) + '</strong></p><p>学生は、ログイン画面で学籍番号だけを入れればログインできます（パスワードは要りません）。</p>');
         } else {
-          openStudentDetail(v.studentId);
+          openStudentDetail(res.data.studentId);
         }
         loadAdminBoard();
       });
@@ -888,50 +913,108 @@
   }
   el('btn-open-student-form').addEventListener('click', function () {
     withClasses(function () {
-      if (!state.admin.classes.length) { alert('先に「クラス設定」でクラスを登録してください。'); return; }
+      if (!classOptions().length) { alert('先に「クラス設定」でクラスを登録してください。'); return; }
       openStudentForm(null);
     });
   });
 
   // ---- 名簿から一括登録（Excel などからコピーした表を貼り付ける） ----
-  // Excel のコピーはタブ区切りで、セルの中の改行は "…" で囲まれて来る。それを1行ずつの [番号, 学籍番号, ローマ字, カナ] に戻す。
+  // ==== 名簿の読み取り（ここから） ====
+  // 画面に触れない関数だけを置く（test/api/qa-students-2026-10-07.test.js が、この区切りの中をそのまま動かして確かめる）。
+  // Excel のコピーはタブ区切りで、セルの中の改行・タブ・" があるセルは "…" で囲まれて来る（中の " は ""）。
+  // 囲みとみなすのは、セルが " で始まり、閉じる "（直後がタブ・改行・終わり）が3行以内にあるときだけ。
+  // それ以外の " はそのままの文字として読む（閉じていない " が後ろの行を飲み込まないように。2026-10-07）
+  var ROSTER_MAX_ROWS = 300;
+  var ROSTER_CELL_MAX_LINES = 3;
+  var ROSTER_ID_RE = /^[A-Za-z]{2,}[A-Za-z0-9-]*\d$/;
+  var ROSTER_HEADER_RE = /学籍|氏名|名前|カナ|かな|フリガナ|ふりがな|ローマ字|番号|^no\.?$|^id$|name/i;
+  // ログインの短い番号の頭文字（Auth.js の AUTH_LOGIN_PREFIXES_ と同じ）
+  var ROSTER_CODE_PREFIXES = [{ prefix: 'K', classWord: '国際' }, { prefix: 'S', classWord: '総合' }];
+
+  // text の i 文字目の " から始まる囲みのセル。囲みとみなせなければ null
+  function rosterQuotedCell(text, i) {
+    var value = '', lines = 1;
+    for (var j = i + 1; j < text.length; j++) {
+      var ch = text.charAt(j);
+      if (ch === '"') {
+        if (text.charAt(j + 1) === '"') { value += '"'; j++; continue; }
+        var after = text.charAt(j + 1);
+        if (after === '' || after === '\t' || after === '\n') return { value: value, end: j + 1, lines: lines - 1 };
+        return null;
+      }
+      if (ch === '\n' && ++lines > ROSTER_CELL_MAX_LINES) return null;
+      value += ch;
+    }
+    return null;
+  }
+  // 1行ずつ { line: 何行目（1から。セル内改行の行は始まりの行）, cells: [...] } にする
   function parseTsv(text) {
-    var rows = [], row = [], cell = '', q = false;
+    var rows = [], cells = [], cell = '', line = 1, start = 1, atCellStart = true;
     text = String(text || '').replace(/\r\n?/g, '\n');
     for (var i = 0; i < text.length; i++) {
       var ch = text.charAt(i);
-      if (q) {
-        if (ch === '"' && text.charAt(i + 1) === '"') { cell += '"'; i++; }
-        else if (ch === '"') q = false;
-        else cell += ch;
-      } else if (ch === '"' && cell === '') q = true;
-      else if (ch === '\t') { row.push(cell); cell = ''; }
-      else if (ch === '\n') { row.push(cell); rows.push(row); row = []; cell = ''; }
+      if (ch === '"' && atCellStart) {
+        var qc = rosterQuotedCell(text, i);
+        if (qc) { cell = qc.value; line += qc.lines; i = qc.end - 1; atCellStart = false; continue; }
+      }
+      atCellStart = false;
+      if (ch === '\t') { cells.push(cell); cell = ''; atCellStart = true; }
+      else if (ch === '\n') { cells.push(cell); rows.push({ line: start, cells: cells }); cells = []; cell = ''; line++; start = line; atCellStart = true; }
       else cell += ch;
     }
-    if (cell !== '' || row.length) { row.push(cell); rows.push(row); }
+    if (cell !== '' || cells.length) { cells.push(cell); rows.push({ line: start, cells: cells }); }
     return rows;
   }
-  // 学籍番号の形（英字2文字以上＋数字）のセルを探し、その右をローマ字氏名・カナとみなす。番号の列や空行は無視する。
+  // 全角の英数字・空白を半角に、見えない文字を取り除く
+  function rosterNorm(s) { return String(s).normalize('NFKC').replace(/[​-‍⁠﻿᠎]/g, ''); }
+  // 学籍番号の形（英字2文字以上＋数字）のセルを探し、その右をローマ字氏名・カナとみなす。番号の列はあっても無くてもよい。
+  // 空行と、先頭の見出しの行だけは読み飛ばす。それ以外で読み取れない行は、何行目かと理由を errors に入れる（黙って捨てない。2026-10-07）
   function parseRoster(text) {
-    var out = [];
-    parseTsv(text).forEach(function (cells) {
-      cells = cells.map(function (c) { return c.replace(/\s+/g, ' ').trim(); });
-      for (var k = 0; k < cells.length; k++) {
-        if (/^[A-Za-z]{2,}[A-Za-z0-9-]*\d$/.test(cells[k])) {
-          var name = (cells[k + 1] || '').replace(/\s+/g, ' ').trim();
-          var kana = (cells[k + 2] || '').replace(/\s+/g, '　').trim();
-          if (name) out.push({ studentId: cells[k].toUpperCase(), name: name, nameKana: kana });
-          return;
-        }
+    var rows = [], errors = [], seen = {};
+    parseTsv(text).forEach(function (r) {
+      var cells = r.cells.map(function (c) { return rosterNorm(c).replace(/\s+/g, ' ').trim(); });
+      if (!cells.some(function (c) { return c !== ''; })) return;
+      var k = -1;
+      for (var i = 0; i < cells.length; i++) { if (ROSTER_ID_RE.test(cells[i])) { k = i; break; } }
+      if (k < 0) {
+        if (!rows.length && !errors.length && cells.some(function (c) { return ROSTER_HEADER_RE.test(c); })) return;
+        errors.push({ line: r.line, message: '学籍番号（英字2文字以上＋数字。例 AIBC26001）が見つかりません: ' + cells.join(' ').slice(0, 40) });
+        return;
       }
+      var id = cells[k].toUpperCase(), name = cells[k + 1] || '', kana = (cells[k + 2] || '').replace(/ /g, '　');
+      var msg = id.length > 20 ? '学籍番号は20文字までです（' + id + '）'
+        : !name ? '氏名（ローマ字）がありません（' + id + '）'
+        : name.length > 100 ? '氏名は100文字までです（' + id + '）'
+        : kana.length > 100 ? 'カナは100文字までです（' + id + '）'
+        : seen[id] ? '学籍番号 ' + id + ' が名簿の中で重複しています（' + seen[id] + '行目と同じ）' : null;
+      if (msg) { errors.push({ line: r.line, message: msg }); return; }
+      seen[id] = r.line;
+      rows.push({ line: r.line, studentId: id, name: name, nameKana: kana });
     });
-    return out;
+    if (rows.length > ROSTER_MAX_ROWS) errors.unshift({ line: 0, message: '名簿は1回' + ROSTER_MAX_ROWS + '人までです（今は' + rows.length + '人）。分けて登録してください' });
+    return { rows: rows, errors: errors };
+  }
+  // 名簿の中で、ログインの短い番号（K01 など）が重なる学生。[{ code, studentIds }]
+  function rosterCodeClashes(rows, className) {
+    var p = ROSTER_CODE_PREFIXES.filter(function (x) { return String(className || '').indexOf(x.classWord) >= 0; })[0];
+    if (!p) return [];
+    var byCode = {}, order = [];
+    rows.forEach(function (r) {
+      var c = p.prefix + r.studentId.slice(-2);
+      if (!byCode[c]) { byCode[c] = []; order.push(c); }
+      byCode[c].push(r.studentId);
+    });
+    return order.filter(function (c) { return byCode[c].length > 1; }).map(function (c) { return { code: c, studentIds: byCode[c] }; });
+  }
+  // ==== 名簿の読み取り（ここまで） ====
+
+  function codeClashText(list) {
+    return list.map(function (c) { return c.code + '（' + c.studentIds.join('・') + '）'; }).join('、');
   }
   function openRoster() {
     var html = '<p>Excel などの名簿（学籍番号・ローマ字氏名・カナの列）をそのままコピーして貼り付けてください。番号の列はあっても無くてもかまいません。</p>' +
       formHtml([
-        { key: 'className', label: 'クラス（学科）', type: 'select', value: '', options: classOptions(), required: true },
+        { key: 'className', label: 'クラス（学科）', type: 'select', value: '', options: [{ value: '', label: '選んでください' }].concat(classOptions()), required: true },
         { key: 'enrollmentDate', label: '入学日', type: 'date', value: '2026-04-01', required: true }
       ]) +
       '<div class="field"><label>名簿</label><textarea id="roster-text" rows="8" placeholder="1\tAIBC26001\tADHIKARI GOMA DEVI\tアディカリ ゴマ デヴィ"></textarea></div>' +
@@ -940,25 +1023,54 @@
       '<div class="dialog-actions"><button type="button" class="btn-outline" data-act="rosterCheck">読み取って確認</button>' +
       '<button type="button" class="btn-primary" data-act="rosterSave" disabled id="roster-save">この内容で登録</button></div>';
     openDialog('名簿から一括登録', html);
-    var parsed = [];
-    var onEdit = function () { el('roster-save').disabled = true; el('roster-preview').innerHTML = ''; };
+    var parsed = [], checked = null;
+    var current = function () { return formValues([{ key: 'className', type: 'select' }, { key: 'enrollmentDate', type: 'date' }]); };
+    // 名簿・クラス・入学日のどれかを変えたら、読み取りからやり直す（確認した内容と違うものを登録しない。2026-10-07）
+    var onEdit = function () { el('roster-save').disabled = true; el('roster-preview').innerHTML = ''; checked = null; };
     el('roster-text').addEventListener('input', onEdit);
+    el('admin-dialog-body').querySelectorAll('[data-key="className"], [data-key="enrollmentDate"]').forEach(function (n) {
+      n.addEventListener('change', onEdit);
+      n.addEventListener('input', onEdit);
+    });
     dialogHandlers.rosterCheck = function () {
-      parsed = parseRoster(el('roster-text').value);
-      if (!parsed.length) { el('roster-preview').innerHTML = '<p class="error-msg">学籍番号の列が見つかりません。</p>'; return; }
-      el('roster-preview').innerHTML = '<p><strong>' + parsed.length + '人</strong>を読み取りました。内容を確かめてから登録してください。</p>' +
-        '<div class="adm-table-wrap"><table class="admin-table"><thead><tr><th>学籍番号</th><th>氏名</th><th>カナ</th></tr></thead><tbody>' +
-        parsed.map(function (r) { return '<tr><td class="nowrap">' + esc(r.studentId) + '</td><td>' + esc(r.name) + '</td><td>' + esc(r.nameKana) + '</td></tr>'; }).join('') +
-        '</tbody></table></div>';
+      var v = current();
+      el('roster-save').disabled = true;
+      checked = null;
+      if (!v.className) { el('roster-preview').innerHTML = '<p class="error-msg">クラス（学科）を選んでください。</p>'; return; }
+      if (!v.enrollmentDate) { el('roster-preview').innerHTML = '<p class="error-msg">入学日を入れてください。</p>'; return; }
+      var res = parseRoster(el('roster-text').value);
+      parsed = res.rows;
+      if (!parsed.length && !res.errors.length) { el('roster-preview').innerHTML = '<p class="error-msg">名簿が空です。</p>'; return; }
+      var clashes = rosterCodeClashes(parsed, v.className);
+      var html = '';
+      if (res.errors.length) {
+        html += '<div class="error-msg"><p><strong>読み取れない行が' + res.errors.length + '件あります。</strong>名簿を直してから、もう一度「読み取って確認」を押してください（1人も登録していません）。</p><ul>' +
+          res.errors.map(function (e) { return '<li>' + (e.line ? esc(e.line) + '行目: ' : '') + esc(e.message) + '</li>'; }).join('') + '</ul></div>';
+      }
+      html += '<p>クラス <strong>' + esc(v.className) + '</strong>　入学日 <strong>' + esc(v.enrollmentDate) + '</strong>　<strong>' + parsed.length + '人</strong>を読み取りました。' +
+        (res.errors.length ? '' : '内容を確かめてから登録してください。') + '</p>';
+      if (clashes.length) html += '<p class="error-msg">ログイン番号が名簿の中で重なります（この学生は学籍番号で入ります）: ' + esc(codeClashText(clashes)) + '</p>';
+      if (parsed.length) {
+        html += '<div class="adm-table-wrap"><table class="admin-table"><thead><tr><th>行</th><th>学籍番号</th><th>氏名</th><th>カナ</th></tr></thead><tbody>' +
+          parsed.map(function (r) { return '<tr><td>' + esc(r.line) + '</td><td class="nowrap">' + esc(r.studentId) + '</td><td>' + esc(r.name) + '</td><td>' + esc(r.nameKana) + '</td></tr>'; }).join('') +
+          '</tbody></table></div>';
+      }
+      el('roster-preview').innerHTML = html;
+      if (res.errors.length || !parsed.length) return;
+      checked = v;
       el('roster-save').disabled = false;
     };
     dialogHandlers.rosterSave = function () {
-      var v = formValues([{ key: 'className', type: 'select' }, { key: 'enrollmentDate', type: 'date' }]);
-      if (!v.className) { alert('クラス（学科）を入れてください。'); return; }
-      call('api_adminImportRoster', [state.token, { className: v.className, enrollmentDate: v.enrollmentDate, rows: parsed }]).then(function (r) {
-        if (!adminAlert(r)) return;
+      var v = current();
+      // 確認したときのクラス・入学日と違えば登録しない
+      if (!checked || checked.className !== v.className || checked.enrollmentDate !== v.enrollmentDate) { onEdit(); alert('クラスか入学日が変わりました。もう一度「読み取って確認」を押してください。'); return; }
+      var rows = parsed.map(function (r) { return { studentId: r.studentId, name: r.name, nameKana: r.nameKana }; });
+      call('api_adminImportRoster', [state.token, { className: v.className, enrollmentDate: v.enrollmentDate, rows: rows }]).then(function (r) {
+        if (!r.ok) { el('roster-preview').innerHTML = '<p class="error-msg">' + esc(adminErrText(r)) + '</p>'; return; }
+        var conflicts = r.data.codeConflicts || [];
         openDialog('名簿から一括登録', '<p>' + r.data.created.length + '人を登録しました。</p>' +
           (r.data.skipped.length ? '<p>すでに登録済み・名簿の中で重複のため飛ばした学籍番号: ' + esc(r.data.skipped.join('、')) + '</p>' : '') +
+          (conflicts.length ? '<p class="error-msg">ログイン番号がほかの学生と重なるため、次の学生は短い番号では入れません（学籍番号で入ってください）: ' + esc(codeClashText(conflicts)) + '</p>' : '') +
           '<p>学生は学籍番号だけでログインできます。</p>');
         withClasses(function () { el('admin-class-filter').value = v.className; loadAdminBoard(); });
       });
@@ -966,7 +1078,7 @@
   }
   el('btn-open-roster').addEventListener('click', function () {
     withClasses(function () {
-      if (!state.admin.classes.length) { alert('先に「クラス設定」でクラスを登録してください。'); return; }
+      if (!classOptions().length) { alert('先に「クラス設定」でクラスを登録してください。'); return; }
       openRoster();
     });
   });
@@ -1023,7 +1135,7 @@
         s.nameKana ? ['カナ', s.nameKana] : null, ['クラス', s.className], ['状態', s.status], ['生年月日', s.birthDate], ['入学', s.enrollmentDate],
         s.graduationDate ? ['卒業', s.graduationDate] : null, s.withdrawalDate ? ['退学', s.withdrawalDate] : null,
         ['資格外活動許可', s.workPermission ? 'あり（期限 ' + (s.permissionExpires || '未登録') + '）' : 'なし'],
-        ['ログイン', s.loginCode ? s.loginCode + '（または学籍番号）' : '学籍番号']
+        ['ログイン', s.loginCode ? s.loginCode + '（または学籍番号）' : s.loginCodeConflict ? '（重複のため使えません。学籍番号で入ってください）' : '学籍番号']
       ].filter(Boolean);
       var html = '<div class="dt-head"><h2 class="dt-name">' + esc(s.name) + '</h2><span class="dt-id">' + esc(s.studentId) + '</span></div>' +
         '<section class="dt-sec"><h3 class="dt-sec-title">学生情報</h3>' +
@@ -1101,7 +1213,7 @@
       ];
       openForm('入力期限設定', fields, '保存', function (v) {
         if (!v.yearMonth) { showMsg('admin-form-error', '対象年月を選んでください。', true); return; }
-        var targets = v.className === '*' ? state.admin.classes.map(function (c) { return c.name; }) : [v.className];
+        var targets = v.className === '*' ? classOptions().map(function (o) { return o.value; }) : [v.className]; // 全クラスに DEMO は入れない（2026-10-07）
         var next = function (i) {
           if (i >= targets.length) { closeDialog(); alert('入力期限を保存しました（' + targets.join('・') + '）。'); return; }
           call('api_adminSetDeadline', [state.token, { yearMonth: v.yearMonth, className: targets[i], deadlineAt: v.deadlineAt, actualDeadlineAt: v.actualDeadlineAt }])

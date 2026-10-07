@@ -73,10 +73,11 @@ test('学籍番号が空のパスワード再発行・ロック解除は、管�
   ok(ctx.api('api_login', ctx.adminLoginId, ctx.adminPassword));
 });
 
-test('学生情報: 生年月日・入学日・許可の有無は必須、日付は実在する日だけ', () => {
+// 2026-10-07: 生年月日は任意になった（名簿で入れた学生には無い）。生年月日は形だけを確かめる
+test('学生情報: 入学日・許可の有無は必須、日付は実在する日だけ', () => {
   const ctx = boot();
   for (const bad of [
-    studentRecord({ birthDate: null }),
+    studentRecord({ birthDate: 20000401 }),
     studentRecord({ enrollmentDate: '' }),
     studentRecord({ workPermission: undefined }),
     studentRecord({ birthDate: '2000-02-30' }),
