@@ -219,12 +219,12 @@ src/
 
 | 関数 | 引数 | 成功時の data |
 | --- | --- | --- |
-| `api_adminUpsertStudent` | `token, student` | 新規: `{ studentId, created: true, loginId, initialPassword }`、更新: `{ studentId, created: false }` |
+| `api_adminUpsertStudent` | `token, student`（`student.mode?: 'create'\|'update'`、`student.expectedVersion?`） | 新規: `{ studentId, created: true, loginId, initialPassword }`、更新: `{ studentId, created: false }`（2026-10-07: 学籍番号は全角を半角にそろえ、大文字小文字を問わず探す。`mode: 'create'` は同じ学籍番号がいれば BAD_REQUEST（`details.reason: 'DUPLICATE'`）、`mode: 'update'` はいなければ NOT_FOUND、mode 無しはこれまでどおり。`expectedVersion` が学生詳細の `version` と違えば VERSION_CONFLICT。生年月日は任意。内容の誤りは BAD_REQUEST に `details: { field, message }`（日本語の理由）を付ける。画面からの追加・編集（mode あり）では DEMO クラスに入れられず、DEMO の学生はクラスを変えられない） |
 | `api_adminResetPassword` | `token, studentId` | `{ initialPassword }`（失敗回数・ロックも解除し、変更を強制） |
 | `api_adminUnlockLogin` | `token, studentId` | `null` |
 | `api_adminCreateAdmin` | `token` | `{ loginId, initialPassword }` |
-| `api_adminImportRoster` | `token, { className, enrollmentDate, rows: [{ studentId, name, nameKana }] }`（最大300人） | `{ created: [学籍番号], skipped: [学籍番号] }`（2026-10-02 追加。既存・重複は飛ばす。1行でも形が違えば BAD_REQUEST で何も登録しない） |
-| `api_adminListClasses` / `api_adminAddClass` / `api_adminDeleteClass` | `token` / `token, name` / `token, name` | `[{ name, students }]` / `null` / `null`（2026-10-03 追加。学生がいるクラスは消せない＝BAD_REQUEST） |
+| `api_adminImportRoster` | `token, { className, enrollmentDate, rows: [{ studentId, name, nameKana }] }`（最大300人） | `{ created: [学籍番号], skipped: [学籍番号], codeConflicts: [{ code, studentIds }] }`（2026-10-02 追加。既存・重複は飛ばす。1行でも形が違えば BAD_REQUEST で何も登録しない。2026-10-07: 形が違う行は `details: { row（1から）, field, message }`。クラス名・学籍番号はそろえる。DEMO には登録できない。`codeConflicts` は、登録した学生の短い番号が在籍中のほかの学生と重なるもの） |
+| `api_adminListClasses` / `api_adminAddClass` / `api_adminDeleteClass` | `token` / `token, name` / `token, name` | `[{ name, students }]` / `{ name, exists }` / `null`（2026-10-03 追加。学生がいるクラスは消せない＝BAD_REQUEST、2026-10-07 から `details.message` に人数。追加するクラス名は NFKC・見えない文字の除去・続いた空白を1つにしてそろえ、同じ名前が既にあれば増やさず `exists: true`） |
 | `api_adminStudentDetail` | `token, studentId` | `{ student, months: [{ yearMonth, status, actualStatus, shifts, totalMinutes, codes, actual: object\|null, actualTotalMinutes: number\|null, actualCodes, unlockUntil, publicHolidays }] }`（新しい月が先） |
 | `api_adminGrantUnlock` | `token, studentId, yearMonth, until` | `null`（行が無ければ未入力の行を作る。version は変えない） |
 | `api_adminSchoolConfirm` | `token, studentId, yearMonth` | `null` |
@@ -241,6 +241,8 @@ src/
 | `api_adminPurgeExpired` | `token` | `{ deletedRows }` |
 
 - `student` の形: `{ studentId, name, className, birthDate, language: 'ja'|'ne'|'vi', enrollmentDate, graduationDate|null, withdrawalDate|null, status: '在籍'|'休学'|'卒業'|'退学', workPermission: boolean, permissionExpires|null, permissionCheckedAt|null }`。学籍番号・氏名・クラスが空、日付の形が違う、言語・在籍状態が一覧外なら `BAD_REQUEST`。既存の学籍番号なら更新し、ログインIDは変えない。
+  - 2026-10-07 追加: `birthDate` は空・null でよい。氏名の見えない文字（ゼロ幅の空白など）は取り除き、取り除いて空なら誤り。氏名は100文字まで。学籍番号の中の空白は誤り。次も `BAD_REQUEST`（`details.field` はその項目）: 日付の年が1900〜2100年の外、生年月日が今日より後・入学日より後、卒業日・退学日が入学日より前、「退学」で退学日が無い、「卒業」で卒業日が無い、「在籍」で退学日がある（`field: 'status'`）。
+  - 学生詳細の `student` に `version`（その行の版。更新日時は分までなので中身から作る）・`loginCode`（短い番号。在籍中の学生の中で1人に決まるときだけ。無ければ null）・`loginCodeConflict`（在籍中のほかの学生と重なって使えないとき true）を付ける。短い番号で数えるのは、在籍・休学で、卒業日・退学日を過ぎていない学生だけ（ログインも同じ）。
 - 学校確定: 学生の在籍状態が 退学・休学・卒業 のどれかで、その月が未入力（行が無い、または状態が未入力）のときだけ。それ以外は `FORBIDDEN`。状態を `学校確定` にし、version を1増やす。
 - 設定の既定値: `retentionMonths` 24、`sessionTtlMinutes` 120、`allowLeaveOfAbsence` false、`actualConfirmDefaultDay` 10、`timezone` 'Asia/Tokyo'、`schoolName` ''。
 
@@ -257,6 +259,7 @@ src/
 ```
 
 - 対象の学生: 入学日がその月の末日以前で、退学日・卒業日（早いほう、無ければ無期限）がその月の初日以後の学生。加えて、その月の行を持つ学生。
+- クラスの絞り込みが無い（全クラス）ときは、試用の DEMO クラスの学生を `rows`・`counts` に入れない。`className: 'DEMO'` のときだけ出す（2026-10-07）。
 - `counts` はクラスの絞り込みだけを反映する。`rows` は、クラス・状態（`displayStatus` と一致）・検索（学籍番号の前方一致、または氏名の部分一致）をすべて反映する。`rows` は学籍番号の昇順。
 - 表示状態: 確定済→確定済、学校確定→対象外、下書き→下書き、行が無い・未入力→未提出。
 - `errorCodes`: 表示のたびに、今の学生情報・長期休業・前後の月で計算し直した block のコードの**文字列**の配列（例 `['OVER_28H']`、重複なし。学校確定の月は空。2026-10-03 変更）。`error` は `errorCodes` が空でない行の数。

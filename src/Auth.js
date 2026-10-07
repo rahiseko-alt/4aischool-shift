@@ -236,6 +236,28 @@ function auth_loginCodeOf_(student) {
   return p ? p.prefix + String(student.student_id).slice(-2) : null;
 }
 
+// 短い番号で数える学生: 在籍・休学で、卒業日・退学日を過ぎていない学生だけ（卒業生と新入生が重ならないように。2026-10-07）
+function auth_isCurrentForCode_(student, today) {
+  if (student.status !== '在籍' && student.status !== '休学') return false;
+  if (student.withdrawal_date && student.withdrawal_date < today) return false;
+  if (student.graduation_date && student.graduation_date < today) return false;
+  return true;
+}
+
+// 短い番号に当たる、いまの学生の一覧
+function auth_studentsWithCode_(students, code, today) {
+  return students.filter(function (s) { return auth_loginCodeOf_(s) === code && auth_isCurrentForCode_(s, today); });
+}
+
+// その学生の短い番号と、使えるか。{ code: 'K01'|null, usable: 1人に決まるか, conflict: ほかの学生と重なって使えないか }
+function auth_loginCodeStatus_(student, students) {
+  var code = auth_loginCodeOf_(student);
+  var today = util_todayJst_();
+  if (!code || !auth_isCurrentForCode_(student, today)) return { code: code, usable: false, conflict: false };
+  var hits = auth_studentsWithCode_(students, code, today);
+  return { code: code, usable: hits.length === 1, conflict: hits.length > 1 };
+}
+
 // 学籍番号、または短いログイン番号に当たる学生。短い番号で2人以上当たるときは、取り違えを防ぐため null
 function auth_findStudentForLogin_(input) {
   var number = input.trim().toUpperCase();
@@ -243,7 +265,7 @@ function auth_findStudentForLogin_(input) {
   var exact = students.filter(function (s) { return String(s.student_id).toUpperCase() === number; });
   if (exact.length) return exact[0];
   if (!/^[A-Z]\d{2}$/.test(number)) return null;
-  var hits = students.filter(function (s) { return auth_loginCodeOf_(s) === number; });
+  var hits = auth_studentsWithCode_(students, number, util_todayJst_());
   return hits.length === 1 ? hits[0] : null;
 }
 

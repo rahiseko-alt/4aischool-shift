@@ -77,6 +77,19 @@ html = html.replace('<head>', '<head><script>' + shim + '</script>');
     await page.fill('[data-key="name"]', name); await page.click('[data-act="addClass"]'); await wait();
   }
   if (!(await page.textContent('#admin-dialog-body')).includes('名簿テスト科')) throw new Error('クラスが一覧に出ない');
+  await page.fill('[data-key="name"]', 'Ａ​'); await page.click('[data-act="addClass"]'); await wait();
+  if (!(await page.textContent('#admin-form-error')).includes('「A」はすでにあります')) throw new Error('同じクラスの追加で案内が出ない');
+  await page.click('#btn-dialog-close');
+
+  step('一覧で絞り込んでいるクラスを消すと、全クラスに戻って一覧を読み直す');
+  await page.click('#btn-open-classes'); await wait();
+  await page.fill('[data-key="name"]', '消す科'); await page.click('[data-act="addClass"]'); await wait();
+  await page.selectOption('#admin-class-filter', '消す科'); await wait();
+  const boardCalls = () => page.evaluate(() => window.__calls.filter((n) => n === 'api_adminBoard').length);
+  const before = await boardCalls();
+  await page.click('[data-act="delClass"][data-name="消す科"]'); await wait(); await wait();
+  if ((await page.inputValue('#admin-class-filter')) !== '') throw new Error('消したクラスが絞り込みに残っている');
+  if ((await boardCalls()) <= before) throw new Error('クラスを消しても一覧を読み直さない');
   await page.click('#btn-dialog-close');
 
   step('入力期限を登録（クラスは選ぶ。日付だけ入れれば 23:59）');
@@ -105,6 +118,42 @@ html = html.replace('<head>', '<head><script>' + shim + '</script>');
   await page.click('#btn-dialog-close');
   await page.click('#btn-admin-search'); await wait();
   if (!(await page.innerHTML('#admin-board')).includes('&lt;b&gt;テスト&lt;/b&gt;')) throw new Error('氏名がエスケープされていない');
+
+  step('学生の追加: 同じ学籍番号（全角で入れても）は上書きせずに断る。生年月日は空でよい');
+  await page.click('#btn-open-student-form');
+  await page.fill('[data-key="studentId"]', '２５１００１'); await page.fill('[data-key="name"]', '上書き');
+  await page.selectOption('[data-key="className"]', 'A'); await page.fill('[data-key="enrollmentDate"]', '2025-04-01');
+  await page.check('[data-key="workPermission"]');
+  await page.click('[data-act="submit"]'); await wait();
+  if (!(await page.textContent('#admin-form-error')).includes('その学籍番号はすでに登録されています')) throw new Error('重複の案内が出ない: ' + (await page.textContent('#admin-form-error')));
+  if (!(await page.getAttribute('[data-key="studentId"]', 'class') || '').includes('field-invalid')) throw new Error('学籍番号の欄に印が付かない');
+  if (await page.$('#admin-dialog-body option[value="DEMO"]')) throw new Error('学生の追加のクラスに DEMO が出ている');
+  await page.click('#btn-dialog-close');
+
+  step('学生の編集: 学籍番号は変えられない。ほかの画面で先に更新されたら止まる');
+  await page.click('#admin-board tr.board-row td:nth-child(2)'); await wait();
+  await page.click('[data-act="edit"]');
+  if (!(await page.getAttribute('[data-key="studentId"]', 'readonly') !== null)) throw new Error('編集で学籍番号が読み取りだけになっていない');
+  if ((await page.inputValue('[data-key="birthDate"]')) !== '2000-04-01') throw new Error('生年月日が入っていない');
+  await page.fill('[data-key="name"]', '画面の更新');
+  // 別の画面のつもりで、サーバを直接呼んで先に更新する
+  const otherTab = api('api_login', ADMIN.id, 'admin-pass-0001').data.token;
+  const cur = api('api_adminStudentDetail', otherTab, stId).data.student;
+  if (!api('api_adminUpsertStudent', otherTab, { ...cur, name: '別の画面', mode: 'update', expectedVersion: cur.version }).ok) throw new Error('別の画面の更新ができない');
+  await page.click('[data-act="submit"]'); await wait();
+  if (!(await page.textContent('#admin-form-error')).includes('ほかの画面で先に更新されました')) throw new Error('後からの更新が止まらない: ' + (await page.textContent('#admin-form-error')));
+  if (api('api_adminStudentDetail', otherTab, stId).data.student.name !== '別の画面') throw new Error('先の更新が消えた');
+  // 開き直せば更新できる。生年月日を消しても保存できる
+  await page.click('#btn-dialog-close');
+  await page.click('#admin-board tr.board-row td:nth-child(2)'); await wait();
+  await page.click('[data-act="edit"]');
+  await page.fill('[data-key="name"]', '<b>テスト</b> 学生'); await page.fill('[data-key="birthDate"]', '');
+  await page.click('[data-act="submit"]'); await wait();
+  if (!(await page.textContent('#admin-dialog-title')).includes('学生詳細')) throw new Error('開き直した後の更新ができない: ' + (await page.textContent('#admin-dialog-body')));
+  await page.click('[data-act="edit"]');
+  await page.fill('[data-key="birthDate"]', '2000-04-01');
+  await page.click('[data-act="submit"]'); await wait();
+  await page.click('#btn-dialog-close');
 
   step('ログアウト → 学生ログイン（学籍番号だけ・パスワード無し）');
   await page.click('#btn-logout-admin');
@@ -293,6 +342,22 @@ html = html.replace('<head>', '<head><script>' + shim + '</script>');
 
   step('名簿から一括登録: Excel から貼った表（番号・学籍番号・ローマ字・セル内改行のあるカナ）を読み取って登録し、学籍番号だけで入れる');
   await page.click('#btn-open-roster');
+  if ((await page.inputValue('[data-key="className"]')) !== '') throw new Error('名簿のクラスが最初から選ばれている');
+  if (await page.$('#admin-dialog-body option[value="DEMO"]')) throw new Error('名簿のクラスに DEMO が出ている');
+  // 読み取れない行があれば、何行目かを出して登録できない（黙って捨てない）。閉じていない " が後ろの行を飲み込まない
+  await page.fill('#roster-text', '1\tTEST26001\t"TARO\tタロウ\n2\t26002\tJIRO\tジロウ\n3\tTEST26003\tSABURO\tサブロウ\n');
+  await page.click('[data-act="rosterCheck"]');
+  if (!(await page.textContent('#roster-preview')).includes('クラス（学科）を選んでください')) throw new Error('クラス未選択で読み取れてしまう');
+  await page.selectOption('[data-key="className"]', '名簿テスト科');
+  await page.click('[data-act="rosterCheck"]');
+  const bad = await page.textContent('#roster-preview');
+  if (!bad.includes('2行目') || !bad.includes('TEST26003') || !(await page.isDisabled('#roster-save'))) throw new Error('読み取れない行の扱い: ' + bad);
+  // クラスを変えたら、読み取りからやり直す
+  await page.fill('#roster-text', '1\tTEST26009\tX\t\n');
+  await page.click('[data-act="rosterCheck"]');
+  if (await page.isDisabled('#roster-save')) throw new Error('正しい名簿で登録ボタンが押せない');
+  await page.selectOption('[data-key="className"]', 'A');
+  if (!(await page.isDisabled('#roster-save')) || (await page.textContent('#roster-preview')) !== '') throw new Error('クラスを変えても確認がそのまま');
   await page.selectOption('[data-key="className"]', '名簿テスト科');
   await page.fill('#roster-text', '1\tTEST26001\tTARO  YAMADA\t"タロウ　\nヤマダ"\n2\tTEST26002\tHANAKO SATO\tハナコ　サトウ\n\n');
   await page.click('[data-act="rosterCheck"]');
