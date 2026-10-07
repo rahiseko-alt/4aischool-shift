@@ -209,9 +209,14 @@ function api_adminGrantUnlock(token, studentId, yearMonth, until) {
     var auth = auth_verifySession_(token, 'admin');
     if (!auth.ok) return auth;
 
-    if (typeof studentId !== 'string' || !util_isYearMonth_(yearMonth) || !util_isDateTime_(until)) {
+    if (typeof studentId !== 'string' || !util_isYearMonth_(yearMonth)) {
       return { ok: false, error: 'BAD_REQUEST' };
     }
+    // 日付だけ（YYYY-MM-DD）なら、その日の 23:59 まで（入力期限の画面と同じ。2026-10-07）
+    if (util_isDate_(until)) until = until + ' 23:59';
+    if (!util_isDateTime_(until)) return { ok: false, error: 'BAD_REQUEST', details: { reason: 'UNTIL_FORMAT' } };
+    // 今以前の期限は、出してもすぐ切れて意味が無いので断る
+    if (until <= util_nowJst_()) return { ok: false, error: 'BAD_REQUEST', details: { reason: 'UNTIL_NOT_FUTURE' } };
     var exists = db_readAllRows_('STUDENTS').some(function (st) { return st.student_id === studentId; });
     if (!exists) return { ok: false, error: 'NOT_FOUND' };
 
@@ -273,6 +278,7 @@ function api_adminSchoolConfirm(token, studentId, yearMonth) {
   try {
     var auth = auth_verifySession_(token, 'admin');
     if (!auth.ok) return auth;
+    if (typeof studentId !== 'string' || !util_isYearMonth_(yearMonth)) return { ok: false, error: 'BAD_REQUEST' };
 
     var lock = LockService.getScriptLock();
     if (!lock.tryLock(5000)) return { ok: false, error: 'BUSY' };
@@ -288,9 +294,14 @@ function api_adminSchoolConfirm(token, studentId, yearMonth) {
       }
       if (!student) return { ok: false, error: 'NOT_FOUND' };
 
+      // 断るときは、画面で理由を出せるよう details.reason を付ける（2026-10-07）
       var allowedStatuses = ['退学', '休学', '卒業'];
       if (allowedStatuses.indexOf(student.status) === -1) {
-        return { ok: false, error: 'FORBIDDEN' };
+        return { ok: false, error: 'FORBIDDEN', details: { reason: 'STUDENT_ENROLLED' } };
+      }
+      // 入学より前の月（その月の末日が入学日より前）は、そもそも対象の月ではない
+      if (student.enrollment_date && core_buildDateStr_(yearMonth, core_getDaysInMonth_(yearMonth)) < student.enrollment_date) {
+        return { ok: false, error: 'FORBIDDEN', details: { reason: 'BEFORE_ENROLLMENT' } };
       }
 
       var rows = db_readAllRows_('MONTHLY_SUBMISSIONS');
@@ -303,7 +314,7 @@ function api_adminSchoolConfirm(token, studentId, yearMonth) {
       }
 
       if (sub && sub.status !== '未入力') {
-        return { ok: false, error: 'FORBIDDEN' };
+        return { ok: false, error: 'FORBIDDEN', details: { reason: sub.status === '学校確定' ? 'ALREADY_SCHOOL_CONFIRMED' : 'ALREADY_ENTERED' } };
       }
 
       var now = util_nowJst_();
@@ -355,6 +366,7 @@ function api_adminUndoSchoolConfirm(token, studentId, yearMonth) {
   try {
     var auth = auth_verifySession_(token, 'admin');
     if (!auth.ok) return auth;
+    if (typeof studentId !== 'string' || !util_isYearMonth_(yearMonth)) return { ok: false, error: 'BAD_REQUEST' };
 
     var lock = LockService.getScriptLock();
     if (!lock.tryLock(5000)) return { ok: false, error: 'BUSY' };
@@ -364,7 +376,7 @@ function api_adminUndoSchoolConfirm(token, studentId, yearMonth) {
         return r.student_id === studentId && r.year_month === yearMonth;
       })[0];
       if (!sub) return { ok: false, error: 'NOT_FOUND' };
-      if (sub.status !== '学校確定') return { ok: false, error: 'FORBIDDEN' };
+      if (sub.status !== '学校確定') return { ok: false, error: 'FORBIDDEN', details: { reason: 'NOT_SCHOOL_CONFIRMED' } };
 
       var newVersion = (Number(sub.version) || 0) + 1;
       sub.status = '未入力';
@@ -392,7 +404,10 @@ function api_adminSetDeadline(token, params) {
     var yearMonth = params.yearMonth;
     var className = params.className;
     var deadlineAt = params.deadlineAt;
-    var actualDeadlineAt = params.actualDeadlineAt || null;
+    // 実績確認の期限: 送られない（null・undefined）なら登録済みの値をそのまま残す。空文字なら消して既定（翌月の既定日）に戻す（2026-10-07）
+    var actualDeadlineAt = params.actualDeadlineAt;
+    var keepActual = actualDeadlineAt === null || actualDeadlineAt === undefined;
+    if (keepActual || actualDeadlineAt === '') actualDeadlineAt = null;
     // 予定の入力期限が空なら、対象月の末日 23:59（2026-10-03）
     if ((deadlineAt === '' || deadlineAt === null || deadlineAt === undefined) && util_isYearMonth_(yearMonth)) {
       deadlineAt = core_buildDateStr_(yearMonth, core_getDaysInMonth_(yearMonth)) + ' 23:59';
@@ -405,6 +420,18 @@ function api_adminSetDeadline(token, params) {
       return { ok: false, error: 'BAD_REQUEST' };
     }
     if (actualDeadlineAt !== null && !util_isDateTime_(actualDeadlineAt)) return { ok: false, error: 'BAD_REQUEST' };
+    // 実績確認は対象月が終わってから。期限は対象月の末日 23:59 より後、かつ予定の入力期限より後でなければならない
+    if (actualDeadlineAt !== null) {
+      if (actualDeadlineAt <= core_buildDateStr_(yearMonth, core_getDaysInMonth_(yearMonth)) + ' 23:59') {
+        return { ok: false, error: 'BAD_REQUEST', details: { reason: 'ACTUAL_BEFORE_MONTH_END' } };
+      }
+      if (actualDeadlineAt <= deadlineAt) return { ok: false, error: 'BAD_REQUEST', details: { reason: 'ACTUAL_BEFORE_PLAN' } };
+    }
+    // 登録の無いクラス（打ち間違いなど）の締切は作らない。クラスがまだ1つも無い学校（初期設定中）だけは、そのまま受け付ける
+    var knownClasses = admin_knownClassNames_();
+    if (knownClasses.length && knownClasses.indexOf(className) < 0) {
+      return { ok: false, error: 'BAD_REQUEST', details: { reason: 'UNKNOWN_CLASS' } };
+    }
 
     var lock = LockService.getScriptLock();
     if (!lock.tryLock(5000)) return { ok: false, error: 'BUSY' };
@@ -421,7 +448,7 @@ function api_adminSetDeadline(token, params) {
 
       if (existing) {
         existing.deadline_at = deadlineAt;
-        existing.actual_deadline_at = actualDeadlineAt || '';
+        if (!keepActual) existing.actual_deadline_at = actualDeadlineAt || '';
         db_updateRow_('DEADLINES', existing._rowNum, existing);
       } else {
         db_insertRow_('DEADLINES', {
@@ -438,6 +465,41 @@ function api_adminSetDeadline(token, params) {
     } finally {
       lock.releaseLock();
     }
+  } catch (err) {
+    util_logError_(err);
+    return { ok: false, error: 'INTERNAL' };
+  }
+}
+
+// 登録済みのクラス名（クラスの表＋学生のいるクラス。表は読むだけで、書き足さない）
+function admin_knownClassNames_() {
+  var names = [];
+  var add = function (n) { if (n && names.indexOf(n) < 0) names.push(n); };
+  db_ensureTable_('CLASSES');
+  db_readAllRows_('CLASSES').forEach(function (r) { add(r.class_name); });
+  db_readAllRows_('STUDENTS').forEach(function (s) { add(s.class); });
+  return names;
+}
+
+// 登録済みの入力期限の一覧（新しい月が先、同じ月はクラス名の順）。2026-10-07 追加
+function api_adminListDeadlines(token) {
+  try {
+    var auth = auth_verifySession_(token, 'admin');
+    if (!auth.ok) return auth;
+
+    var list = db_readAllRows_('DEADLINES').map(function (d) {
+      return {
+        yearMonth: d.year_month,
+        className: d.class,
+        deadlineAt: d.deadline_at || null,
+        actualDeadlineAt: d.actual_deadline_at || null
+      };
+    });
+    list.sort(function (a, b) {
+      if (a.yearMonth !== b.yearMonth) return a.yearMonth < b.yearMonth ? 1 : -1;
+      return a.className < b.className ? -1 : (a.className > b.className ? 1 : 0);
+    });
+    return { ok: true, data: list };
   } catch (err) {
     util_logError_(err);
     return { ok: false, error: 'INTERNAL' };
@@ -604,6 +666,7 @@ function api_adminStudentDetail(token, studentId) {
     var num = function (v) { return v === '' || v === undefined || v === null ? null : Number(v); };
     var detailHolidays = db_readAllRows_('SCHOOL_HOLIDAYS').map(function (h) { return { startDate: h.start_date, endDate: h.end_date }; });
     var detailSettings = student_getSettings_();
+    var detailNow = util_nowJst_();
     var monthsList = mySubs.map(function(s) {
       return {
         yearMonth: s.year_month,
@@ -616,7 +679,9 @@ function api_adminStudentDetail(token, studentId) {
         actualTotalMinutes: s.actual_json ? num(s.actual_total_minutes) : null,
         actualCodes: parse(s.actual_codes, []),
         publicHolidays: util_jpHolidaysOfMonth_(s.year_month),
-        unlockUntil: s.unlock_until || null
+        unlockUntil: s.unlock_until || null,
+        // 期限の過ぎた修正許可を、いま有効なものとして見せない（2026-10-07）
+        unlockExpired: !!s.unlock_until && detailNow > s.unlock_until
       };
     });
 

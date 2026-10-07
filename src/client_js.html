@@ -392,12 +392,18 @@
   function renderShifts() {
     var data = state.monthData;
     if (!data) return;
-    var closed = !!data.closed || data.status === '学校確定';
+    var schoolConfirmed = data.status === '学校確定';
+    var closed = !!data.closed || schoolConfirmed;
     var ev = data.evaluation || { shifts: {}, codes: [] };
 
-    el('st-deadline-info').textContent = t('label.deadline') + ': ' + (data.deadlineAt || '—');
+    // 締切後に修正許可が出ていれば、過ぎた締切ではなく許可の期限を出す（2026-10-07）
+    el('st-deadline-info').textContent = data.unlockActive && data.unlockUntil
+      ? t('label.unlockUntil').replace('{t}', data.unlockUntil.slice(5, 7) + '/' + data.unlockUntil.slice(8))
+      : t('label.deadline') + ': ' + (data.deadlineAt || '—');
+    // 学校確定の月は「対象外」、締切の行が無い月は「まだ受付していない」、それ以外の閉じた月は「締切済み」
+    var notice = schoolConfirmed ? t('label.schoolConfirmedNotice') : (data.notOpen ? t('label.notOpen') : t('label.closed'));
     el('st-closed-notice').hidden = !closed;
-    el('st-closed-notice').textContent = closed ? t('label.closed') : '';
+    el('st-closed-notice').textContent = closed ? notice : '';
     el('btn-save-draft').disabled = closed;
     el('btn-confirm-shift').disabled = closed;
     // 月全体のコード（日付の無いもの）は表の上、日付のあるものはその日の行の下に出す。
@@ -934,7 +940,7 @@
     };
     var html = '<p class="detail-sum">状態 <strong>' + esc(m.status) + '</strong>　予定の合計 <strong>' + esc(dur(m.totalMinutes || 0, true)) + '</strong>' +
       '　実績 <strong>' + esc(m.actualStatus) + '</strong>' + (hasActual ? '　実績の合計 <strong>' + esc(dur(m.actualTotalMinutes || 0, true)) + '</strong>' : '') +
-      (m.unlockUntil ? '　修正許可 ' + esc(m.unlockUntil) + ' まで' : '') + '</p>';
+      (m.unlockUntil ? '　修正許可 ' + esc(m.unlockUntil) + ' まで' + (m.unlockExpired ? '（期限切れ）' : '') : '') + '</p>';
     // 保存されているコードは文字列（'OVER_28H'）。日付は無いので、どの日かは下の表で見る
     var codes = (m.codes || []).concat(m.actualCodes || []).map(function (c) { return typeof c === 'string' ? { code: c } : c; })
       .filter(function (c) { return c.code !== 'PREV_MONTH_DRAFT'; });
@@ -959,7 +965,34 @@
     return html + '</tbody></table></div>';
   }
 
-  function openStudentDetail(studentId) {
+  // サーバが断った理由（details.reason）を、管理者に分かる言葉にする（2026-10-07）
+  var REASON_TEXT = {
+    STUDENT_ENROLLED: '在籍中の学生には使えません（退学・休学・卒業の学生だけに使えます）。',
+    ALREADY_ENTERED: '入力済みの月には使えません（学生が下書きか確定をしています）。',
+    ALREADY_SCHOOL_CONFIRMED: 'この月はすでに学校確定（対象外）です。',
+    BEFORE_ENROLLMENT: '入学より前の月には使えません。',
+    NOT_SCHOOL_CONFIRMED: 'この月は学校確定ではありません。',
+    UNTIL_FORMAT: '期限の形が違います。YYYY-MM-DD HH:MM（例: 2026-10-15 18:00）か、日付だけ YYYY-MM-DD で入れてください。',
+    UNTIL_NOT_FUTURE: '期限は今より後の日時にしてください。',
+    ACTUAL_BEFORE_MONTH_END: '実績確認の期限は、対象月の末日より後の日にしてください（実績は月が終わってから入れます）。',
+    ACTUAL_BEFORE_PLAN: '実績確認の期限は、予定の入力期限より後の日にしてください。',
+    UNKNOWN_CLASS: 'そのクラスは登録されていません（「クラス設定」で登録してください）。'
+  };
+  function reasonText(res) { return (res && res.details && REASON_TEXT[res.details.reason]) || null; }
+
+  // 修正許可の期限の打ち込みをそろえる: 2026/10/5 9:00 → 2026-10-05 09:00。日付だけならそのまま（サーバが 23:59 にする）
+  function normUntil(v) {
+    var m = /^(\d{4})[-\/.](\d{1,2})[-\/.](\d{1,2})(?:[ T]+(\d{1,2}):(\d{2}))?$/.exec(String(v || '').trim().replace(/[０-９：／]/g, function (c) {
+      return c === '：' ? ':' : c === '／' ? '/' : String.fromCharCode(c.charCodeAt(0) - 0xFEE0);
+    }));
+    if (!m) return String(v || '').trim();
+    var date = m[1] + '-' + pad2(+m[2]) + '-' + pad2(+m[3]);
+    return m[4] === undefined ? date : date + ' ' + pad2(+m[4]) + ':' + m[5];
+  }
+
+  // selectedYm: 開いたときに選んでおく月（無ければ一覧の月）
+  function openStudentDetail(studentId, selectedYm) {
+    var startYm = selectedYm || state.yearMonth;
     call('api_adminStudentDetail', [state.token, studentId]).then(function (res) {
       if (!adminAlert(res)) return;
       var d = res.data, s = d.student;
@@ -977,20 +1010,25 @@
         '<button type="button" class="btn-outline btn-sm adm-btn" data-act="edit">学生情報を編集</button>' +
         '</div></section>';
 
-      // 月を選ぶと、その月に学生が入れた中身（予定・実績）を表で出す
+      // 月を選ぶと、その月に学生が入れた中身（予定・実績）を表で出す。
+      // 一覧にはデータのある月と開いた月を並べ、横の月の欄で入学の月〜3か月先の好きな月も選べる（2026-10-07）
+      var enrollYm = s.enrollmentDate ? s.enrollmentDate.slice(0, 7) : '';
+      var maxYm = addMonth(todayYm(), 3);
       var yms = d.months.map(function (m) { return m.yearMonth; });
-      if (yms.indexOf(state.yearMonth) < 0) yms.push(state.yearMonth);
+      if (yms.indexOf(startYm) < 0) yms.push(startYm);
       yms.sort().reverse();
       html += '<section class="dt-sec"><h3 class="dt-sec-title">申告の中身</h3>' +
         '<div class="dt-month">対象月 <select id="detail-ym">' +
-        yms.map(function (y) { return '<option value="' + esc(y) + '"' + (y === state.yearMonth ? ' selected' : '') + '>' + esc(y) + '</option>'; }).join('') +
-        '</select></div>' +
+        yms.map(function (y) { return '<option value="' + esc(y) + '"' + (y === startYm ? ' selected' : '') + '>' + esc(y) + '</option>'; }).join('') +
+        '</select> <label class="dt-month-pick">ほかの月 <input type="month" id="detail-ym-pick"' +
+        (enrollYm ? ' min="' + esc(enrollYm) + '"' : '') + ' max="' + esc(maxYm) + '"></label></div>' +
         '<div id="detail-month"></div>' +
         '<div class="dt-actions">' +
         '<button type="button" class="btn-outline btn-sm adm-btn" data-act="printMonth">この月を印刷</button>' +
-        '<button type="button" class="btn-outline btn-sm adm-btn" data-act="print2y">2年分を印刷</button>' +
+        '<button type="button" class="btn-outline btn-sm adm-btn" data-act="print2y">2年分を印刷（この月まで）</button>' +
         '<button type="button" class="btn-outline btn-sm adm-btn" data-act="unlock">締切後の修正を許可</button>' +
-        '<button type="button" class="btn-outline btn-sm adm-btn" data-act="schoolConfirm">学校確定（対象外にする）</button>' +
+        // 学校確定は退学・休学・卒業の学生だけ（在籍中の学生にはボタンを出さない）
+        (s.status === '在籍' ? '' : '<button type="button" class="btn-outline btn-sm adm-btn" data-act="schoolConfirm" id="btn-school-confirm">学校確定（対象外にする）</button>') +
         '<button type="button" class="btn-outline btn-sm adm-btn" data-act="undoSchoolConfirm" id="btn-undo-school-confirm" hidden>学校確定を取り消す</button>' +
         '</div></section>';
 
@@ -1000,34 +1038,64 @@
         var m = d.months.filter(function (x) { return x.yearMonth === ym(); })[0];
         el('detail-month').innerHTML = detailMonthHtml(ym(), m);
         el('btn-undo-school-confirm').hidden = !(m && m.status === '学校確定');
+        if (el('btn-school-confirm')) el('btn-school-confirm').hidden = !!(m && m.status !== '未入力');
       };
       el('detail-ym').addEventListener('change', showMonth);
+      el('detail-ym-pick').addEventListener('change', function () {
+        var v = el('detail-ym-pick').value;
+        if (!/^\d{4}-\d{2}$/.test(v)) return;
+        if ((enrollYm && v < enrollYm) || v > maxYm) { alert('選べるのは ' + (enrollYm || '入学') + ' 〜 ' + maxYm + ' の月です。'); return; }
+        var sel = el('detail-ym');
+        if (!sel.querySelector('option[value="' + v + '"]')) {
+          var opt = document.createElement('option');
+          opt.value = v; opt.textContent = v;
+          sel.appendChild(opt);
+        }
+        sel.value = v;
+        showMonth();
+      });
       showMonth();
+      // 操作の結果: 成功なら同じ月で詳細を開き直す。断られたら理由を出し、画面が古ければ最新の内容で開き直す
+      var afterAction = function (r, okText, cur) {
+        if (r.ok) {
+          if (okText) alert(okText);
+          openStudentDetail(studentId, cur);
+          loadAdminBoard();
+          return;
+        }
+        var stale = r.error === 'FORBIDDEN' || r.error === 'NOT_FOUND';
+        var msg = reasonText(r) || (stale ? 'この月の状態が、詳細を開いたあとに変わっています。' : tErr(r.error));
+        alert('エラー: ' + msg + (stale ? '\n詳細を最新の内容で開き直します。' : ''));
+        if (stale) openStudentDetail(studentId, cur);
+      };
       dialogHandlers = {
         schoolConfirm: function () {
-          if (!confirm(ym() + ' を学校確定（対象外）にします。退学・休学・卒業の学生の未入力の月にだけ使えます。')) return;
-          call('api_adminSchoolConfirm', [state.token, studentId, ym()]).then(function (r) {
-            if (adminAlert(r, '学校確定しました。')) { openStudentDetail(studentId); loadAdminBoard(); }
-          });
+          var cur = ym();
+          if (!confirm(cur + ' を学校確定（対象外）にします。退学・休学・卒業の学生の未入力の月にだけ使えます。')) return;
+          call('api_adminSchoolConfirm', [state.token, studentId, cur]).then(function (r) { afterAction(r, '学校確定しました。', cur); });
         },
         undoSchoolConfirm: function () {
-          if (!confirm(ym() + ' の学校確定を取り消し、未入力に戻します。学生がまた入力できるようになります。')) return;
-          call('api_adminUndoSchoolConfirm', [state.token, studentId, ym()]).then(function (r) {
-            if (adminAlert(r, '学校確定を取り消しました。')) { openStudentDetail(studentId); loadAdminBoard(); }
-          });
+          var cur = ym();
+          if (!confirm(cur + ' の学校確定を取り消し、未入力に戻します。学生がまた入力できるようになります。')) return;
+          call('api_adminUndoSchoolConfirm', [state.token, studentId, cur]).then(function (r) { afterAction(r, '学校確定を取り消しました。', cur); });
         },
         unlock: function () {
-          var until = prompt('修正許可の期限（YYYY-MM-DD HH:MM）');
-          if (!until) return;
-          call('api_adminGrantUnlock', [state.token, studentId, ym(), until.trim()]).then(function (r) {
-            if (adminAlert(r, '修正許可を出しました。')) openStudentDetail(studentId);
-          });
+          var cur = ym();
+          var until = prompt(cur + ' 分の、締切後の修正を許可します。許可の期限を入れてください。\n' +
+            '形式: YYYY-MM-DD HH:MM（例: 2026-10-15 18:00）\n日付だけ（例: 2026-10-15）なら、その日の 23:59 までです。');
+          if (!until || !until.trim()) return;
+          call('api_adminGrantUnlock', [state.token, studentId, cur, normUntil(until)]).then(function (r) { afterAction(r, '修正許可を出しました。', cur); });
         },
         printMonth: function () { printPages([studentId], [ym()]); },
         edit: function () { openStudentForm(s); },
+        // 選んでいる月までの24か月。入学より前の月は印刷しない
         print2y: function () {
-          var months = [];
-          for (var i = 23; i >= 0; i--) months.push(addMonth(todayYm(), -i));
+          var end = ym(), months = [];
+          for (var i = 23; i >= 0; i--) {
+            var y = addMonth(end, -i);
+            if (!enrollYm || y >= enrollYm) months.push(y);
+          }
+          if (!months.length) { alert('入学（' + enrollYm + '）より前の月です。印刷する月がありません。'); return; }
           printPages([studentId], months);
         }
       };
@@ -1035,24 +1103,63 @@
   }
 
   // ---- 入力期限 ----
+  // 下に登録済みの期限（新しい月から24件）を出し、行を押すとその内容を上の欄に入れる（2026-10-07）
   el('btn-open-deadline').addEventListener('click', function () {
     withClasses(function () {
       if (!state.admin.classes.length) { alert('先に「クラス設定」でクラスを登録してください。'); return; }
-      var fields = [
-        { key: 'yearMonth', label: '対象年月', type: 'ym', value: state.yearMonth, required: true },
-        { key: 'className', label: 'クラス', type: 'select', value: '*', options: [{ value: '*', label: '全クラス' }].concat(classOptions()), required: true },
-        { key: 'deadlineAt', label: '予定の入力期限（空欄なら対象月の末日。時刻は 23:59）', type: 'date' },
-        { key: 'actualDeadlineAt', label: '実績確認の期限（空欄なら翌月の既定日。時刻は 23:59）', type: 'date' }
-      ];
-      openForm('入力期限設定', fields, '保存', function (v) {
-        if (!v.yearMonth) { showMsg('admin-form-error', '対象年月を選んでください。', true); return; }
-        var targets = v.className === '*' ? state.admin.classes.map(function (c) { return c.name; }) : [v.className];
-        var next = function (i) {
-          if (i >= targets.length) { closeDialog(); alert('入力期限を保存しました（' + targets.join('・') + '）。'); return; }
-          call('api_adminSetDeadline', [state.token, { yearMonth: v.yearMonth, className: targets[i], deadlineAt: v.deadlineAt, actualDeadlineAt: v.actualDeadlineAt }])
-            .then(function (r) { if (r.ok) next(i + 1); else formError(r); });
+      call('api_adminListDeadlines', [state.token]).then(function (lr) {
+        if (!adminAlert(lr)) return;
+        var fields = [
+          { key: 'yearMonth', label: '対象年月', type: 'ym', value: state.yearMonth, required: true },
+          { key: 'className', label: 'クラス', type: 'select', value: '*', options: [{ value: '*', label: '全クラス' }].concat(classOptions()), required: true },
+          { key: 'deadlineAt', label: '予定の入力期限（空欄なら対象月の末日。時刻は 23:59）', type: 'date' },
+          { key: 'actualDeadlineAt', label: '実績確認の期限（空欄なら今の設定のまま。初めてなら翌月の既定日。時刻は 23:59）', type: 'date' },
+          { key: 'resetActual', label: '実績確認の期限を既定（翌月の既定日）に戻す', type: 'bool' }
+        ];
+        openForm('入力期限設定', fields, '保存', function (v) {
+          if (!v.yearMonth) { showMsg('admin-form-error', '対象年月を選んでください。', true); return; }
+          var targets = v.className === '*' ? state.admin.classes.map(function (c) { return c.name; }) : [v.className];
+          // 実績確認の期限: 空欄（null）は登録済みのまま、既定に戻すときだけ空文字を送る
+          var actual = v.resetActual ? '' : v.actualDeadlineAt;
+          var next = function (i) {
+            if (i >= targets.length) { closeDialog(); alert('入力期限を保存しました（' + targets.join('・') + '）。'); return; }
+            call('api_adminSetDeadline', [state.token, { yearMonth: v.yearMonth, className: targets[i], deadlineAt: v.deadlineAt, actualDeadlineAt: actual }])
+              .then(function (r) {
+                if (r.ok) { next(i + 1); return; }
+                showMsg('admin-form-error', 'エラー（' + targets[i] + '）: ' + (reasonText(r) || tErr(r.error)), true);
+              });
+          };
+          next(0);
+        });
+        var rows = lr.data.slice(0, 24);
+        el('admin-dialog-body').insertAdjacentHTML('beforeend', '<h4 style="margin-top: 1.2rem;">登録済みの期限（新しい月から' + rows.length + '件' +
+          (lr.data.length > rows.length ? '。全' + lr.data.length + '件' : '') + '）</h4>' +
+          (rows.length ? '<p class="detail-empty">行を押すと、その内容が上の欄に入ります。</p>' +
+            '<div class="adm-table-wrap"><table class="admin-table deadline-list"><thead><tr><th>対象年月</th><th>クラス</th><th>予定の期限</th><th>実績確認の期限</th></tr></thead><tbody>' +
+            rows.map(function (dl, i) {
+              return '<tr class="board-row" data-act="pickDeadline" data-i="' + i + '"><td class="nowrap">' + esc(dl.yearMonth) + '</td><td>' + esc(dl.className) + '</td>' +
+                '<td class="nowrap">' + esc(dl.deadlineAt || '—') + '</td><td class="nowrap">' + esc(dl.actualDeadlineAt || '既定（翌月の既定日）') + '</td></tr>';
+            }).join('') + '</tbody></table></div>'
+            : '<p class="detail-empty">まだ登録はありません。</p>'));
+        dialogHandlers.pickDeadline = function (b) {
+          var dl = rows[+b.getAttribute('data-i')];
+          if (!dl) return;
+          var body = el('admin-dialog-body');
+          var set = function (key, val) { var n = body.querySelector('[data-key="' + key + '"]'); if (n) n.value = val; };
+          set('yearMonth', dl.yearMonth);
+          var sel = body.querySelector('[data-key="className"]');
+          if (!Array.prototype.some.call(sel.options, function (o) { return o.value === dl.className; })) {
+            var opt = document.createElement('option');
+            opt.value = dl.className; opt.textContent = dl.className;
+            sel.appendChild(opt);
+          }
+          sel.value = dl.className;
+          set('deadlineAt', dl.deadlineAt ? dl.deadlineAt.slice(0, 10) : '');
+          set('actualDeadlineAt', dl.actualDeadlineAt ? dl.actualDeadlineAt.slice(0, 10) : '');
+          body.querySelector('[data-key="resetActual"]').checked = false;
+          hideError('admin-form-error');
+          body.scrollTop = 0;
         };
-        next(0);
       });
     });
   });

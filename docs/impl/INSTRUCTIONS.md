@@ -188,8 +188,10 @@ src/
 ```
 {
   yearMonth, status: '未入力'|'下書き'|'確定済'|'学校確定',
-  closed: boolean,             // 締切を過ぎ、有効な修正許可が無い
+  closed: boolean,             // 締切を過ぎ、有効な修正許可が無い。または notOpen
+  notOpen: boolean,            // 締切表にその月・クラスの行が無い（保存・確定・実績はすべて NOT_OPEN。2026-10-07 追加）
   deadlineAt: 'YYYY-MM-DD HH:MM'|null, unlockUntil: 'YYYY-MM-DD HH:MM'|null,
+  unlockActive: boolean,       // 締切（予定、または実績の期間中の実績の期限）を過ぎていて、修正許可がまだ有効（2026-10-07 追加）
   version: number,             // 行が無ければ 0
   shifts: {...},               // 保存した予定（行が無ければ {}）
   evaluation: {...},           // 予定を evaluateMonth(mode 'plan') で計算した結果
@@ -205,7 +207,7 @@ src/
 - 確定済みの月を下書き保存したら、状態は下書きに戻る。
 - `expectedVersion` は、`api_getMonth` で読んだ `version`（行が無ければ 0）。行の version と違えば `VERSION_CONFLICT`。保存に成功するたびに version を1増やす。予定と実績は同じ行・同じ version を使う。
 - 締切: 学生のクラスと年月で締切表（DEADLINES）を引く。行が無ければ `NOT_OPEN`。現在の日時（分まで）が `deadlineAt` より**後**なら締切済み（`deadlineAt` の分ちょうどはまだ受け付ける）。ただし、その行の修正許可 `unlock_until` があり、現在がそれ以前（同じ分を含む）なら受け付ける。
-- 実績の受付期間: 対象月の翌月1日 00:00 から、実績確認期限まで。実績確認期限は締切表の `actualDeadlineAt`、空なら「翌月の（設定 `actualConfirmDefaultDay`）日 23:59」。修正許可は実績にも効く。
+- 実績の受付期間: 対象月の翌月1日 00:00 から、実績確認期限まで。実績確認期限は締切表の `actualDeadlineAt`、空なら「翌月の（設定 `actualConfirmDefaultDay`）日 23:59」。修正許可は実績にも効く。`api_getMonth` の `actual.open` は `api_saveActual` と同じ条件（締切表の行が無い月・学校確定の月は false。2026-10-07）。
 - `api_confirmActual`: 実績を一度も保存していなければ `BAD_REQUEST`。予定が確定済みで、実績と予定が同じ（日ごとに、開始・終了の組が並び順を問わず一致）なら「予定どおり」、それ以外は「修正あり」。
 - 前月データの取得元（evaluateMonth の `prevMonthSource` と `prevMonthDaily`）:
   1. 前月の末日が入学日より前 → `not_applicable`
@@ -225,13 +227,14 @@ src/
 | `api_adminCreateAdmin` | `token` | `{ loginId, initialPassword }` |
 | `api_adminImportRoster` | `token, { className, enrollmentDate, rows: [{ studentId, name, nameKana }] }`（最大300人） | `{ created: [学籍番号], skipped: [学籍番号] }`（2026-10-02 追加。既存・重複は飛ばす。1行でも形が違えば BAD_REQUEST で何も登録しない） |
 | `api_adminListClasses` / `api_adminAddClass` / `api_adminDeleteClass` | `token` / `token, name` / `token, name` | `[{ name, students }]` / `null` / `null`（2026-10-03 追加。学生がいるクラスは消せない＝BAD_REQUEST） |
-| `api_adminStudentDetail` | `token, studentId` | `{ student, months: [{ yearMonth, status, actualStatus, shifts, totalMinutes, codes, actual: object\|null, actualTotalMinutes: number\|null, actualCodes, unlockUntil, publicHolidays }] }`（新しい月が先） |
-| `api_adminGrantUnlock` | `token, studentId, yearMonth, until` | `null`（行が無ければ未入力の行を作る。version は変えない） |
-| `api_adminSchoolConfirm` | `token, studentId, yearMonth` | `null` |
+| `api_adminStudentDetail` | `token, studentId` | `{ student, months: [{ yearMonth, status, actualStatus, shifts, totalMinutes, codes, actual: object\|null, actualTotalMinutes: number\|null, actualCodes, unlockUntil, unlockExpired: boolean, publicHolidays }] }`（新しい月が先。`unlockExpired` は修正許可の期限が今より前。2026-10-07 追加） |
+| `api_adminGrantUnlock` | `token, studentId, yearMonth, until` | `null`（行が無ければ未入力の行を作る。version は変えない。`until` は `YYYY-MM-DD HH:MM` か日付だけ `YYYY-MM-DD`（その日の 23:59）。形が違えば BAD_REQUEST `details.reason: 'UNTIL_FORMAT'`、今以前なら BAD_REQUEST `'UNTIL_NOT_FUTURE'`。2026-10-07） |
+| `api_adminSchoolConfirm` | `token, studentId, yearMonth` | `null`（年月の形が違えば BAD_REQUEST。断る理由は下記） |
 | `api_adminChangeCredentials` | `token, { currentPassword, newLoginId\|null, newPassword\|null }` | `{ loginId }`（自分のIDとパスワードを変える。空欄はそのまま。今のパスワード違いは LOGIN_FAILED。IDは英数字と `._-` の4〜32文字で、他の利用者のIDや学籍番号と大文字小文字を問わず重ならないこと（重なれば BAD_REQUEST、`details.reason: 'ID_TAKEN'`）。パスワードは10文字以上。今のログインは切らない。2026-10-06 追加） |
-| `api_adminUndoSchoolConfirm` | `token, studentId, yearMonth` | `null`（学校確定の月を未入力に戻す。学校確定でなければ FORBIDDEN、行が無ければ NOT_FOUND。2026-10-03 追加） |
+| `api_adminUndoSchoolConfirm` | `token, studentId, yearMonth` | `null`（学校確定の月を未入力に戻す。学校確定でなければ FORBIDDEN `details.reason: 'NOT_SCHOOL_CONFIRMED'`、行が無ければ NOT_FOUND、年月の形が違えば BAD_REQUEST。2026-10-03 追加） |
 | `api_adminBoard` | `token, yearMonth, { className?, status?, query? }` | 下記 |
-| `api_adminSetDeadline` | `token, { yearMonth, className, deadlineAt, actualDeadlineAt\|null }` | `null`（年月＋クラスで上書き） |
+| `api_adminSetDeadline` | `token, { yearMonth, className, deadlineAt, actualDeadlineAt\|null }` | `null`（年月＋クラスで上書き。`actualDeadlineAt` が null・省略なら登録済みの実績確認の期限を残し、空文字 `''` なら消して既定に戻す。実績確認の期限は対象月の末日 23:59 より後（でなければ BAD_REQUEST `details.reason: 'ACTUAL_BEFORE_MONTH_END'`）、かつ予定の期限より後（`'ACTUAL_BEFORE_PLAN'`）。クラスが1つでも登録されている学校では、クラスの表にも学生にも無いクラス名は BAD_REQUEST `'UNKNOWN_CLASS'`。2026-10-07） |
+| `api_adminListDeadlines` | `token` | `[{ yearMonth, className, deadlineAt, actualDeadlineAt\|null }]`（登録済みの入力期限。新しい月が先、同じ月はクラス名の順。2026-10-07 追加） |
 | `api_adminSetHoliday` | `token, { holidayId?, name, startDate, endDate, schoolYear }` | `{ holidayId }`（開始＞終了は `BAD_REQUEST`） |
 | `api_adminDeleteHoliday` | `token, holidayId` | `null` |
 | `api_adminListHolidays` | `token` | `[{ holidayId, name, startDate, endDate, schoolYear }]` |
@@ -241,7 +244,7 @@ src/
 | `api_adminPurgeExpired` | `token` | `{ deletedRows }` |
 
 - `student` の形: `{ studentId, name, className, birthDate, language: 'ja'|'ne'|'vi', enrollmentDate, graduationDate|null, withdrawalDate|null, status: '在籍'|'休学'|'卒業'|'退学', workPermission: boolean, permissionExpires|null, permissionCheckedAt|null }`。学籍番号・氏名・クラスが空、日付の形が違う、言語・在籍状態が一覧外なら `BAD_REQUEST`。既存の学籍番号なら更新し、ログインIDは変えない。
-- 学校確定: 学生の在籍状態が 退学・休学・卒業 のどれかで、その月が未入力（行が無い、または状態が未入力）のときだけ。それ以外は `FORBIDDEN`。状態を `学校確定` にし、version を1増やす。
+- 学校確定: 学生の在籍状態が 退学・休学・卒業 のどれかで、その月が未入力（行が無い、または状態が未入力）で、入学より前の月（月の末日が入学日より前）でないときだけ。それ以外は `FORBIDDEN` で、`details.reason` に理由（`'STUDENT_ENROLLED'` 在籍中・`'ALREADY_ENTERED'` 入力済み・`'ALREADY_SCHOOL_CONFIRMED'` すでに学校確定・`'BEFORE_ENROLLMENT'` 入学前。2026-10-07）。状態を `学校確定` にし、version を1増やす。
 - 設定の既定値: `retentionMonths` 24、`sessionTtlMinutes` 120、`allowLeaveOfAbsence` false、`actualConfirmDefaultDay` 10、`timezone` 'Asia/Tokyo'、`schoolName` ''。
 
 `api_adminBoard` の data:
@@ -275,6 +278,7 @@ src/
 - `<style>` に `@page { size: A4 landscape; }` と `.student-page { break-after: page; }` を**この形のまま**入れる（`@page` の中に余白などを足さない。足したい指定は別の規則に書く）。
 - 予定と実績を並べ、実績の超過日は網掛けにする。学校確定の月は「対象外」と表示する。
 - 学生の氏名など、保存されている文字は**必ず** `& < > " '` をエスケープする。
+- ページの高さは固定せず、はみ出しを切り捨てない（`overflow: hidden` を使わない）。予定の多い月は、`student-page` の `style` の `--fs`（文字 11〜6px）・`--rh`（行の高さ 6.6〜3.5mm）を小さくして全日・合計・署名を A4 縦1枚に収める。最小でも収まらない月は、行の途中で切らずに次の紙へ続ける（2026-10-07）。
 
 `api_adminPurgeExpired`: 現在の年月から保存期間（月数）を引いた年月より前の月次申告の行を消す（例: 2026-10 で24か月 → 2024-09 以前を消し、2024-10 は残す）。
 
@@ -354,7 +358,7 @@ AuditLog スプレッドシートの `AUDIT_LOG` シートは、**この列・�
 - 日付のあるコードはその日の行の下に、日付の無いコードは表の上に出す。
 - 長期休業日（`holidays`）の日は、行全体に色を付け「長期休暇」と表示する。土日は日付の色を変える。
 - スマホ（幅 360px）で横にはみ出さないこと。
-- ボタンは「途中保存」と「確定」。締切済み（`closed`）なら入力欄とボタンを無効にし「締切済み」とだけ表示する（サーバでも拒否される）。
+- ボタンは「途中保存」と「確定」。締切済み（`closed`）なら入力欄とボタンを無効にし「締切済み」とだけ表示する（サーバでも拒否される）。締切表に行が無い月（`notOpen`）は「この月はまだ受付していません。学校に確認してください」、学校確定の月は「対象外」の案内を出す。締切後に修正許可が有効（`unlockActive`）なら、提出期限の代わりに「修正許可: 〜MM/DD HH:MM」を出す（2026-10-07）。
 - 実績確認（`actual.open` のとき）: 予定と同じ1日1行の表（日付・勤務時間・休憩・実働、最後に合計）。行ごとに予定を小さく表示し、「予定どおり」で予定のシフトを写す。最後に保存と確認。
 - 提出履歴の一覧。
 
