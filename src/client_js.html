@@ -547,11 +547,13 @@
     var aev = actual.evaluation || { shifts: {}, codes: [] };
 
     // 実績確認の進み具合（未確認・予定どおり等）は生徒には出さない（利用者の判断）
-    el('actual-codes').innerHTML = codesHtml((aev.codes || []).filter(function (c) { return c.code !== 'ACTUAL_OVER' && !c.date; }));
+    // 「前月未確定」は予定の欄と同じく出さない（2026-10-07）
+    var aCodes = (aev.codes || []).filter(function (c) { return c.code !== 'ACTUAL_OVER' && c.code !== 'PREV_MONTH_DRAFT'; });
+    el('actual-codes').innerHTML = codesHtml(aCodes.filter(function (c) { return !c.date; }));
 
     el('actual-table').innerHTML = shiftTableHtml(data.yearMonth, actual.shifts || plan, {
       rowClass: 'actual-shift-row', timeLabel: 'label.actualTime', totalLabel: 'label.actualTotal',
-      disabled: false, codes: (aev.codes || []).filter(function (c) { return c.code !== 'ACTUAL_OVER'; }),
+      disabled: false, codes: aCodes,
       holidays: data.holidays || [], planShifts: plan
     });
     refreshTotals('actual-table');
@@ -667,6 +669,16 @@
     });
   }
 
+  // バックアップの赤い注意。理由ごとに文を分け、直し方の要点を添える（詳しくはマニュアルの同じ見出し。2026-10-07）
+  function backupWarnText(b) {
+    var see = '（詳しくはマニュアルの「バックアップの赤い注意が出たとき」）';
+    var reason = b.reason || (!b.configured ? 'NO_FOLDER' : (!b.lastAt ? 'NEVER' : 'OLD'));
+    if (reason === 'NO_FOLDER') return 'バックアップの保存先が未設定です。Apps Script で installTriggers を実行して許可してください' + see;
+    if (reason === 'NEVER') return 'まだ一度もバックアップできていません。1日1回自動でやり直します。翌日も出るなら、ドライブの容量と「ShiftDB バックアップ」フォルダを確かめてください' + see;
+    if (reason === 'BAD_DATE') return '最後のバックアップの日時が読めません（記録: ' + (b.lastAt || '') + '）。スクリプト プロパティの LAST_BACKUP_AT を消すと取り直します' + see;
+    return 'バックアップが40日以上取られていません（最後: ' + (b.lastAt || 'なし') + '）。Apps Script のトリガーに backupMonthly があるか確かめてください' + see;
+  }
+
   // 集計は1行の小さな札。状態の札を押すとその状態で絞り込む（もう一度押すと解除）。
   function chip(label, value, status, cls, title) {
     var active = status && el('admin-status-filter').value === status;
@@ -679,11 +691,7 @@
     var c = data.counts;
     var b = data.backup;
     el('admin-backup').hidden = !(b && b.warn);
-    if (b && b.warn) {
-      el('admin-backup').textContent = !b.configured
-        ? 'バックアップの保存先が未設定です（マニュアルの「バックアップ」を参照）'
-        : 'バックアップが40日以上取られていません（最後: ' + (b.lastAt || 'なし') + '）';
-    }
+    if (b && b.warn) el('admin-backup').textContent = backupWarnText(b);
     el('admin-counts').innerHTML =
       chip('学生', c.students) + chip('確定済', c.confirmed, '確定済') + chip('下書き', c.draft, '下書き') +
       chip('未提出', c.notSubmitted, '未提出') + chip('エラー', c.error, null, c.error ? 'stat-error' : '') +
@@ -769,7 +777,8 @@
       var node = el('admin-dialog-body').querySelector('[data-key="' + f.key + '"]');
       if (!node) return;
       if (f.type === 'bool') out[f.key] = node.checked;
-      else if (f.type === 'number') out[f.key] = node.value === '' ? null : Number(node.value);
+      // 数字として読めない打ち込み（ブラウザは空として返す）は NaN にして、「必須項目」でなく「数字で」と知らせる
+      else if (f.type === 'number') out[f.key] = node.validity && node.validity.badInput ? NaN : (node.value.trim() === '' ? null : Number(node.value));
       else if (f.type === 'password') out[f.key] = node.value === '' ? null : node.value; // パスワードは空白を削らない
       else out[f.key] = node.value.trim() === '' ? null : node.value.trim();
     });
@@ -1331,61 +1340,120 @@
     });
   });
 
-  // ---- 長期休業（一覧・追加・削除） ----
+  // ---- 長期休業（一覧・追加・編集・削除） ----
+  // 年度は4月〜翌年3月（2027-01 は 2026年度）
+  function schoolYearOf(dateStr) { var y = +dateStr.slice(0, 4), m = +dateStr.slice(5, 7); return m >= 4 ? y : y - 1; }
+  // 画面で先に確かめる（サーバの BAD_REQUEST より先に、どこが悪いかを知らせる）。問題なければ null
+  function holidayProblem(v, fields) {
+    var missing = fields.filter(function (f) { return v[f.key] === null || v[f.key] === ''; });
+    if (missing.length) return '必須項目: ' + missing.map(function (f) { return f.label; }).join('、');
+    if (v.name.length > 50) return '名称は50文字以内にしてください（いま' + v.name.length + '文字）。';
+    if (v.endDate < v.startDate) return '終了日が開始日より前です。';
+    if (isNaN(v.schoolYear)) return '年度は数字で入れてください。';
+    if (Math.floor(v.schoolYear) !== v.schoolYear || v.schoolYear < 2000 || v.schoolYear > 2100) return '年度は2000〜2100の整数で入れてください（例: 2026）。';
+    return null;
+  }
   function openHolidays() {
     call('api_adminListHolidays', [state.token]).then(function (res) {
       if (!adminAlert(res)) return;
-      var fields = [
-        { key: 'name', label: '名称', type: 'text', required: true, hint: '例: 冬季休業' },
-        { key: 'startDate', label: '開始日', type: 'date', required: true },
-        { key: 'endDate', label: '終了日', type: 'date', required: true },
-        { key: 'schoolYear', label: '年度', type: 'number', required: true, value: +todayYm().slice(0, 4) }
-      ];
-      var list = res.data.map(function (h) {
-        return '<div class="month-row"><div>' + esc(h.name) + ' ' + esc(h.startDate) + '〜' + esc(h.endDate) + '（' + esc(h.schoolYear) + '年度）</div>' +
-          '<div><button type="button" class="btn-danger btn-sm" data-act="del" data-id="' + esc(h.holidayId) + '">削除</button></div></div>';
-      }).join('') || '<p>登録なし</p>';
-      openDialog('長期休業設定', '<h4>登録済み</h4>' + list + '<h4>追加</h4>' + formHtml(fields) +
-        '<div class="dialog-actions"><button type="button" class="btn-primary" data-act="add">追加</button></div>');
-      dialogHandlers = {
-        del: function (b) {
-          if (!confirm('この長期休業を削除します。')) return;
-          call('api_adminDeleteHoliday', [state.token, b.getAttribute('data-id')]).then(function (r) { if (adminAlert(r)) openHolidays(); });
-        },
-        add: function () {
-          call('api_adminSetHoliday', [state.token, formValues(fields)]).then(function (r) { if (r.ok) openHolidays(); else formError(r); });
-        }
-      };
+      renderHolidays(res.data, null);
     });
+  }
+  // editing: 編集中の休業（null なら追加）
+  function renderHolidays(holidays, editing) {
+    var e = editing || {};
+    var fields = [
+      { key: 'name', label: '名称', type: 'text', required: true, hint: '例: 冬季休業', value: e.name },
+      { key: 'startDate', label: '開始日', type: 'date', required: true, value: e.startDate },
+      { key: 'endDate', label: '終了日', type: 'date', required: true, value: e.endDate },
+      { key: 'schoolYear', label: '年度（4月〜翌年3月）', type: 'number', required: true, value: editing ? e.schoolYear : schoolYearOf(jstNow()) }
+    ];
+    var list = holidays.map(function (h) {
+      return '<div class="month-row' + (editing && h.holidayId === e.holidayId ? ' is-editing' : '') + '"><div>' + esc(h.name) + ' ' + esc(h.startDate) + '〜' + esc(h.endDate) + '（' + esc(h.schoolYear) + '年度）</div>' +
+        '<div class="nowrap"><button type="button" class="btn-outline btn-sm" data-act="edit" data-id="' + esc(h.holidayId) + '">編集</button> ' +
+        '<button type="button" class="btn-danger btn-sm" data-act="del" data-id="' + esc(h.holidayId) + '">削除</button></div></div>';
+    }).join('') || '<p>登録なし</p>';
+    openDialog('長期休業設定', '<h4>登録済み</h4>' + list + '<h4>' + (editing ? '編集: ' + esc(e.name) : '追加') + '</h4>' + formHtml(fields) +
+      '<div class="dialog-actions">' + (editing ? '<button type="button" class="btn-outline" data-act="cancel">やめる</button>' : '') +
+      '<button type="button" class="btn-primary" data-act="add">' + (editing ? '更新' : '追加') + '</button></div>');
+    dialogHandlers = {
+      edit: function (b) {
+        var h = holidays.filter(function (x) { return x.holidayId === b.getAttribute('data-id'); })[0];
+        if (h) renderHolidays(holidays, h);
+      },
+      cancel: function () { renderHolidays(holidays, null); },
+      del: function (b) {
+        if (!confirm('この長期休業を削除します。')) return;
+        call('api_adminDeleteHoliday', [state.token, b.getAttribute('data-id')]).then(function (r) { if (adminAlert(r)) openHolidays(); });
+      },
+      add: function () {
+        var v = formValues(fields);
+        var problem = holidayProblem(v, fields);
+        if (problem) { showMsg('admin-form-error', problem, true); return; }
+        var sy = schoolYearOf(v.startDate);
+        if (v.schoolYear !== sy && !confirm('年度（' + v.schoolYear + '年度）が開始日 ' + v.startDate + ' の年度（' + sy + '年度）と違います。このまま保存しますか？')) return;
+        if (editing) v.holidayId = e.holidayId;
+        call('api_adminSetHoliday', [state.token, v]).then(function (r) {
+          if (r.ok) { openHolidays(); return; }
+          if (r.error === 'NOT_FOUND') { showMsg('admin-form-error', 'この長期休業は見つかりません（別の画面で消されたかもしれません）。開き直してください。', true); return; }
+          formError(r);
+        });
+      }
+    };
   }
   el('btn-open-holiday').addEventListener('click', openHolidays);
 
-  // ---- 学校設定 ----
+  // ---- その他 設定 ----
+  // 項目と受け付ける範囲（サーバの SETTINGS_RULES_ と同じ）。見出しに範囲を出す。
+  // 学校名（schoolName）はどこにも使っていないので出さない（サーバは受け付けたまま。2026-10-07）
+  var SETTINGS_FIELDS = [
+    { key: 'retentionMonths', name: '保存期間', unit: '月', min: 24, max: 120 },
+    { key: 'sessionTtlMinutes', name: 'ログインの有効時間', unit: '分', min: 5, max: 720 },
+    { key: 'actualConfirmDefaultDay', name: '実績確認の既定の期限日', unit: '翌月の何日', min: 1, max: 28 },
+    { key: 'allowLeaveOfAbsence', name: '休学中でも確定できる', type: 'bool' }
+  ];
+  function settingLabel(r) { return r.type === 'bool' ? r.name : r.name + '（' + r.unit + ', ' + r.min + '〜' + r.max + '）'; }
   el('btn-open-settings').addEventListener('click', function () {
     call('api_adminGetSettings', [state.token]).then(function (res) {
       if (!adminAlert(res)) return;
       var s = res.data;
       state.admin.settings = s;
-      var fields = [
-        { key: 'schoolName', label: '学校名', type: 'text', value: s.schoolName },
-        { key: 'retentionMonths', label: '保存期間（月、24以上）', type: 'number', value: s.retentionMonths, required: true },
-        { key: 'sessionTtlMinutes', label: 'ログインの有効時間（分）', type: 'number', value: s.sessionTtlMinutes, required: true },
-        { key: 'actualConfirmDefaultDay', label: '実績確認の既定の期限日（翌月の何日、1〜28）', type: 'number', value: s.actualConfirmDefaultDay, required: true },
-        { key: 'allowLeaveOfAbsence', label: '休学中でも確定できる', type: 'bool', value: s.allowLeaveOfAbsence }
-      ];
+      var fields = SETTINGS_FIELDS.map(function (r) {
+        return { key: r.key, label: settingLabel(r), type: r.type || 'number', value: s[r.key], required: r.type !== 'bool' };
+      });
       openForm('その他 設定', fields, '保存', function (v) {
-        if (v.schoolName === null) v.schoolName = '';
-        call('api_adminSetSettings', [state.token, v]).then(function (r) { if (r.ok) { closeDialog(); alert('設定を保存しました。'); } else formError(r); });
+        var problems = [], changed = {}, n = 0;
+        SETTINGS_FIELDS.forEach(function (r) {
+          var x = v[r.key];
+          if (r.type !== 'bool') {
+            if (isNaN(x)) { problems.push(settingLabel(r) + ': 数字で入れてください'); return; }
+            if (Math.floor(x) !== x || x < r.min || x > r.max) { problems.push(settingLabel(r) + ': ' + r.min + '〜' + r.max + 'の整数で入れてください'); return; }
+          }
+          // 開いたときの値から変えた項目だけを送る（古い画面から、他の人が変えた項目を戻さない）
+          if (x !== s[r.key]) { changed[r.key] = x; n++; }
+        });
+        if (problems.length) { showMsg('admin-form-error', problems.join('、'), true); return; }
+        if (!n) { showMsg('admin-form-error', '変更はありません。', false); return; }
+        call('api_adminSetSettings', [state.token, changed]).then(function (r) {
+          if (r.ok) { closeDialog(); alert('設定を保存しました。'); return; }
+          var bad = r.details && SETTINGS_FIELDS.filter(function (x) { return x.key === r.details.field; })[0];
+          if (bad) showMsg('admin-form-error', settingLabel(bad) + ': ' + (bad.type === 'bool' ? '正しくありません' : bad.min + '〜' + bad.max + 'の整数で入れてください'), true);
+          else formError(r);
+        });
       });
     });
   });
 
   // ---- 保存期限超過の削除 ----
+  // 消す範囲（どの月より前か・件数）をサーバに出してもらって確認し、確認で見せた保存期間と境目を送る。
+  // 確認の後に保存期間が変わっていたら、サーバが消さずに断る（2026-10-07）
   el('btn-purge-expired').addEventListener('click', function () {
-    call('api_adminGetSettings', [state.token]).then(function (res) {
+    call('api_adminPurgeExpired', [state.token, { preview: true }]).then(function (res) {
       if (!adminAlert(res)) return;
-      if (!confirm('保存期間（' + res.data.retentionMonths + 'か月）より前の月の申告データを完全に削除します。元に戻せません。よろしいですか？')) return;
-      call('api_adminPurgeExpired', [state.token]).then(function (r) {
+      var p = res.data;
+      if (!confirm('保存期間は' + p.retentionMonths + 'か月です。' + p.cutoffYm + ' より前を削除します（' + p.count + '件）。元に戻せません。よろしいですか？')) return;
+      call('api_adminPurgeExpired', [state.token, { retentionMonths: p.retentionMonths, cutoffYm: p.cutoffYm }]).then(function (r) {
+        if (!r.ok && r.details && r.details.reason === 'SETTINGS_CHANGED') { alert('設定が変わりました。開き直してください'); return; }
         if (adminAlert(r, r.ok ? r.data.deletedRows + '件を削除しました。' : '')) loadAdminBoard();
       });
     });

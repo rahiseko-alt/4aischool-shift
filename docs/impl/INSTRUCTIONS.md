@@ -229,7 +229,7 @@ src/
 | `api_adminCreateAdmin` | `token` | `{ loginId, initialPassword }` |
 | `api_adminImportRoster` | `token, { className, enrollmentDate, rows: [{ studentId, name, nameKana }] }`（最大300人） | `{ created: [学籍番号], skipped: [学籍番号], codeConflicts: [{ code, studentIds }] }`（2026-10-02 追加。既存・重複は飛ばす。1行でも形が違えば BAD_REQUEST で何も登録しない。2026-10-07: 形が違う行は `details: { row（1から）, field, message }`。クラス名・学籍番号はそろえる。DEMO には登録できない。`codeConflicts` は、登録した学生の短い番号が在籍中のほかの学生と重なるもの） |
 | `api_adminListClasses` / `api_adminAddClass` / `api_adminDeleteClass` | `token` / `token, name` / `token, name` | `[{ name, students }]` / `{ name, exists }` / `null`（2026-10-03 追加。学生がいるクラスは消せない＝BAD_REQUEST、2026-10-07 から `details.message` に人数。追加するクラス名は NFKC・見えない文字の除去・続いた空白を1つにしてそろえ、同じ名前が既にあれば増やさず `exists: true`） |
-| `api_adminStudentDetail` | `token, studentId` | `{ student, months: [{ yearMonth, status, actualStatus, shifts, totalMinutes, codes, actual: object\|null, actualTotalMinutes: number\|null, actualCodes, unlockUntil, unlockExpired: boolean, publicHolidays }] }`（新しい月が先。`unlockExpired` は修正許可の期限が今より前。2026-10-07 追加） |
+| `api_adminStudentDetail` | `token, studentId` | `{ student, months: [{ yearMonth, status, actualStatus, shifts, totalMinutes, codes, actual: object\|null, actualTotalMinutes: number\|null, actualCodes, unlockUntil, unlockExpired: boolean, publicHolidays }] }`（新しい月が先。`unlockExpired` は修正許可の期限が今より前。2026-10-07 追加。`codes`・`actualCodes` は表示のたびに今の学生情報・長期休業・前後の月で計算し直したコードの文字列。`actualCodes` は実績が無ければ空） |
 | `api_adminGrantUnlock` | `token, studentId, yearMonth, until` | `null`（行が無ければ未入力の行を作る。version は変えない。`until` は `YYYY-MM-DD HH:MM` か日付だけ `YYYY-MM-DD`（その日の 23:59）。形が違えば BAD_REQUEST `details.reason: 'UNTIL_FORMAT'`、今以前なら BAD_REQUEST `'UNTIL_NOT_FUTURE'`。2026-10-07） |
 | `api_adminSchoolConfirm` | `token, studentId, yearMonth` | `null`（年月の形が違えば BAD_REQUEST。断る理由は下記） |
 | `api_adminChangeCredentials` | `token, { currentPassword, newLoginId\|null, newPassword\|null }` | `{ loginId }`（自分のIDとパスワードを変える。空欄はそのまま。今のパスワード違いは LOGIN_FAILED。IDは英数字と `._-` の4〜32文字で、他の利用者のIDや学籍番号と大文字小文字を問わず重ならないこと（重なれば BAD_REQUEST、`details.reason: 'ID_TAKEN'`）。パスワードは10文字以上。今のログインは切らない。2026-10-06 追加。2026-10-07: 新しいパスワードが今と同じなら `details.reason: 'SAME_PASSWORD'`、空白だけなら `'PASSWORD_BLANK'`。今のパスワード違いは回数に数え、5回で LOGIN_LOCKED） |
@@ -237,13 +237,13 @@ src/
 | `api_adminBoard` | `token, yearMonth, { className?, status?, query? }` | 下記 |
 | `api_adminSetDeadline` | `token, { yearMonth, className, deadlineAt, actualDeadlineAt\|null }` | `null`（年月＋クラスで上書き。`actualDeadlineAt` が null・省略なら登録済みの実績確認の期限を残し、空文字 `''` なら消して既定に戻す。実績確認の期限は対象月の末日 23:59 より後（でなければ BAD_REQUEST `details.reason: 'ACTUAL_BEFORE_MONTH_END'`）、かつ予定の期限より後（`'ACTUAL_BEFORE_PLAN'`）。クラスが1つでも登録されている学校では、クラスの表にも学生にも無いクラス名は BAD_REQUEST `'UNKNOWN_CLASS'`。2026-10-07） |
 | `api_adminListDeadlines` | `token` | `[{ yearMonth, className, deadlineAt, actualDeadlineAt\|null }]`（登録済みの入力期限。新しい月が先、同じ月はクラス名の順。2026-10-07 追加） |
-| `api_adminSetHoliday` | `token, { holidayId?, name, startDate, endDate, schoolYear }` | `{ holidayId }`（開始＞終了は `BAD_REQUEST`） |
+| `api_adminSetHoliday` | `token, { holidayId?, name, startDate, endDate, schoolYear }` | `{ holidayId }`（開始＞終了は `BAD_REQUEST`。`holidayId` を付けるとその休業を書き換え、無い `holidayId` なら新しく作らず `NOT_FOUND`。2026-10-07） |
 | `api_adminDeleteHoliday` | `token, holidayId` | `null` |
-| `api_adminListHolidays` | `token` | `[{ holidayId, name, startDate, endDate, schoolYear }]` |
+| `api_adminListHolidays` | `token` | `[{ holidayId, name, startDate, endDate, schoolYear }]`（開始日の順。2026-10-07） |
 | `api_adminGetSettings` | `token` | `{ schoolName, retentionMonths, timezone, sessionTtlMinutes, allowLeaveOfAbsence, actualConfirmDefaultDay }` |
-| `api_adminSetSettings` | `token, 一部の項目` | `null` |
+| `api_adminSetSettings` | `token, 一部の項目` | `null`（送った項目だけを書き換える。1つでも範囲外・型違い・知らない項目なら何も変えず `BAD_REQUEST`、`details.field` にその項目名。画面は開いたときから変えた項目だけを送る。2026-10-07） |
 | `api_adminPrintHtml` | `token, { studentIds, yearMonths }` | `{ html }` |
-| `api_adminPurgeExpired` | `token` | `{ deletedRows }` |
+| `api_adminPurgeExpired` | `token, { preview?: true, retentionMonths?, cutoffYm? }`（省略可） | `{ deletedRows }`。`preview: true` なら消さずに `{ retentionMonths, cutoffYm, count }`（2026-10-07） |
 
 - `student` の形: `{ studentId, name, className, birthDate, language: 'ja'|'ne'|'vi', enrollmentDate, graduationDate|null, withdrawalDate|null, status: '在籍'|'休学'|'卒業'|'退学', workPermission: boolean, permissionExpires|null, permissionCheckedAt|null }`。学籍番号・氏名・クラスが空、日付の形が違う、言語・在籍状態が一覧外なら `BAD_REQUEST`。既存の学籍番号なら更新し、ログインIDは変えない。
   - 2026-10-07 追加: `birthDate` は空・null でよい。氏名の見えない文字（ゼロ幅の空白など）は取り除き、取り除いて空なら誤り。氏名は100文字まで。学籍番号の中の空白は誤り。次も `BAD_REQUEST`（`details.field` はその項目）: 日付の年が1900〜2100年の外、生年月日が今日より後・入学日より後、卒業日・退学日が入学日より前、「退学」で退学日が無い、「卒業」で卒業日が無い、「在籍」で退学日がある（`field: 'status'`）。
@@ -259,7 +259,8 @@ src/
   actualUnconfirmed,
   rows: [{ studentId, name, className, displayStatus: '確定済'|'下書き'|'未提出'|'対象外',
            errorCodes: [...], actualStatus, actualOver: boolean, updatedAt: 'YYYY-MM-DD HH:MM'|null }],
-  backup: { configured: boolean, lastAt: 'YYYY-MM-DD HH:MM'|null, warn: boolean }
+  backup: { configured: boolean, lastAt: 'YYYY-MM-DD HH:MM'|null, warn: boolean,
+            reason: 'NO_FOLDER'|'NEVER'|'BAD_DATE'|'OLD'|null }
 }
 ```
 
@@ -268,11 +269,11 @@ src/
 - `counts` はクラスの絞り込みだけを反映する。`rows` は、クラス・状態（`displayStatus` と一致）・検索（学籍番号の前方一致、または氏名の部分一致）をすべて反映する。`rows` は学籍番号の昇順。
 - 表示状態: 確定済→確定済、学校確定→対象外、下書き→下書き、行が無い・未入力→未提出。
 - `errorCodes`: 表示のたびに、今の学生情報・長期休業・前後の月で計算し直した block のコードの**文字列**の配列（例 `['OVER_28H']`、重複なし。学校確定の月は空。2026-10-03 変更）。`error` は `errorCodes` が空でない行の数。
-- `actualOver`: 最後に保存した実績に `ACTUAL_OVER` があれば true。
+- `actualOver`: 保存されている実績を、表示のたびに今の学生情報・長期休業・前後の月で計算し直し（`mode: 'actual'`、翌月はそのまま数える＝実績の保存と同じ）、`ACTUAL_OVER` があれば true（2026-10-07 変更。これまでは保存したときのコード）。予定と同じく、前後の月は1回だけ読む。
 - `actualUnconfirmed`: 現在が対象月の翌月1日 00:00 以後のときだけ、**ボードの対象の学生（クラスの絞り込み後）**のうち、表示状態が対象外でなく、実績が未確認（スプレッドシートに行が無い学生も未確認）の人数。それより前は 0。
 - 締切を過ぎても、下書きの月の表示状態は `下書き` のまま（未提出にしない）。
-- `backup`: 保存先（`BACKUP_FOLDER_ID`）が未設定、最後のバックアップ（`LAST_BACKUP_AT`）が無い、または40日以上前なら `warn: true`。
-- 一覧を返す前に、保存先フォルダ（「ShiftDB バックアップ」）・毎月の自動実行・最初のバックアップが無ければ用意する（`backup_ensureSetup_`。失敗しても一覧は返す）。
+- `backup`: 保存先（`BACKUP_FOLDER_ID`）が未設定（`reason: 'NO_FOLDER'`）、最後のバックアップ（`LAST_BACKUP_AT`）が無い（`'NEVER'`）、日付として読めない・今日より後（`'BAD_DATE'`）、40日以上前（`'OLD'`）なら `warn: true`。問題なければ `reason: null`。画面は理由ごとに文を分け、マニュアルの「バックアップの赤い注意が出たとき」に直し方を書く（2026-10-07）。
+- 一覧を返す前に、保存先フォルダ（「ShiftDB バックアップ」）・毎月の自動実行・最初のバックアップが無ければ用意する（`backup_ensureSetup_`。失敗しても一覧は返す）。最初のバックアップが取れなかったときのやり直しは1日1回まで（Script Properties の `LAST_BACKUP_ATTEMPT_AT` の日付で判定。2026-10-07）。
 - `errorCodes` の計算では、確定済の月に翌月の下書きの時間を数えない（月をまたぐ28時間超は翌月の側に出る）。学生の `api_getMonth` の表示も同じ。
 
 `api_adminPrintHtml`:
@@ -285,7 +286,11 @@ src/
 - 学生の氏名など、保存されている文字は**必ず** `& < > " '` をエスケープする。
 - ページの高さは固定せず、はみ出しを切り捨てない（`overflow: hidden` を使わない）。予定の多い月は、`student-page` の `style` の `--fs`（文字 11〜6px）・`--rh`（行の高さ 6.6〜3.5mm）を小さくして全日・合計・署名を A4 縦1枚に収める。最小でも収まらない月は、行の途中で切らずに次の紙へ続ける（2026-10-07）。
 
-`api_adminPurgeExpired`: 現在の年月から保存期間（月数）を引いた年月より前の月次申告の行を消す（例: 2026-10 で24か月 → 2024-09 以前を消し、2024-10 は残す）。
+`api_adminPurgeExpired`: 現在の年月から保存期間（月数）を引いた年月（`cutoffYm`）より前の月次申告の行を消す（例: 2026-10 で24か月 → 2024-09 以前を消し、2024-10 は残す）。
+
+- `{ preview: true }`: 消さずに `{ retentionMonths, cutoffYm, count }` を返す。画面は確認の文に「保存期間はNか月です。YYYY-MM より前を削除します（N件）」と出す。
+- `{ retentionMonths, cutoffYm }`: 確認で見せた値。今の設定・今日から出した値とどちらかでも違えば、消さずに `{ ok: false, error: 'VERSION_CONFLICT', details: { reason: 'SETTINGS_CHANGED', retentionMonths, cutoffYm } }`（画面は「設定が変わりました。開き直してください」）。形が違えば `BAD_REQUEST`。
+- 引数を省くと、これまでどおり今の設定で消す（画面は必ず値を送る）。2026-10-07 追加。
 
 ### 6.6 そのほかの公開関数
 
@@ -335,6 +340,7 @@ AuditLog スプレッドシートの `AUDIT_LOG` シートは、**この列・�
 ## 第8章 バックアップ（Backup.js）
 
 - `backupMonthly()`: Script Properties の `BACKUP_FOLDER_ID` のフォルダへ、ShiftDB と AuditLog を `ShiftDB_YYYY-MM`・`AuditLog_YYYY-MM` の名前で複製する。同じ年月の複製が済んでいれば何もしない（Script Properties の `LAST_BACKUP_YM` で判定）。
+  - 2026-10-07 追加: ファイルごとに写した月を `BACKUP_SHIFTDB_YM`・`BACKUP_AUDITLOG_YM` に残し、今月すでに写したファイルは写し直さない（片方だけ失敗しても、写せた方を何度も写さない）。試した日時を `LAST_BACKUP_ATTEMPT_AT` に、失敗の内容を `LAST_BACKUP_ERROR` に残し、失敗したら例外を投げる（実行数に残す）。両方そろったときだけ `LAST_BACKUP_YM`・`LAST_BACKUP_AT` を書く。
 - `installTriggers()`: 既存の `backupMonthly` のトリガーを消してから、毎月1日 3時台に `backupMonthly` を呼ぶトリガーを1つ作る。
 - `BACKUP_FOLDER_ID` は、管理者が Drive にフォルダを作って手で設定する（第12章の手順書に書く）。
 - この2つは自動テストしない。
