@@ -101,6 +101,9 @@ html = html.replace('<head>', '<head><script>' + shim + '</script>');
   await page.fill('[data-key="yearMonth"]', '2026-10'); await page.selectOption('[data-key="className"]', 'A'); await page.fill('[data-key="deadlineAt"]', '2026-09-30');
   await page.click('[data-act="submit"]'); await wait();
   if (!dialogs.some((m) => m.includes('入力期限を保存しました（A）'))) throw new Error('入力期限が保存されない: ' + dialogs.slice(-1));
+  await page.click('#btn-open-deadline'); await wait();
+  if (!(await page.textContent('.deadline-list')).includes('2026-09-30 23:59')) throw new Error('登録済みの期限の一覧に出ない');
+  await page.click('#btn-dialog-close');
 
   step('長期休業を登録');
   await page.click('#btn-open-holiday'); await wait();
@@ -163,6 +166,8 @@ html = html.replace('<head>', '<head><script>' + shim + '</script>');
   await page.click('#btn-logout-admin');
   await page.fill('#inp-loginId', stId); await page.click('#btn-login'); await wait();
   await page.waitForSelector('#student-screen:not([hidden])');
+  // 9月は入力期限が未登録 → 「まだ受付していません」と出し、保存できない（2026-10-07）
+  if (!(await page.textContent('#st-closed-notice')).includes('まだ受付していません') || !(await page.isDisabled('#btn-save-draft'))) throw new Error('期限の無い月の案内が出ない');
   await page.click('#btn-next-month'); await wait(); // 9月 → 10月
   if ((await page.textContent('#st-year-month')) !== '2026-10') throw new Error('月の切替');
   if (!(await page.textContent('#st-name')).includes('251001')) throw new Error('学生名が出ない');

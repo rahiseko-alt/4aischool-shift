@@ -82,6 +82,24 @@ function print_formatShiftsCell_(shifts) {
   };
 }
 
+// 1枚（A4縦）に収まる文字の大きさ（px）と行の高さ（mm）を選ぶ（2026-10-07）。
+// 以前はページの高さを固定して、はみ出した日・合計・署名を切り捨てていた。
+// dayLines: 日ごとの行数（1件以下は1行。2件以上は件数＋「計」の1行）。hasBanner: 対象外の帯がある。hasKana: 氏名の下にカナの行がある
+var PRINT_DENSITIES_ = [[11, 6.6], [10, 5.8], [9, 5.2], [8, 4.6], [7, 4.0], [6, 3.5]];
+function print_pickDensity_(dayLines, hasBanner, hasKana) {
+  // 表に使える高さ: 277mm（297mm − 上下の余白）から、見出し・学生情報・合計と署名（実測で約32mm）とゆとりを引いたもの
+  var budget = 277 - 36 - (hasBanner ? 8 : 0) - (hasKana ? 4 : 0);
+  for (var i = 0; i < PRINT_DENSITIES_.length; i++) {
+    var fs = PRINT_DENSITIES_[i][0], rh = PRINT_DENSITIES_[i][1];
+    var lineMm = fs * 0.2646 * 1.2;
+    var total = rh; // 表の見出しの行
+    for (var d = 0; d < dayLines.length; d++) total += Math.max(rh, dayLines[d] * lineMm + 0.8);
+    if (total <= budget) return { fs: fs, rh: rh };
+  }
+  // それでも収まらない月は一番小さくし、続きは次の紙に送る（切り捨てない）
+  return { fs: PRINT_DENSITIES_[PRINT_DENSITIES_.length - 1][0], rh: PRINT_DENSITIES_[PRINT_DENSITIES_.length - 1][1] };
+}
+
 function api_adminPrintHtml(token, params) {
   try {
     var auth = auth_verifySession_(token, 'admin');
@@ -209,6 +227,7 @@ function api_adminPrintHtml(token, params) {
         var daysInMonth = core_getDaysInMonth_(ym);
         var planTotalMonth = 0;
         var rowsHtml = [];
+        var dayLines = [];
         var publicHolidays = util_jpHolidaysOfMonth_(ym);
 
         for (var d = 1; d <= daysInMonth; d++) {
@@ -221,6 +240,7 @@ function api_adminPrintHtml(token, params) {
           var dayPShifts = (pEval && pEval.shifts && pEval.shifts[dayStr]) || pShifts[dayStr] || [];
           var pCell = print_formatShiftsCell_(dayPShifts);
           planTotalMonth += pCell.totalMinutes;
+          dayLines.push(dayPShifts.length > 1 ? dayPShifts.length + 1 : 1);
 
           var remarks = [];
           if (isOutOfScope) {
@@ -247,8 +267,9 @@ function api_adminPrintHtml(token, params) {
           ? '<div class="out-of-scope-banner">※ この月は学校確定により「対象外」として処理されています。</div>'
           : '';
 
+        var density = print_pickDensity_(dayLines, isOutOfScope, !!student.name_kana);
         var pageHtml =
-          '<section class="student-page">' +
+          '<section class="student-page" style="--fs: ' + density.fs + 'px; --rh: ' + density.rh + 'mm;">' +
             '<div class="page-header">' +
               '<h1 class="page-title">アルバイトシフト予定表</h1>' +
               '<div class="header-ym">' + print_escapeHtml_(ym.slice(0, 4)) + '年' + Number(ym.slice(5, 7)) + '月分</div>' +
@@ -290,7 +311,8 @@ function api_adminPrintHtml(token, params) {
       '@page { size: A4 portrait; margin: 10mm; }\n' +
       '* { box-sizing: border-box; }\n' +
       'body { font-family: "Hiragino Kaku Gothic ProN", "BIZ UDPGothic", Meiryo, sans-serif; margin: 0; color: #222; background: #fff; }\n' +
-      '.student-page { width: 190mm; height: 275mm; margin: 0 auto; overflow: hidden; break-after: page; page-break-after: always; }\n' +
+      // 高さは固定しない（はみ出しを切り捨てない）。予定の多い月は --fs・--rh で文字と行を小さくして1枚に収める
+      '.student-page { width: 190mm; margin: 0 auto; break-after: page; page-break-after: always; }\n' +
       '.student-page:last-child { break-after: auto; page-break-after: auto; }\n' +
       '.page-header { display: flex; justify-content: space-between; align-items: baseline; border-bottom: 2px solid #222; padding-bottom: 2mm; margin-bottom: 3mm; }\n' +
       '.page-title { font-size: 18px; margin: 0; }\n' +
@@ -299,13 +321,14 @@ function api_adminPrintHtml(token, params) {
       '.info-table th, .info-table td { border: 1px solid #888; padding: 1.5mm 2mm; text-align: left; }\n' +
       '.info-table th { background: #f0f0f0; white-space: nowrap; width: 1%; }\n' +
       '.out-of-scope-banner { margin-bottom: 2mm; padding: 1.5mm 2mm; border: 1px solid #888; font-size: 11px; font-weight: bold; }\n' +
-      '.print-table { width: 100%; border-collapse: collapse; font-size: 11px; table-layout: fixed; }\n' +
-      '.print-table th, .print-table td { border: 1px solid #888; height: 6.6mm; padding: 0 2mm; text-align: center; vertical-align: middle; }\n' +
+      '.print-table { width: 100%; border-collapse: collapse; font-size: var(--fs, 11px); line-height: 1.2; table-layout: fixed; }\n' +
+      '.print-table th, .print-table td { border: 1px solid #888; height: var(--rh, 6.6mm); padding: 0.2mm 2mm; text-align: center; vertical-align: middle; }\n' +
+      '.print-table tr { break-inside: avoid; page-break-inside: avoid; }\n' +
       '.print-table th { background: #f0f0f0; font-weight: bold; }\n' +
       '.print-table td.c-date { text-align: left; }\n' +
-      '.print-table td.c-note { text-align: left; font-size: 10px; }\n' +
+      '.print-table td.c-note { text-align: left; font-size: 0.9em; }\n' +
       '.print-table tr.holiday-row td { background: #f6f6f6; -webkit-print-color-adjust: exact; print-color-adjust: exact; }\n' +
-      '.page-foot { display: flex; justify-content: space-between; align-items: flex-end; margin-top: 4mm; font-size: 13px; }\n' +
+      '.page-foot { display: flex; justify-content: space-between; align-items: flex-end; margin-top: 4mm; font-size: 13px; break-inside: avoid; page-break-inside: avoid; }\n' +
       '.sign-line { display: inline-block; width: 60mm; border-bottom: 1px solid #222; margin-left: 2mm; }\n' +
       '</style>\n' +
       '</head>\n' +
