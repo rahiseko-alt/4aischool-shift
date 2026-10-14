@@ -195,7 +195,7 @@ function api_adminPrintHtml(token, params) {
         var isOutOfScope = (sub && sub.status === '学校確定');
         var displayStatus = '未提出';
         if (sub) {
-          if (sub.status === '確定済') displayStatus = '確定済';
+          if (sub.status === '確定済') displayStatus = (Number(sub.version) || 0) === 0 ? '確定済（本人未入力）' : '確定済';
           else if (sub.status === '学校確定') displayStatus = '対象外';
           else if (sub.status === '下書き') displayStatus = '下書き';
         }

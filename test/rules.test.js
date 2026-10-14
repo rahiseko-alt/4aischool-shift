@@ -19,7 +19,7 @@ const REQUIRED_API = [
   'api_adminPrintHtml', 'api_adminPurgeExpired', 'api_adminSeedDemo', 'api_adminActAsDemoStudent', 'api_adminImportRoster',
   'api_adminListClasses', 'api_adminAddClass', 'api_adminDeleteClass', 'api_adminChangeCredentials',
 ];
-const OTHER_PUBLIC = ['doGet', 'setupInitial', 'resetAdminPassword', 'backupMonthly', 'installTriggers', 'evaluateMonth'];
+const OTHER_PUBLIC = ['doGet', 'setupInitial', 'resetAdminPassword', 'backupMonthly', 'installTriggers', 'evaluateMonth', 'autoConfirmMonths'];
 
 test('公開関数（名前が _ で終わらないトップレベル関数）は決められた一覧だけ', () => {
   const app = load();

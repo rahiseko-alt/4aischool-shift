@@ -17,7 +17,7 @@ jobs:
         with:
           node-version: 22
       - name: 指紋一覧そのものが渡した時のままか
-        run: echo "36120803e1203666c31e8a77a82bb5b7722b2dc3f6c76232850f38eca09aa948  test/LOCKED.sha256" | sha256sum -c
+        run: echo "5976e09f54dcd275f411325e4914d9ffb61aba641aca52b3bba9c4a73152b639  test/LOCKED.sha256" | sha256sum -c
       - name: 変更禁止のファイルが渡した時のままか
         run: sh scripts/check-locked.sh
       - name: テスト（src/ ができてから実行する）

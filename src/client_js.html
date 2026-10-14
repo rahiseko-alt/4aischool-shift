@@ -766,7 +766,7 @@
       // 状態の絞り込みは画面で行う（下書きは表示しない。2026-10-14）
       var st = el('admin-status-filter').value;
       var rows = res.data.rows.filter(function (r) {
-        return !st || (st === 'エラー' ? (r.errorCodes || []).length > 0 : boardStatus(r) === st);
+        return !st || (st === 'エラー' ? (r.errorCodes || []).length > 0 : (boardStatus(r) === st || (st === '確定済' && boardStatus(r) === '確定済（本人未入力）')));
       });
       state.admin.boardRows = rows;
       state.admin.boardYm = ym;
