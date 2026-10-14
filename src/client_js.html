@@ -47,7 +47,7 @@
   function hm(min) { min = +min || 0; return Math.floor(min / 60) + ':' + pad2(min % 60); }
 
   function showScreen(name) {
-    ['login-screen', 'change-password-screen', 'student-screen', 'admin-screen'].forEach(function (s) {
+    ['login-screen', 'identity-screen', 'change-password-screen', 'student-screen', 'admin-screen'].forEach(function (s) {
       el(s).hidden = s !== name;
     });
   }
@@ -160,6 +160,7 @@
       if (v) e.textContent = v;
     });
     document.querySelectorAll('.lang-select').forEach(function (sel) { sel.value = currentLang; });
+    if (!el('identity-screen').hidden) renderIdentity();
     if (state.monthData && !el('student-screen').hidden) renderStudent();
     if (lastHistory && !el('student-screen').hidden) renderHistory(lastHistory);
   }
@@ -221,14 +222,46 @@
     var loginId = el('inp-loginId').value.trim();
     var password = el('inp-password').value;
     if (!loginId) return; // 学生は学籍番号だけで入れる（パスワードは管理者だけ）
-    call('api_login', [loginId, password]).then(function (res) {
+    call('api_login', [loginId, password, true]).then(function (res) {
       if (!res.ok) { showLoginError(res); return; }
       el('inp-password').value = '';
       state.token = res.data.token;
       state.role = res.data.role;
       state.studentId = res.data.studentId;
+      if (res.data.identityPending) { showIdentity(res.data.identity); return; }
       if (res.data.mustChangePassword) showScreen('change-password-screen');
       else afterLogin();
+    });
+  });
+
+  // 本人確認: 氏名とクラスを出して、本人かどうかを答えさせる。YES で先へ、NO はログインを取り消してログイン画面に戻る
+  var identityInfo = null;
+  function showIdentity(info) {
+    identityInfo = info || { name: '', className: '' };
+    hideError('identity-error');
+    renderIdentity();
+    showScreen('identity-screen');
+  }
+  function renderIdentity() {
+    if (!identityInfo) return;
+    el('identity-question').textContent = t('label.identityQuestion').replace('{name}', identityInfo.name).replace('{class}', identityInfo.className);
+  }
+  el('btn-identity-yes').addEventListener('click', function () {
+    hideError('identity-error');
+    call('api_confirmIdentity', [state.token, true]).then(function (res) {
+      if (!res.ok) { if (res.error !== 'AUTH_REQUIRED') showError('identity-error', res.error); return; }
+      identityInfo = null;
+      afterLogin();
+    });
+  });
+  el('btn-identity-no').addEventListener('click', function () {
+    hideError('identity-error');
+    call('api_confirmIdentity', [state.token, false]).then(function (res) {
+      if (!res.ok && res.error !== 'AUTH_REQUIRED') { showError('identity-error', res.error); return; }
+      identityInfo = null;
+      resetState();
+      el('inp-loginId').value = '';
+      showScreen('login-screen');
     });
   });
 

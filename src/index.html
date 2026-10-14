@@ -43,6 +43,27 @@
   </div>
 
   <!-- 初回パスワード変更画面（Enter キーでも変更できる） -->
+  <!-- 本人確認: ログイン直後に氏名とクラスを出し、本人かどうかを答えさせる -->
+  <div id="identity-screen" hidden>
+    <div class="login-lang-bar">
+      <select class="lang-select" aria-label="Language">
+        <option value="ja">日本語</option>
+        <option value="en">English</option>
+        <option value="ne">नेपाली</option>
+        <option value="vi">Tiếng Việt</option>
+        <option value="my">မြန်မာ</option>
+        <option value="si">සිංහල</option>
+        <option value="bn">বাংলা</option>
+      </select>
+    </div>
+    <div class="login-card">
+      <p id="identity-question" class="identity-question"></p>
+      <p id="identity-error" class="error-msg" hidden></p>
+      <button id="btn-identity-yes" class="btn-primary" style="width: 100%; margin-top: 0.5rem;" data-i18n="button.identityYes">YES</button>
+      <button id="btn-identity-no" class="btn-outline" style="width: 100%; margin-top: 0.5rem;" data-i18n="button.identityNo">NO</button>
+    </div>
+  </div>
+
   <div id="change-password-screen" hidden>
     <div class="login-card">
       <div class="login-brand">

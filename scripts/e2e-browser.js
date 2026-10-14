@@ -182,6 +182,16 @@ html = html.replace('<head>', '<head><script>' + shim + '</script>');
   step('ログアウト → 学生ログイン（学籍番号だけ・パスワード無し）');
   await page.click('#btn-logout-admin');
   await page.fill('#inp-loginId', stId); await page.click('#btn-login'); await wait();
+  // 本人確認（2026-10-14）: 氏名とクラスが出る。NO ならログイン画面に戻り、何も開けない。YES で先へ進む
+  await page.waitForSelector('#identity-screen:not([hidden])');
+  const idq = await page.textContent('#identity-question');
+  if (!idq.includes('251001') && !idq.includes('さん（A）')) throw new Error('本人確認に氏名とクラスが出ない: ' + idq);
+  await page.click('#btn-identity-no'); await wait();
+  await page.waitForSelector('#login-screen:not([hidden])');
+  if ((await page.inputValue('#inp-loginId')) !== '') throw new Error('NO のあとにログインIDが残っている');
+  await page.fill('#inp-loginId', stId); await page.click('#btn-login'); await wait();
+  await page.waitForSelector('#identity-screen:not([hidden])');
+  await page.click('#btn-identity-yes'); await wait();
   await page.waitForSelector('#student-screen:not([hidden])');
   // 9月は入力期限が未登録 → 「まだ受付していません」と出し、保存できない（2026-10-07）
   if (!(await page.textContent('#st-closed-notice')).includes('まだ受付していません') || !(await page.isDisabled('#btn-confirm-shift'))) throw new Error('期限の無い月の案内が出ない');
@@ -316,6 +326,7 @@ html = html.replace('<head>', '<head><script>' + shim + '</script>');
     await page.waitForSelector('#login-screen:not([hidden])');
     if (!(await page.textContent('#login-error')).includes('ログイン')) throw new Error('期限切れの案内が出ない');
     await page.fill('#inp-loginId', stId); await page.click('#btn-login'); await wait();
+    await page.waitForSelector('#identity-screen:not([hidden])'); await page.click('#btn-identity-yes'); await wait();
     await page.click('#btn-next-month'); await wait();
   };
   step('締切後は入力できない（セッション切れ → 入り直し）');

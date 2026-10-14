@@ -10,7 +10,7 @@ const { load, SRC_DIR } = require('./helpers/load');
 
 // ブラウザ（google.script.run）から呼べてしまう関数は、この一覧だけ。
 const REQUIRED_API = [
-  'api_login', 'api_logout', 'api_changePassword',
+  'api_login', 'api_logout', 'api_confirmIdentity', 'api_changePassword',
   'api_getMonth', 'api_saveDraft', 'api_confirm', 'api_saveActual', 'api_confirmActual', 'api_getHistory',
   'api_adminBoard', 'api_adminStudentDetail', 'api_adminUpsertStudent', 'api_adminResetPassword', 'api_adminUnlockLogin',
   'api_adminCreateAdmin', 'api_adminGrantUnlock', 'api_adminSchoolConfirm', 'api_adminUndoSchoolConfirm',
