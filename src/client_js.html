@@ -488,16 +488,14 @@
     // 「確定済み」の札と「前月未確定」の注意は出さない（利用者の判断。確定済みかどうかは提出履歴で分かる）
     var visible = (ev.codes || []).filter(function (c) { return c.severity !== 'admin' && c.code !== 'PREV_MONTH_DRAFT'; });
     el('st-codes').innerHTML = codesHtml(visible.filter(function (c) { return !c.date; }));
-    // 見出しの横に大きく「確定済」か「未確定」（学校確定の月は「対象外」）
-    var cs = el('st-confirm-state');
-    cs.textContent = data.status === '確定済' ? t('label.status.confirmed') : (data.status === '学校確定' ? statusText(data.status) : t('label.notConfirmed'));
-    cs.className = 'confirm-state ' + (data.status === '確定済' ? 'is-confirmed' : (data.status === '学校確定' ? 'is-out' : 'is-unconfirmed'));
-
+    // 見出しの横の「確定済」「未確定」「対象外」の札は refreshConfirmMark が出す
     el('shifts-table').innerHTML = shiftTableHtml(data.yearMonth, data.shifts || {}, {
       rowClass: 'plan-row', timeLabel: 'label.planTime', totalLabel: 'label.planTotal',
       disabled: closed, codes: visible, holidays: data.holidays || []
     });
     refreshTotals('shifts-table');
+    state.savedRows = JSON.stringify(collectRows('shifts-table', 'plan-row'));
+    refreshConfirmMark();
   }
 
   // 開始・終了のどちらかだけ入った行もサーバへ送り、「入力不足」で止めてもらう。
@@ -584,6 +582,18 @@
     });
     call('api_getHistory', [state.token]).then(function (res) { if (res.ok) renderHistory(res.data); });
   }
+
+  // 見出し横の札。確定済は「表が保存された内容のまま」のときだけ出す（表を直し始めたら未確定にする。2026-10-14）
+  function refreshConfirmMark() {
+    var data = state.monthData;
+    if (!data) return;
+    var cs = el('st-confirm-state');
+    var dirty = data.status === '確定済' && JSON.stringify(collectRows('shifts-table', 'plan-row')) !== state.savedRows;
+    var confirmed = data.status === '確定済' && !dirty;
+    cs.textContent = confirmed ? t('label.status.confirmed') : (data.status === '学校確定' ? statusText(data.status) : t('label.notConfirmed'));
+    cs.className = 'confirm-state ' + (confirmed ? 'is-confirmed' : (data.status === '学校確定' ? 'is-out' : 'is-unconfirmed'));
+  }
+  ['input', 'change'].forEach(function (ev) { el('shifts-table').addEventListener(ev, refreshConfirmMark); });
 
   // ---- 実績確認 ----
   function renderActual() {
