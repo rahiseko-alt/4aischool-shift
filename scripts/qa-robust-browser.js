@@ -106,6 +106,7 @@ async function loginAdmin(page) {
 }
 async function loginStudent(page, sid) {
   await page.fill('#inp-loginId', sid); await page.click('#btn-login');
+  await page.waitForSelector('#identity-screen:not([hidden])'); await page.click('#btn-identity-yes');
   await page.waitForSelector('#student-screen:not([hidden])'); await idle(page);
 }
 const boardIds = (page) => page.$$eval('#admin-board tr.board-row', (xs) => xs.map((x) => x.getAttribute('data-sid')));
@@ -239,9 +240,9 @@ const boardStatuses = (page) => page.$$eval('#admin-board tr.board-row td:nth-ch
   await loginStudent(p2.page, 'QA26002');
   await p2.page.locator('#shifts-table tr.plan-row[data-day="4"] .sh-start').fill('10:00');
   await p2.page.locator('#shifts-table tr.plan-row[data-day="4"] .sh-end').fill('12:00');
-  const s0 = runs('api_saveDraft');
-  once('api_saveDraft', { hang: true });
-  await p2.page.click('#btn-save-draft');
+  const s0 = runs('api_confirm');
+  once('api_confirm', { hang: true });
+  await p2.page.click('#btn-confirm-shift');
   await until(p2.page, () => !document.getElementById('global-spinner').hidden, null, '覆いが出る');
   await p2.page.clock.fastForward(60000);
   if (await p2.page.isHidden('#global-spinner')) throw new Error('60秒で覆いが消えた');
@@ -250,9 +251,9 @@ const boardStatuses = (page) => page.$$eval('#admin-board tr.board-row td:nth-ch
   const tmsg = await p2.page.textContent('#shift-error');
   if (tmsg !== I18N.ja['error.TIMEOUT']) throw new Error('応答が無いときの知らせ: ' + tmsg);
   await p2.page.clock.fastForward(20000);
-  if (runs('api_saveDraft') !== s0 + 1) throw new Error('応答の無い書き込みを送り直した');
+  if (runs('api_confirm') !== s0 + 1) throw new Error('応答の無い書き込みを送り直した');
   // ボタンはまた押せる（画面が固まらない）。さっきの保存はサーバで済んでいたので、版の食い違い → 最新を読み直して出す
-  await p2.page.click('#btn-save-draft');
+  await p2.page.click('#btn-confirm-shift');
   await until(p2.page, (t) => document.getElementById('shift-error').textContent === t, I18N.ja['label.conflictReloaded'], '押し直すと最新が出る');
   await until(p2.page, () => document.querySelector('#shifts-table tr.plan-row[data-day="4"] .sh-end') && document.querySelector('#shifts-table tr.plan-row[data-day="4"] .sh-end').value === '12:00', null, '済んでいた保存の中身');
   await p2.page.close();

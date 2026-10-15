@@ -182,9 +182,19 @@ html = html.replace('<head>', '<head><script>' + shim + '</script>');
   step('ログアウト → 学生ログイン（学籍番号だけ・パスワード無し）');
   await page.click('#btn-logout-admin');
   await page.fill('#inp-loginId', stId); await page.click('#btn-login'); await wait();
+  // 本人確認（2026-10-14）: 氏名とクラスが出る。NO ならログイン画面に戻り、何も開けない。YES で先へ進む
+  await page.waitForSelector('#identity-screen:not([hidden])');
+  const idq = await page.textContent('#identity-question');
+  if (!idq.includes('251001') && !idq.includes('さん（A）')) throw new Error('本人確認に氏名とクラスが出ない: ' + idq);
+  await page.click('#btn-identity-no'); await wait();
+  await page.waitForSelector('#login-screen:not([hidden])');
+  if ((await page.inputValue('#inp-loginId')) !== '') throw new Error('NO のあとにログインIDが残っている');
+  await page.fill('#inp-loginId', stId); await page.click('#btn-login'); await wait();
+  await page.waitForSelector('#identity-screen:not([hidden])');
+  await page.click('#btn-identity-yes'); await wait();
   await page.waitForSelector('#student-screen:not([hidden])');
   // 9月は入力期限が未登録 → 「まだ受付していません」と出し、保存できない（2026-10-07）
-  if (!(await page.textContent('#st-closed-notice')).includes('まだ受付していません') || !(await page.isDisabled('#btn-save-draft'))) throw new Error('期限の無い月の案内が出ない');
+  if (!(await page.textContent('#st-closed-notice')).includes('まだ受付していません') || !(await page.isDisabled('#btn-confirm-shift'))) throw new Error('期限の無い月の案内が出ない');
   await page.click('#btn-next-month'); await wait(); // 9月 → 10月
   if ((await page.textContent('#st-year-month')) !== '2026-10') throw new Error('月の切替');
   if (!(await page.textContent('#st-name')).includes('251001')) throw new Error('学生名が出ない');
@@ -232,13 +242,12 @@ html = html.replace('<head>', '<head><script>' + shim + '</script>');
   if (inputW < 60) throw new Error('時刻の入力欄が狭すぎる: ' + inputW);
   await page.setViewportSize({ width: 390, height: 844 });
 
-  step('途中保存 → その日の行の下に注意（8時間超）が出る');
-  await page.click('#btn-save-draft'); await wait(); await wait();
+  step('確定ボタン → 違反（8時間超）は断られ、その日の行が赤くなる（途中保存のボタンは無い。2026-10-14）');
+  if (await page.$('#btn-save-draft')) throw new Error('途中保存のボタンが残っている');
+  await page.click('#btn-confirm-shift'); await wait(); await wait();
   const msg = await page.textContent('#shift-error');
-  if (msg !== '保存しました') throw new Error('途中保存の知らせ: ' + msg);
-  const day2codes = await page.textContent('#shifts-table tr.day-codes-row[data-day="2"]');
-  if (!day2codes.includes('1日8時間超過')) throw new Error('2日の注意が出ない: ' + day2codes);
-  if ((await cells(row(3))) !== '1時間 / 8時間') throw new Error('保存後の表示: ' + (await cells(row(3))));
+  if (!msg.includes('確定できません') || !msg.includes('2日: 1日8時間超過')) throw new Error('確定を断る知らせ: ' + msg);
+  if (!(await page.getAttribute('#shifts-table tr.day-row[data-day="2"]', 'class')).includes('row-error')) throw new Error('2日の行が赤くならない');
   if (process.env.E2E_SCREENSHOT) {
     await page.evaluate(() => window.scrollTo(0, document.getElementById('shifts-section').getBoundingClientRect().top + window.scrollY - document.querySelector('#student-screen .top-bar').offsetHeight - 8));
     await page.screenshot({ path: process.env.E2E_SCREENSHOT });
@@ -259,48 +268,54 @@ html = html.replace('<head>', '<head><script>' + shim + '</script>');
 
   step('入力途中の行は入力不足で止まる（黙って消さない）');
   await row(5).locator('.sh-start').fill('10:00');
-  await page.click('#btn-save-draft'); await wait();
+  await page.click('#btn-confirm-shift'); await wait();
   if (!(await page.textContent('#shift-error')).includes('入力不足')) throw new Error('入力不足の案内');
   await row(5).locator('.sh-start').fill('');
 
   step('言語切替（ネパール語・ベトナム語・ベンガル語・ミャンマー語）');
   await page.selectOption('#student-screen .lang-select', 'ne');
-  if (!(await page.textContent('#btn-save-draft')).match(/[ऀ-ॿ]/)) throw new Error('ネパール語に変わらない');
+  if (!(await page.textContent('#btn-confirm-shift')).match(/[ऀ-ॿ]/)) throw new Error('ネパール語に変わらない');
   await page.selectOption('#student-screen .lang-select', 'vi');
   if ((await page.textContent('#shifts-table tr.day-row[data-day="1"] .day-dow')).indexOf('T5') < 0) throw new Error('ベトナム語の曜日');
   if (!(await totalText()).includes('Tổng giờ làm dự kiến')) throw new Error('ベトナム語の合計: ' + (await totalText()));
   await page.selectOption('#student-screen .lang-select', 'bn');
-  if (!(await page.textContent('#btn-save-draft')).match(/[\u0980-\u09FF]/)) throw new Error('ベンガル語に変わらない');
+  if (!(await page.textContent('#btn-confirm-shift')).match(/[\u0980-\u09FF]/)) throw new Error('ベンガル語に変わらない');
   await page.selectOption('#student-screen .lang-select', 'my');
-  if (!(await page.textContent('#btn-save-draft')).match(/[\u1000-\u109F]/)) throw new Error('ミャンマー語に変わらない');
+  if (!(await page.textContent('#btn-confirm-shift')).match(/[\u1000-\u109F]/)) throw new Error('ミャンマー語に変わらない');
   await page.selectOption('#student-screen .lang-select', 'ja');
 
-  step('ページを読み込み直すとシフトが残っている（保存済みの内容）');
+  step('確定すると、ページを読み込み直してもシフトが残っている（保存済みの内容）');
+  // 言語切替で表が描き直され、保存していない入力は消えているので、入れ直す
+  await setRow(row(3), '21:00', '06:00'); await setRow(row(1), '22:00', '02:00'); await setRow(row(2), '09:00', '18:00');
+  await page.click('#btn-confirm-shift'); await wait(); await wait();
+  if ((await page.textContent('#st-confirm-state')) !== '確定済') throw new Error('確定後に「確定済」が出ない: ' + (await page.textContent('#st-confirm-state')) + ' / ' + (await page.textContent('#shift-error')));
   await page.click('#btn-prev-month'); await wait(); await page.click('#btn-next-month'); await wait();
   const v = await row(2).locator('.sh-end').inputValue();
-  if (v !== '18:15') throw new Error('保存したシフトが表示されない: ' + v);
-  if ((await totalText()) !== '勤務予定時間合計: 20時間15分') throw new Error('読み込み直した合計: ' + (await totalText()));
+  if (v !== '18:00') throw new Error('保存したシフトが表示されない: ' + v);
 
   step('月を切り替えた直後は、読み込み終わるまで表が空で保存できない。保存は表に出ている月で送る');
   slowGetMonth = 800;
   await page.click('#btn-next-month');
-  if (!(await page.isDisabled('#btn-save-draft'))) throw new Error('読み込み中に保存ボタンが押せる');
+  if (!(await page.isDisabled('#btn-confirm-shift'))) throw new Error('読み込み中に保存ボタンが押せる');
   if ((await page.$$eval('#shifts-table tr.plan-row', (xs) => xs.length)) !== 0) throw new Error('読み込み中に前の月の表が残っている');
   await page.click('#btn-prev-month');
   await page.waitForTimeout(1000); await wait();
   slowGetMonth = 0;
   if ((await page.textContent('#st-year-month')) !== '2026-10') throw new Error('月が戻らない');
-  if ((await row(2).locator('.sh-end').inputValue()) !== '18:15') throw new Error('遅れて届いた11月の表で上書きされた');
-  await page.click('#btn-save-draft'); await wait();
+  if ((await row(2).locator('.sh-end').inputValue()) !== '18:00') throw new Error('遅れて届いた11月の表で上書きされた');
+  await page.click('#btn-confirm-shift'); await wait();
   if (savedYm !== '2026-10') throw new Error('保存した月がずれた: ' + savedYm);
 
-  step('学生で確定: 1日8時間超の日があると止まり、その日が赤くなる。直せば確定できる');
-  if ((await page.textContent('#st-confirm-state')) !== '未確定') throw new Error('確定前に「未確定」が出ない: ' + (await page.textContent('#st-confirm-state')));
+  step('学生で確定: 確定後に直し始めると札が未確定になり、1日8時間超の日があると確定は止まってその日が赤くなる。直せば確定できる（途中保存は無い。2026-10-14）');
+  await row(2).locator('.sh-end').fill('18:15');
+  if ((await page.textContent('#st-confirm-state')) !== '未確定') throw new Error('直し始めても「未確定」にならない: ' + (await page.textContent('#st-confirm-state')));
   await page.click('#btn-confirm-shift'); await wait(); await wait();
   if (!(await page.textContent('#shift-error')).startsWith('確定できません。')) throw new Error('「確定できません。」で始まらない: ' + (await page.textContent('#shift-error')));
   if (!(await page.textContent('#shift-error')).includes('2日: 1日8時間超過')) throw new Error('8時間超で止まらない: ' + (await page.textContent('#shift-error')));
   if (!(await row(2).getAttribute('class')).includes('row-error')) throw new Error('8時間超の日が赤くならない');
+  if ((await page.textContent('#st-confirm-state')) !== '未確定') throw new Error('断られたあとも「未確定」のまま');
   await row(2).locator('.sh-end').fill('18:00');
+  if ((await page.textContent('#st-confirm-state')) !== '確定済') throw new Error('保存済みの内容に戻したら「確定済」に戻る');
   await page.click('#btn-confirm-shift'); await wait(); await wait();
   if ((await page.textContent('#shift-error')) !== '確定済み') throw new Error('確定の知らせ: ' + (await page.textContent('#shift-error')));
   if ((await page.textContent('#st-confirm-state')) !== '確定済') throw new Error('確定後に「確定済」が出ない: ' + (await page.textContent('#st-confirm-state')));
@@ -311,12 +326,13 @@ html = html.replace('<head>', '<head><script>' + shim + '</script>');
     await page.waitForSelector('#login-screen:not([hidden])');
     if (!(await page.textContent('#login-error')).includes('ログイン')) throw new Error('期限切れの案内が出ない');
     await page.fill('#inp-loginId', stId); await page.click('#btn-login'); await wait();
+    await page.waitForSelector('#identity-screen:not([hidden])'); await page.click('#btn-identity-yes'); await wait();
     await page.click('#btn-next-month'); await wait();
   };
   step('締切後は入力できない（セッション切れ → 入り直し）');
   app.env.clock.set('2026-10-01 00:05');
   await relogin();
-  if (!(await page.isDisabled('#btn-save-draft'))) throw new Error('締切後に保存ボタンが押せる');
+  if (!(await page.isDisabled('#btn-confirm-shift'))) throw new Error('締切後に保存ボタンが押せる');
   if ((await page.textContent('#st-closed-notice')) !== '締切済み') throw new Error('締切済みの表示');
 
   step('実績確認（11/2）: 予定どおり → 保存 → 確認');

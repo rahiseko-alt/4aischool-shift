@@ -123,7 +123,9 @@ function auth_sessionTtlMinutes_() {
   return n >= 5 && n <= 720 ? Math.floor(n) : 120;
 }
 
-function api_login(loginId, password) {
+// identityCheck が true のとき（画面はいつもこれ）、学籍番号で入る学生は本人確認が済むまで確認待ちのセッションになる（2026-10-14）。
+// 確認待ちのセッションは role を 'student_pending' で持ち、api_confirmIdentity か api_logout のほかは受け付けない。
+function api_login(loginId, password, identityCheck) {
   try {
     // 学生は学籍番号だけで入れる（パスワード不要。2026-10-01 利用者の判断。管理者は従来どおりパスワードが要る）
     // パスワードが入っていて、管理者のID（大文字小文字は問わない）と同じなら、学籍番号より管理者を先に見る
@@ -131,7 +133,7 @@ function api_login(loginId, password) {
     var hasPassword = typeof password === 'string' && password !== '';
     var adminByCase = typeof loginId === 'string' && hasPassword ? auth_findAdminByLoginId_(loginId) : null;
     if (typeof loginId === 'string' && loginId.trim() && !adminByCase) {
-      var byNumber = auth_loginByStudentNumber_(loginId);
+      var byNumber = auth_loginByStudentNumber_(loginId, identityCheck === true);
       if (byNumber) return byNumber;
     }
     if (!loginId || typeof loginId !== 'string' || !hasPassword) {
@@ -342,7 +344,7 @@ function auth_findStudentForLogin_(input) {
   return hits.length === 1 ? hits[0] : null;
 }
 
-function auth_loginByStudentNumber_(input) {
+function auth_loginByStudentNumber_(input, identityCheck) {
   var student = auth_findStudentForLogin_(input);
   if (!student) return null;
   var user = null;
@@ -363,12 +365,17 @@ function auth_loginByStudentNumber_(input) {
     db_insertRow_('SESSIONS', {
       token_hash: util_sha256Hex_(token),
       login_id: user.login_id,
-      role: 'student',
+      role: identityCheck ? 'student_pending' : 'student',
       expires_at: util_addMinutesToJst_(now, auth_sessionTtlMinutes_()),
       created_at: now
     });
     db_logAudit_('LOGIN_OK', user.login_id, 'student', user.student_id, '', null, { via: 'student_number' });
-    return { ok: true, data: { token: token, role: 'student', mustChangePassword: false, studentId: user.student_id } };
+    var data = { token: token, role: 'student', mustChangePassword: false, studentId: user.student_id };
+    if (identityCheck) {
+      data.identityPending = true;
+      data.identity = { name: student.name, className: student['class'] };
+    }
+    return { ok: true, data: data };
   } finally {
     lock.releaseLock();
   }
@@ -378,7 +385,7 @@ function api_logout(token) {
   try {
     if (!token || typeof token !== 'string') return { ok: false, error: 'AUTH_REQUIRED' };
 
-    var auth = auth_verifySession_(token);
+    var auth = auth_verifySession_(token, null, false, true); // 本人確認の待ちでもログアウトできる
     if (!auth.ok) return { ok: false, error: 'AUTH_REQUIRED' };
 
     var lock = LockService.getScriptLock();
@@ -397,6 +404,41 @@ function api_logout(token) {
       lock.releaseLock();
     }
     return { ok: true, data: null };
+  } catch (err) {
+    util_logError_(err);
+    return { ok: false, error: 'INTERNAL' };
+  }
+}
+
+// 本人確認の答え。true（YES）で確認待ちを解いて先へ進める。false（NO）はログインを取り消す（セッションを消す）。
+function api_confirmIdentity(token, answer) {
+  try {
+    if (answer !== true && answer !== false) return { ok: false, error: 'BAD_REQUEST' };
+    var auth = auth_verifySession_(token, 'student', false, true);
+    if (!auth.ok) return auth;
+
+    var lock = LockService.getScriptLock();
+    if (!lock.tryLock(5000)) return { ok: false, error: 'BUSY' };
+    try {
+      var sessions = db_readAllRows_('SESSIONS');
+      var tokenHash = util_sha256Hex_(token);
+      var session = null;
+      for (var i = 0; i < sessions.length; i++) {
+        if (sessions[i].token_hash === tokenHash) { session = sessions[i]; break; }
+      }
+      if (!session) return { ok: false, error: 'AUTH_REQUIRED' };
+      if (answer) {
+        if (session.role === 'student_pending') {
+          session.role = 'student';
+          db_updateRow_('SESSIONS', session._rowNum, session);
+        }
+        return { ok: true, data: { confirmed: true } };
+      }
+      db_deleteRow_('SESSIONS', session._rowNum);
+      return { ok: true, data: { confirmed: false } };
+    } finally {
+      lock.releaseLock();
+    }
   } catch (err) {
     util_logError_(err);
     return { ok: false, error: 'INTERNAL' };
@@ -503,7 +545,7 @@ function api_adminChangeCredentials(token, params) {
   }
 }
 
-function auth_verifySession_(token, requiredRole, allowMustChange) {
+function auth_verifySession_(token, requiredRole, allowMustChange, allowPending) {
   if (!token || typeof token !== 'string') return { ok: false, error: 'AUTH_REQUIRED' };
 
   var tokenHash = util_sha256Hex_(token);
@@ -533,6 +575,9 @@ function auth_verifySession_(token, requiredRole, allowMustChange) {
   }
 
   if (!user) return { ok: false, error: 'AUTH_REQUIRED' };
+
+  // 本人確認の待ち（学生が「あなたは〇〇さんですか」に答える前）は、確認かログアウトのほかは受け付けない
+  if (session.role === 'student_pending' && !allowPending) return { ok: false, error: 'IDENTITY_REQUIRED' };
 
   if (requiredRole && user.role !== requiredRole) {
     return { ok: false, error: 'FORBIDDEN' };

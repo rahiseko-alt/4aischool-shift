@@ -47,7 +47,7 @@
   function hm(min) { min = +min || 0; return Math.floor(min / 60) + ':' + pad2(min % 60); }
 
   function showScreen(name) {
-    ['login-screen', 'change-password-screen', 'student-screen', 'admin-screen'].forEach(function (s) {
+    ['login-screen', 'identity-screen', 'change-password-screen', 'student-screen', 'admin-screen'].forEach(function (s) {
       el(s).hidden = s !== name;
     });
   }
@@ -130,7 +130,7 @@
     showSpinner();
     return callServer(fn, args).then(function (res) {
       hideSpinner();
-      if (res && res.error === 'AUTH_REQUIRED' && fn !== 'api_login') {
+      if (res && (res.error === 'AUTH_REQUIRED' || res.error === 'IDENTITY_REQUIRED') && fn !== 'api_login') {
         resetState();
         showScreen('login-screen');
         showError('login-error', 'AUTH_REQUIRED');
@@ -160,6 +160,7 @@
       if (v) e.textContent = v;
     });
     document.querySelectorAll('.lang-select').forEach(function (sel) { sel.value = currentLang; });
+    if (!el('identity-screen').hidden) renderIdentity();
     if (state.monthData && !el('student-screen').hidden) renderStudent();
     if (lastHistory && !el('student-screen').hidden) renderHistory(lastHistory);
   }
@@ -221,14 +222,46 @@
     var loginId = el('inp-loginId').value.trim();
     var password = el('inp-password').value;
     if (!loginId) return; // 学生は学籍番号だけで入れる（パスワードは管理者だけ）
-    call('api_login', [loginId, password]).then(function (res) {
+    call('api_login', [loginId, password, true]).then(function (res) {
       if (!res.ok) { showLoginError(res); return; }
       el('inp-password').value = '';
       state.token = res.data.token;
       state.role = res.data.role;
       state.studentId = res.data.studentId;
+      if (res.data.identityPending) { showIdentity(res.data.identity); return; }
       if (res.data.mustChangePassword) showScreen('change-password-screen');
       else afterLogin();
+    });
+  });
+
+  // 本人確認: 氏名とクラスを出して、本人かどうかを答えさせる。YES で先へ、NO はログインを取り消してログイン画面に戻る
+  var identityInfo = null;
+  function showIdentity(info) {
+    identityInfo = info || { name: '', className: '' };
+    hideError('identity-error');
+    renderIdentity();
+    showScreen('identity-screen');
+  }
+  function renderIdentity() {
+    if (!identityInfo) return;
+    el('identity-question').textContent = t('label.identityQuestion').replace('{name}', identityInfo.name).replace('{class}', identityInfo.className);
+  }
+  el('btn-identity-yes').addEventListener('click', function () {
+    hideError('identity-error');
+    call('api_confirmIdentity', [state.token, true]).then(function (res) {
+      if (!res.ok) { if (res.error !== 'AUTH_REQUIRED') showError('identity-error', res.error); return; }
+      identityInfo = null;
+      afterLogin();
+    });
+  });
+  el('btn-identity-no').addEventListener('click', function () {
+    hideError('identity-error');
+    call('api_confirmIdentity', [state.token, false]).then(function (res) {
+      if (!res.ok && res.error !== 'AUTH_REQUIRED') { showError('identity-error', res.error); return; }
+      identityInfo = null;
+      resetState();
+      el('inp-loginId').value = '';
+      showScreen('login-screen');
     });
   });
 
@@ -275,7 +308,6 @@
     state.monthData = null;
     el('shifts-table').innerHTML = '';
     el('actual-section').hidden = true;
-    el('btn-save-draft').disabled = true;
     el('btn-confirm-shift').disabled = true;
     call('api_getMonth', [state.token, ym]).then(function (month) {
       if (ym !== state.yearMonth) return;
@@ -482,22 +514,19 @@
     var notice = schoolConfirmed ? t('label.schoolConfirmedNotice') : (data.notOpen ? t('label.notOpen') : t('label.closed'));
     el('st-closed-notice').hidden = !closed;
     el('st-closed-notice').textContent = closed ? notice : '';
-    el('btn-save-draft').disabled = closed;
     el('btn-confirm-shift').disabled = closed;
     // 月全体のコード（日付の無いもの）は表の上、日付のあるものはその日の行の下に出す。
     // 「確定済み」の札と「前月未確定」の注意は出さない（利用者の判断。確定済みかどうかは提出履歴で分かる）
     var visible = (ev.codes || []).filter(function (c) { return c.severity !== 'admin' && c.code !== 'PREV_MONTH_DRAFT'; });
     el('st-codes').innerHTML = codesHtml(visible.filter(function (c) { return !c.date; }));
-    // 見出しの横に大きく「確定済」か「未確定」（学校確定の月は「対象外」）
-    var cs = el('st-confirm-state');
-    cs.textContent = data.status === '確定済' ? t('label.status.confirmed') : (data.status === '学校確定' ? statusText(data.status) : t('label.notConfirmed'));
-    cs.className = 'confirm-state ' + (data.status === '確定済' ? 'is-confirmed' : (data.status === '学校確定' ? 'is-out' : 'is-unconfirmed'));
-
+    // 見出しの横の「確定済」「未確定」「対象外」の札は refreshConfirmMark が出す
     el('shifts-table').innerHTML = shiftTableHtml(data.yearMonth, data.shifts || {}, {
       rowClass: 'plan-row', timeLabel: 'label.planTime', totalLabel: 'label.planTotal',
       disabled: closed, codes: visible, holidays: data.holidays || []
     });
     refreshTotals('shifts-table');
+    state.savedRows = JSON.stringify(collectRows('shifts-table', 'plan-row'));
+    refreshConfirmMark();
   }
 
   // 開始・終了のどちらかだけ入った行もサーバへ送り、「入力不足」で止めてもらう。
@@ -557,14 +586,6 @@
     return true;
   }
 
-  el('btn-save-draft').addEventListener('click', function () {
-    hideError('shift-error');
-    if (!state.monthData) return;
-    call('api_saveDraft', [state.token, state.monthData.yearMonth, collectRows('shifts-table', 'plan-row'), state.monthData.version]).then(function (res) {
-      if (handleSaveResult(res, 'shift-error', 'label.saved', 'shifts-table')) reloadKeepMessage();
-    });
-  });
-
   el('btn-confirm-shift').addEventListener('click', function () {
     hideError('shift-error');
     if (!state.monthData) return;
@@ -584,6 +605,18 @@
     });
     call('api_getHistory', [state.token]).then(function (res) { if (res.ok) renderHistory(res.data); });
   }
+
+  // 見出し横の札。確定済は「表が保存された内容のまま」のときだけ出す（表を直し始めたら未確定にする。2026-10-14）
+  function refreshConfirmMark() {
+    var data = state.monthData;
+    if (!data) return;
+    var cs = el('st-confirm-state');
+    var dirty = data.status === '確定済' && JSON.stringify(collectRows('shifts-table', 'plan-row')) !== state.savedRows;
+    var confirmed = data.status === '確定済' && !dirty;
+    cs.textContent = confirmed ? t('label.status.confirmed') : (data.status === '学校確定' ? statusText(data.status) : t('label.notConfirmed'));
+    cs.className = 'confirm-state ' + (confirmed ? 'is-confirmed' : (data.status === '学校確定' ? 'is-out' : 'is-unconfirmed'));
+  }
+  ['input', 'change'].forEach(function (ev) { el('shifts-table').addEventListener(ev, refreshConfirmMark); });
 
   // ---- 実績確認 ----
   function renderActual() {
@@ -657,7 +690,7 @@
 
   // ---- 提出履歴 ----
   function statusText(s) {
-    return { '下書き': t('label.status.draft'), '確定済': t('label.status.confirmed'), '学校確定': t('label.status.schoolConfirmed'), '未入力': t('label.status.notEntered') }[s] || s;
+    return { '下書き': t('label.notConfirmed'), '確定済': t('label.status.confirmed'), '学校確定': t('label.status.schoolConfirmed'), '未入力': t('label.status.notEntered') }[s] || s;
   }
   var lastHistory = null;
   function renderHistory(rows) {
@@ -711,7 +744,6 @@
   function boardFilter() {
     var f = {};
     var c = el('admin-class-filter').value; if (c) f.className = c;
-    var s = el('admin-status-filter').value; if (s) f.status = s;
     var q = el('admin-query').value.trim(); if (q) f.query = q;
     return f;
   }
@@ -731,9 +763,14 @@
     call('api_adminBoard', [token, ym, boardFilter()]).then(function (res) {
       if (seq !== boardSeq || ym !== state.yearMonth || token !== state.token || state.role !== 'admin') return;
       if (!adminAlert(res)) return;
-      state.admin.boardRows = res.data.rows;
+      // 状態の絞り込みは画面で行う（下書きは表示しない。2026-10-14）
+      var st = el('admin-status-filter').value;
+      var rows = res.data.rows.filter(function (r) {
+        return !st || (st === 'エラー' ? (r.errorCodes || []).length > 0 : (boardStatus(r) === st || (st === '確定済' && boardStatus(r) === '確定済（本人未入力）')));
+      });
+      state.admin.boardRows = rows;
       state.admin.boardYm = ym;
-      renderAdminBoard(res.data);
+      renderAdminBoard({ counts: res.data.counts, actualUnconfirmed: res.data.actualUnconfirmed, backup: res.data.backup, rows: rows });
     });
   }
 
@@ -746,6 +783,9 @@
     if (reason === 'BAD_DATE') return '最後のバックアップの日時が読めません（記録: ' + (b.lastAt || '') + '）。スクリプト プロパティの LAST_BACKUP_AT を消すと取り直します' + see;
     return 'バックアップが40日以上取られていません（最後: ' + (b.lastAt || 'なし') + '）。Apps Script のトリガーに backupMonthly があるか確かめてください' + see;
   }
+
+  // 管理者の一覧に「下書き」は出さない。学生が途中保存だけした月は確定済として見せ、違反はエラーの欄に出る
+  function boardStatus(row) { return row.displayStatus === '下書き' ? '確定済' : row.displayStatus; }
 
   // 集計は1行の小さな札。状態の札を押すとその状態で絞り込む（もう一度押すと解除）。
   function chip(label, value, status, cls, title) {
@@ -761,8 +801,8 @@
     el('admin-backup').hidden = !(b && b.warn);
     if (b && b.warn) el('admin-backup').textContent = backupWarnText(b);
     el('admin-counts').innerHTML =
-      chip('学生', c.students) + chip('確定済', c.confirmed, '確定済') + chip('下書き', c.draft, '下書き') +
-      chip('未提出', c.notSubmitted, '未提出') + chip('エラー', c.error, null, c.error ? 'stat-error' : '') +
+      chip('学生', c.students) + chip('確定済', c.confirmed + c.draft, '確定済') +
+      chip('未提出', c.notSubmitted, '未提出') + chip('エラー', c.error, 'エラー', c.error ? 'stat-error' : '') +
       chip('対象外', c.outOfScope, '対象外') + chip('実績未確認', data.actualUnconfirmed, null, data.actualUnconfirmed ? 'stat-warn' : '', '月が終わったあと、実際に働いた時間（実績）をまだ確認していない学生の数');
 
     var html = '<table class="admin-table"><thead><tr><th>学籍番号</th><th>氏名</th><th class="col-wide">クラス</th><th>状態</th><th>エラー</th>' +
@@ -773,7 +813,7 @@
       html += '<tr class="board-row' + (row.actualOver ? ' actual-over' : '') + '" data-sid="' + esc(row.studentId) + '">' +
         '<td class="nowrap"><strong>' + esc(row.studentId) + '</strong></td><td class="nowrap">' + esc(row.name) + '</td>' +
         '<td class="col-wide nowrap">' + esc(row.className) + '</td>' +
-        '<td class="nowrap">' + esc(row.displayStatus) + '</td><td>' + (errs || '—') + '</td>' +
+        '<td class="nowrap">' + esc(boardStatus(row)) + '</td><td>' + (errs || '—') + '</td>' +
         '<td class="col-wide nowrap">' + esc(row.actualStatus) + (row.actualOver ? ' <span class="badge badge-error">実績超過</span>' : '') + '</td>' +
         '<td class="col-wide nowrap">' + esc(row.updatedAt || '—') + '</td>' +
         '<td class="nowrap adm-row-acts"><button type="button" class="adm-link btn-admin-detail" data-sid="' + esc(row.studentId) + '">詳細</button>' +

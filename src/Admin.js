@@ -914,7 +914,8 @@ function api_adminBoard(token, yearMonth, filters) {
 
       if (cSub) {
         if (cSub.status === '確定済') {
-          displayStatus = '確定済';
+          // 締切後に自動で確定された月（本人が確定していない。確定日時が空）は分けて出す
+          displayStatus = !cSub.confirmed_at ? '確定済（本人未入力）' : '確定済';
         } else if (cSub.status === '学校確定') {
           displayStatus = '対象外';
         } else if (cSub.status === '下書き') {
@@ -939,7 +940,7 @@ function api_adminBoard(token, yearMonth, filters) {
       }
 
       // counts 集計
-      if (displayStatus === '確定済') counts.confirmed++;
+      if (displayStatus === '確定済' || displayStatus === '確定済（本人未入力）') counts.confirmed++;
       else if (displayStatus === '下書き') counts.draft++;
       else if (displayStatus === '未提出') counts.notSubmitted++;
       else if (displayStatus === '対象外') counts.outOfScope++;

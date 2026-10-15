@@ -10,7 +10,7 @@ const { load, SRC_DIR } = require('./helpers/load');
 
 // ブラウザ（google.script.run）から呼べてしまう関数は、この一覧だけ。
 const REQUIRED_API = [
-  'api_login', 'api_logout', 'api_changePassword',
+  'api_login', 'api_logout', 'api_confirmIdentity', 'api_changePassword',
   'api_getMonth', 'api_saveDraft', 'api_confirm', 'api_saveActual', 'api_confirmActual', 'api_getHistory',
   'api_adminBoard', 'api_adminStudentDetail', 'api_adminUpsertStudent', 'api_adminResetPassword', 'api_adminUnlockLogin',
   'api_adminCreateAdmin', 'api_adminGrantUnlock', 'api_adminSchoolConfirm', 'api_adminUndoSchoolConfirm',
@@ -19,7 +19,7 @@ const REQUIRED_API = [
   'api_adminPrintHtml', 'api_adminPurgeExpired', 'api_adminSeedDemo', 'api_adminActAsDemoStudent', 'api_adminImportRoster',
   'api_adminListClasses', 'api_adminAddClass', 'api_adminDeleteClass', 'api_adminChangeCredentials',
 ];
-const OTHER_PUBLIC = ['doGet', 'setupInitial', 'resetAdminPassword', 'backupMonthly', 'installTriggers', 'evaluateMonth'];
+const OTHER_PUBLIC = ['doGet', 'setupInitial', 'resetAdminPassword', 'backupMonthly', 'installTriggers', 'evaluateMonth', 'autoConfirmMonths'];
 
 test('公開関数（名前が _ で終わらないトップレベル関数）は決められた一覧だけ', () => {
   const app = load();
