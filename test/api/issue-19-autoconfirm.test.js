@@ -35,7 +35,7 @@ test('締切後、入力のない在籍中の月は、空欄のまま確定済�
   assert.equal(rows.length, 1);
   assert.equal(rows[0].status, '確定済');
   assert.equal(rows[0].shift_json, '{}');
-  assert.equal(rows[0].version, '0');
+  assert.equal(rows[0].confirmed_at, '');
   const b = board(w);
   assert.equal(row(b, '251001').displayStatus, '確定済（本人未入力）');
   assert.equal(b.counts.confirmed, 1);
@@ -97,10 +97,33 @@ test('本人未入力の月は、前後の月の28時間チェックで勤務0�
   assert.equal(r.status, '確定済');
 });
 
-test('本人が保存した確定済は version が 1 以上で、本人未入力とは区別される', () => {
+test('本人が確定した月は確定日時が入り、本人未入力とは区別される', () => {
   const w = world();
   ok(w.api('api_confirm', w.st.token, YM, { '3': [sh('09:00', '12:00')] }, 0));
   w.at('2026-10-01 00:05');
   run(w);
   assert.equal(row(board(w), '251001').displayStatus, '確定済');
+});
+
+test('本人未入力の月は、あとで実績を保存しても本人未入力のまま（印は確定日時の空）', () => {
+  const w = world();
+  w.at('2026-11-02 10:00');
+  run(w);
+  const m = ok(w.api('api_getMonth', w.st.token, YM));
+  ok(w.api('api_saveActual', w.st.token, YM, { '3': [sh('09:00', '12:00')] }, m.version));
+  assert.equal(row(board(w), '251001').displayStatus, '確定済（本人未入力）');
+});
+
+test('管理者が入力を許している未入力の月は、許可が切れるまで自動確定しない。切れたら確定し、versionは戻さない', () => {
+  const w = world();
+  ok(w.api('api_adminGrantUnlock', w.admin, '251001', YM, '2026-10-05 18:00'));
+  w.at('2026-10-01 00:05');
+  run(w);
+  assert.equal(subRows(w).find((r) => r.year_month === YM).status, '未入力');
+  w.at('2026-10-06 00:05');
+  run(w);
+  const r = subRows(w).find((x) => x.year_month === YM);
+  assert.equal(r.status, '確定済');
+  assert.equal(r.confirmed_at, '');
+  assert.ok(Number(r.version) >= 1, 'versionが前に戻らない');
 });

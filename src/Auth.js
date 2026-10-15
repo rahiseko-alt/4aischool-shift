@@ -431,12 +431,10 @@ function api_confirmIdentity(token, answer) {
         if (session.role === 'student_pending') {
           session.role = 'student';
           db_updateRow_('SESSIONS', session._rowNum, session);
-          db_logAudit_('IDENTITY_OK', auth.user.login_id, 'student', auth.user.student_id, '', null, {});
         }
         return { ok: true, data: { confirmed: true } };
       }
       db_deleteRow_('SESSIONS', session._rowNum);
-      db_logAudit_('IDENTITY_REJECTED', auth.user.login_id, 'student', auth.user.student_id, '', null, {});
       return { ok: true, data: { confirmed: false } };
     } finally {
       lock.releaseLock();

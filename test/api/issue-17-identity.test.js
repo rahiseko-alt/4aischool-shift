@@ -73,11 +73,10 @@ test('本人確認の付かないログインは、今までどおりそのま�
   assert.equal(ok(w.api('api_getMonth', r.token, YM)).status, '未入力');
 });
 
-test('YES と NO は監査ログに残る', () => {
+test('YES と NO は、回数も含めて記録しない（監査ログに本人確認の行を足さない）', () => {
   const w = world();
   ok(w.api('api_confirmIdentity', login(w).token, true));
   ok(w.api('api_confirmIdentity', login(w).token, false));
   const actions = auditRows(w).map((r) => r.action);
-  assert.ok(actions.includes('IDENTITY_OK'));
-  assert.ok(actions.includes('IDENTITY_REJECTED'));
+  assert.equal(actions.some((a) => /IDENTITY/.test(a)), false);
 });

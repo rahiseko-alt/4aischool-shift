@@ -130,7 +130,7 @@
     showSpinner();
     return callServer(fn, args).then(function (res) {
       hideSpinner();
-      if (res && res.error === 'AUTH_REQUIRED' && fn !== 'api_login') {
+      if (res && (res.error === 'AUTH_REQUIRED' || res.error === 'IDENTITY_REQUIRED') && fn !== 'api_login') {
         resetState();
         showScreen('login-screen');
         showError('login-error', 'AUTH_REQUIRED');

@@ -914,8 +914,8 @@ function api_adminBoard(token, yearMonth, filters) {
 
       if (cSub) {
         if (cSub.status === '確定済') {
-          // 締切後に自動で確定された月（本人が一度も保存していない。version が 0）は分けて出す
-          displayStatus = (Number(cSub.version) || 0) === 0 ? '確定済（本人未入力）' : '確定済';
+          // 締切後に自動で確定された月（本人が確定していない。確定日時が空）は分けて出す
+          displayStatus = !cSub.confirmed_at ? '確定済（本人未入力）' : '確定済';
         } else if (cSub.status === '学校確定') {
           displayStatus = '対象外';
         } else if (cSub.status === '下書き') {
