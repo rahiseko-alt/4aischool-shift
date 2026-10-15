@@ -38,3 +38,11 @@ test('締切後は再確定できない（最終確定）', () => {
   assert.equal(r.error, 'DEADLINE_PASSED');
   assert.equal(ok(w.api('api_getMonth', w.st.token, YM)).status, '確定済');
 });
+
+test('印刷に「下書き」は出ない。既存の下書きは確定済として印刷される', () => {
+  const w = world();
+  ok(w.api('api_saveDraft', w.st.token, YM, { '3': [sh('09:00', '12:00')] }, 0));
+  const r = ok(w.api('api_adminPrintHtml', w.admin, { studentIds: [w.st.studentId], yearMonths: [YM] }));
+  assert.equal(r.html.includes('下書き'), false);
+  assert.equal(r.html.includes('確定済'), true);
+});

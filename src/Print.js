@@ -197,7 +197,7 @@ function api_adminPrintHtml(token, params) {
         if (sub) {
           if (sub.status === '確定済') displayStatus = !sub.confirmed_at ? '確定済（本人未入力）' : '確定済';
           else if (sub.status === '学校確定') displayStatus = '対象外';
-          else if (sub.status === '下書き') displayStatus = '下書き';
+          else if (sub.status === '下書き') displayStatus = '確定済'; // 下書きは表に出さない（管理者の一覧と同じ。違反は印刷の注意の欄に出る。2026-10-15）
         }
 
         var pShifts = {};
