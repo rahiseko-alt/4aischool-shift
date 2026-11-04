@@ -18,6 +18,7 @@ const ADMIN = { id: m[1], pw: 'admin-pass-0001' };
   const first = must(api('api_login', m[1], m[2]), '管理者ログイン');
   must(api('api_changePassword', first.token, m[2], ADMIN.pw), 'パスワード変更');
   const t = must(api('api_login', ADMIN.id, ADMIN.pw), '管理者ログイン2').token;
+  must(api('api_adminSetSettings', t, { requireSignature: false }), '署名を求めない設定'); // この点検は通信と二重押しを見る。署名の流れは e2e-browser.js で見る
   must(api('api_adminAddClass', t, 'A'), 'クラス');
   for (const ym of ['2026-09', '2026-10']) must(api('api_adminSetDeadline', t, { yearMonth: ym, className: 'A', deadlineAt: ym + '-28 23:59', actualDeadlineAt: null }), '締切');
   must(api('api_adminImportRoster', t, { className: 'A', enrollmentDate: '2026-04-01', rows: [

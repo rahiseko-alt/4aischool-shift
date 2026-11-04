@@ -1098,4 +1098,17 @@ tr.row-error td:first-child, .shift-table tr.row-error td:first-child { box-shad
 .admin-form input[readonly] { background: #f2f2f2; color: #555; }
 .login-admin-link { text-align: right; margin-top: 0.75rem; font-size: 0.8rem; }
 .login-admin-link a { color: var(--text-sub); }
+/* 勤務先の欄と、手書き署名の画面（2026-11-04） */
+.workplace-field { margin: 0.5rem 0 0.75rem; }
+.workplace-field label { display: block; font-weight: 600; font-size: 0.9rem; margin-bottom: 0.25rem; }
+.workplace-field textarea { width: 100%; box-sizing: border-box; font-size: 1rem; padding: 0.5rem; border: 1.5px solid var(--border); border-radius: 8px; resize: vertical; }
+.workplace-hint { font-size: 0.75rem; color: var(--text-sub); margin: 0.2rem 0 0; }
+.sign-overlay { position: fixed; inset: 0; z-index: 2000; background: rgba(15, 23, 42, 0.6); display: flex; align-items: center; justify-content: center; }
+.sign-box { background: #fff; border-radius: 12px; padding: 0.75rem; width: 96vw; max-width: 1000px; box-sizing: border-box; }
+.sign-title { font-weight: 700; margin: 0 0 0.2rem; }
+.sign-hint { font-size: 0.8rem; color: var(--text-sub); margin: 0 0 0.4rem; }
+.sign-canvas { display: block; width: 100%; height: 55vh; max-height: 420px; border: 2px dashed #94a3b8; border-radius: 8px; background: #fff; touch-action: none; }
+.sign-buttons { display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 0.6rem; flex-wrap: wrap; }
+.signed-mark { font-size: 0.8rem; color: #15803d; font-weight: 600; margin-left: 0.4rem; }
+.detail-sign { height: 36px; vertical-align: middle; border-bottom: 1px solid #ccc; margin: 0 0.3rem; }
 </style>

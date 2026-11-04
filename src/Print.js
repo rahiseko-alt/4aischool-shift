@@ -86,9 +86,16 @@ function print_formatShiftsCell_(shifts) {
 // 以前はページの高さを固定して、はみ出した日・合計・署名を切り捨てていた。
 // dayLines: 日ごとの行数（1件以下は1行。2件以上は件数＋「計」の1行）。hasBanner: 対象外の帯がある。hasKana: 氏名の下にカナの行がある
 var PRINT_DENSITIES_ = [[11, 6.6], [10, 5.8], [9, 5.2], [8, 4.6], [7, 4.0], [6, 3.5]];
+// 手書き署名（PNG の data URL）を署名線の上に載せる。形が違うもの・無いものは出さない（2026-11-04）
+function print_signatureImg_(sub) {
+  var png = sub && sub.signature_png ? String(sub.signature_png) : '';
+  if (!/^data:image\/png;base64,[A-Za-z0-9+\/]+=*$/.test(png)) return '';
+  return '<img class="sign-img" alt="署名" src="' + png + '">';
+}
+
 function print_pickDensity_(dayLines, hasBanner, hasKana) {
   // 表に使える高さ: 277mm（297mm − 上下の余白）から、見出し・学生情報・合計と署名（実測で約32mm）とゆとりを引いたもの
-  var budget = 277 - 36 - (hasBanner ? 8 : 0) - (hasKana ? 4 : 0);
+  var budget = 277 - 36 - 7 - (hasBanner ? 8 : 0) - (hasKana ? 4 : 0); // 7: 勤務先の行（2026-11-04）
   for (var i = 0; i < PRINT_DENSITIES_.length; i++) {
     var fs = PRINT_DENSITIES_[i][0], rh = PRINT_DENSITIES_[i][1];
     var lineMm = fs * 0.2646 * 1.2;
@@ -279,6 +286,8 @@ function api_adminPrintHtml(token, params) {
               '<th>氏名</th><td>' + print_escapeHtml_(student.name) + (student.name_kana ? '<br><span style="font-size: 10px;">' + print_escapeHtml_(student.name_kana) + '</span>' : '') + '</td>' +
               '<th>クラス</th><td>' + print_escapeHtml_(student.class) + '</td>' +
               '<th>状態</th><td>' + print_escapeHtml_(statusText) + '</td>' +
+            '</tr><tr>' +
+              '<th>勤務先</th><td colspan="7">' + print_escapeHtml_(sub && sub.workplace ? String(sub.workplace).split('\n').join(' ／ ') : '') + '</td>' +
             '</tr></tbody></table>' +
             outOfScopeNotice +
             '<table class="print-table">' +
@@ -293,7 +302,7 @@ function api_adminPrintHtml(token, params) {
             '</table>' +
             '<div class="page-foot">' +
               '<div class="total">勤務予定時間合計: <strong>' + print_formatMinutes_(planTotalMonth) + '</strong></div>' +
-              '<div class="sign">署名 <span class="sign-line"></span></div>' +
+              '<div class="sign">署名 <span class="sign-line">' + print_signatureImg_(sub) + '</span></div>' +
             '</div>' +
           '</section>';
 
@@ -329,7 +338,8 @@ function api_adminPrintHtml(token, params) {
       '.print-table td.c-note { text-align: left; font-size: 0.9em; }\n' +
       '.print-table tr.holiday-row td { background: #f6f6f6; -webkit-print-color-adjust: exact; print-color-adjust: exact; }\n' +
       '.page-foot { display: flex; justify-content: space-between; align-items: flex-end; margin-top: 4mm; font-size: 13px; break-inside: avoid; page-break-inside: avoid; }\n' +
-      '.sign-line { display: inline-block; width: 60mm; border-bottom: 1px solid #222; margin-left: 2mm; }\n' +
+      '.sign-line { display: inline-block; width: 60mm; height: 13mm; border-bottom: 1px solid #222; margin-left: 2mm; vertical-align: bottom; text-align: center; }\n' +
+      '.sign-img { max-width: 60mm; max-height: 12mm; }\n' +
       '</style>\n' +
       '</head>\n' +
       '<body>\n' +

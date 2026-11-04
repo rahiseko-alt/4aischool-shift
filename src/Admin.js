@@ -782,7 +782,10 @@ function api_adminStudentDetail(token, studentId) {
         publicHolidays: util_jpHolidaysOfMonth_(s.year_month),
         unlockUntil: s.unlock_until || null,
         // 期限の過ぎた修正許可を、いま有効なものとして見せない（2026-10-07）
-        unlockExpired: !!s.unlock_until && detailNow > s.unlock_until
+        unlockExpired: !!s.unlock_until && detailNow > s.unlock_until,
+        workplace: s.workplace || '',
+        signature: /^data:image\/png;base64,/.test(s.signature_png || '') ? s.signature_png : null, // 手書き署名（2026-11-04）
+        signedAt: s.signed_at || null
       };
     });
 

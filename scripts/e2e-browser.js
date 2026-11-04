@@ -57,6 +57,18 @@ html = html.replace('<head>', '<head><script>' + shim + '</script>');
   await page.setContent(html);
   const step = (s) => console.log('▶ ' + s);
   const wait = () => page.waitForFunction(() => document.getElementById('global-spinner').hidden, null, { timeout: 5000 });
+  // 確定: 勤務先が空なら入れ、開いた署名の画面に線を引いて「決定」（2026-11-04）
+  const confirmShift = async () => {
+    if (!(await page.inputValue('#inp-workplace')).trim()) await page.fill('#inp-workplace', 'コンビニA');
+    await confirmShift();
+    if (await page.isHidden('#sign-overlay')) return;
+    if (!(await page.isDisabled('#btn-sign-ok'))) throw new Error('何も書かないうちに署名の決定が押せる');
+    const b = await page.locator('#sign-canvas').boundingBox();
+    await page.mouse.move(b.x + b.width * 0.2, b.y + b.height * 0.5); await page.mouse.down();
+    await page.mouse.move(b.x + b.width * 0.5, b.y + b.height * 0.3, { steps: 8 });
+    await page.mouse.move(b.x + b.width * 0.8, b.y + b.height * 0.6, { steps: 8 }); await page.mouse.up();
+    await page.click('#btn-sign-ok');
+  };
 
   // --- 管理者: 初回ログイン → パスワード変更 ---
   step('管理者ログイン');
@@ -244,7 +256,7 @@ html = html.replace('<head>', '<head><script>' + shim + '</script>');
 
   step('確定ボタン → 違反（8時間超）は断られ、その日の行が赤くなる（途中保存のボタンは無い。2026-10-14）');
   if (await page.$('#btn-save-draft')) throw new Error('途中保存のボタンが残っている');
-  await page.click('#btn-confirm-shift'); await wait(); await wait();
+  await confirmShift(); await wait(); await wait();
   const msg = await page.textContent('#shift-error');
   if (!msg.includes('確定できません') || !msg.includes('2日: 1日8時間超過')) throw new Error('確定を断る知らせ: ' + msg);
   if (!(await page.getAttribute('#shifts-table tr.day-row[data-day="2"]', 'class')).includes('row-error')) throw new Error('2日の行が赤くならない');
@@ -268,7 +280,7 @@ html = html.replace('<head>', '<head><script>' + shim + '</script>');
 
   step('入力途中の行は入力不足で止まる（黙って消さない）');
   await row(5).locator('.sh-start').fill('10:00');
-  await page.click('#btn-confirm-shift'); await wait();
+  await confirmShift(); await wait();
   if (!(await page.textContent('#shift-error')).includes('入力不足')) throw new Error('入力不足の案内');
   await row(5).locator('.sh-start').fill('');
 
@@ -287,7 +299,7 @@ html = html.replace('<head>', '<head><script>' + shim + '</script>');
   step('確定すると、ページを読み込み直してもシフトが残っている（保存済みの内容）');
   // 言語切替で表が描き直され、保存していない入力は消えているので、入れ直す
   await setRow(row(3), '21:00', '06:00'); await setRow(row(1), '22:00', '02:00'); await setRow(row(2), '09:00', '18:00');
-  await page.click('#btn-confirm-shift'); await wait(); await wait();
+  await confirmShift(); await wait(); await wait();
   if ((await page.textContent('#st-confirm-state')) !== '確定済') throw new Error('確定後に「確定済」が出ない: ' + (await page.textContent('#st-confirm-state')) + ' / ' + (await page.textContent('#shift-error')));
   await page.click('#btn-prev-month'); await wait(); await page.click('#btn-next-month'); await wait();
   const v = await row(2).locator('.sh-end').inputValue();
@@ -303,20 +315,20 @@ html = html.replace('<head>', '<head><script>' + shim + '</script>');
   slowGetMonth = 0;
   if ((await page.textContent('#st-year-month')) !== '2026-10') throw new Error('月が戻らない');
   if ((await row(2).locator('.sh-end').inputValue()) !== '18:00') throw new Error('遅れて届いた11月の表で上書きされた');
-  await page.click('#btn-confirm-shift'); await wait();
+  await confirmShift(); await wait();
   if (savedYm !== '2026-10') throw new Error('保存した月がずれた: ' + savedYm);
 
   step('学生で確定: 確定後に直し始めると札が未確定になり、1日8時間超の日があると確定は止まってその日が赤くなる。直せば確定できる（途中保存は無い。2026-10-14）');
   await row(2).locator('.sh-end').fill('18:15');
   if ((await page.textContent('#st-confirm-state')) !== '未確定') throw new Error('直し始めても「未確定」にならない: ' + (await page.textContent('#st-confirm-state')));
-  await page.click('#btn-confirm-shift'); await wait(); await wait();
+  await confirmShift(); await wait(); await wait();
   if (!(await page.textContent('#shift-error')).startsWith('確定できません。')) throw new Error('「確定できません。」で始まらない: ' + (await page.textContent('#shift-error')));
   if (!(await page.textContent('#shift-error')).includes('2日: 1日8時間超過')) throw new Error('8時間超で止まらない: ' + (await page.textContent('#shift-error')));
   if (!(await row(2).getAttribute('class')).includes('row-error')) throw new Error('8時間超の日が赤くならない');
   if ((await page.textContent('#st-confirm-state')) !== '未確定') throw new Error('断られたあとも「未確定」のまま');
   await row(2).locator('.sh-end').fill('18:00');
   if ((await page.textContent('#st-confirm-state')) !== '確定済') throw new Error('保存済みの内容に戻したら「確定済」に戻る');
-  await page.click('#btn-confirm-shift'); await wait(); await wait();
+  await confirmShift(); await wait(); await wait();
   if ((await page.textContent('#shift-error')) !== '確定済み') throw new Error('確定の知らせ: ' + (await page.textContent('#shift-error')));
   if ((await page.textContent('#st-confirm-state')) !== '確定済') throw new Error('確定後に「確定済」が出ない: ' + (await page.textContent('#st-confirm-state')));
 

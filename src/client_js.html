@@ -515,6 +515,9 @@
     el('st-closed-notice').hidden = !closed;
     el('st-closed-notice').textContent = closed ? notice : '';
     el('btn-confirm-shift').disabled = closed;
+    // 勤務先: この月の値。無ければ前の月の勤務先を下書きとして入れる（2026-11-04）
+    el('inp-workplace').value = data.workplace || data.workplaceSuggest || '';
+    el('inp-workplace').disabled = closed;
     // 月全体のコード（日付の無いもの）は表の上、日付のあるものはその日の行の下に出す。
     // 「確定済み」の札と「前月未確定」の注意は出さない（利用者の判断。確定済みかどうかは提出履歴で分かる）
     var visible = (ev.codes || []).filter(function (c) { return c.severity !== 'admin' && c.code !== 'PREV_MONTH_DRAFT'; });
@@ -586,12 +589,82 @@
     return true;
   }
 
+  // 確定: 勤務先を確かめ、手書き署名の画面を開いて、署名と一緒に送る（2026-11-04。設定で署名を求めないときはそのまま送る）
   el('btn-confirm-shift').addEventListener('click', function () {
     hideError('shift-error');
     if (!state.monthData) return;
-    call('api_confirm', [state.token, state.monthData.yearMonth, collectRows('shifts-table', 'plan-row'), state.monthData.version]).then(function (res) {
-      if (handleSaveResult(res, 'shift-error', 'label.confirmedDone', 'shifts-table', true)) reloadKeepMessage();
+    var data = state.monthData;
+    var workplace = el('inp-workplace').value.trim();
+    var send = function (signature) {
+      call('api_confirm', [state.token, data.yearMonth, collectRows('shifts-table', 'plan-row'), data.version, { workplace: workplace, signature: signature || null }]).then(function (res) {
+        if (handleSaveResult(res, 'shift-error', 'label.confirmedDone', 'shifts-table', true)) reloadKeepMessage();
+      });
+    };
+    if (data.requireSignature === false) { send(null); return; }
+    if (!workplace) { showMsg('shift-error', t('label.cannotConfirm') + ' ' + tErr('NO_WORKPLACE'), true); el('inp-workplace').focus(); return; }
+    openSignPad(send);
+  });
+
+  // ---- 手書き署名の画面 ----
+  var signPad = { onOk: null, drawn: false, drawing: false };
+  function signCanvasSetup() {
+    var cv = el('sign-canvas'), dpr = window.devicePixelRatio || 1;
+    var rect = cv.getBoundingClientRect();
+    cv.width = Math.max(1, Math.round(rect.width * dpr));
+    cv.height = Math.max(1, Math.round(rect.height * dpr));
+    var ctx = cv.getContext('2d');
+    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, cv.width, cv.height);
+    ctx.lineWidth = 3 * dpr; ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.strokeStyle = '#111';
+    signPad.drawn = false;
+    el('btn-sign-ok').disabled = true;
+  }
+  function openSignPad(onOk) {
+    signPad.onOk = onOk;
+    el('sign-overlay').hidden = false;
+    signCanvasSetup();
+  }
+  function closeSignPad() { el('sign-overlay').hidden = true; signPad.onOk = null; signPad.drawing = false; }
+  (function () {
+    var cv = el('sign-canvas');
+    var pos = function (e) { var r = cv.getBoundingClientRect(), k = cv.width / r.width; return { x: (e.clientX - r.left) * k, y: (e.clientY - r.top) * k }; };
+    cv.addEventListener('pointerdown', function (e) {
+      e.preventDefault();
+      if (cv.setPointerCapture) cv.setPointerCapture(e.pointerId);
+      var p = pos(e), ctx = cv.getContext('2d');
+      signPad.drawing = true;
+      ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(p.x + 0.1, p.y + 0.1); ctx.stroke();
     });
+    cv.addEventListener('pointermove', function (e) {
+      if (!signPad.drawing) return;
+      e.preventDefault();
+      var p = pos(e), ctx = cv.getContext('2d');
+      ctx.lineTo(p.x, p.y); ctx.stroke();
+      signPad.drawn = true;
+      el('btn-sign-ok').disabled = false;
+    });
+    ['pointerup', 'pointercancel', 'pointerleave'].forEach(function (n) { cv.addEventListener(n, function () { signPad.drawing = false; }); });
+  })();
+  // 画面の向きや大きさが変わったら、書いた線がずれるので白紙に戻す
+  window.addEventListener('resize', function () { if (!el('sign-overlay').hidden) signCanvasSetup(); });
+  el('btn-sign-clear').addEventListener('click', signCanvasSetup);
+  el('btn-sign-cancel').addEventListener('click', closeSignPad);
+  el('btn-sign-ok').addEventListener('click', function () {
+    if (!signPad.drawn || !signPad.onOk) return;
+    // 白地に黒の線のまま、横 600px（大きすぎれば 400px）に縮めて PNG にする（1マス5万字に収める）
+    var src = el('sign-canvas'), url = '';
+    [600, 400, 300].some(function (w) {
+      var c = document.createElement('canvas');
+      c.width = w; c.height = Math.max(1, Math.round(w * src.height / src.width));
+      var ctx = c.getContext('2d');
+      ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
+      ctx.drawImage(src, 0, 0, c.width, c.height);
+      url = c.toDataURL('image/png');
+      return url.length <= 44000;
+    });
+    var cb = signPad.onOk;
+    closeSignPad();
+    if (url.length > 44000) { showMsg('shift-error', t('label.cannotConfirm') + ' ' + tErr('NO_SIGNATURE'), true); return; }
+    cb(url);
   });
 
   // 保存後に読み直して、エラー表示と version を最新にする（メッセージは残す）
@@ -611,12 +684,13 @@
     var data = state.monthData;
     if (!data) return;
     var cs = el('st-confirm-state');
-    var dirty = data.status === '確定済' && JSON.stringify(collectRows('shifts-table', 'plan-row')) !== state.savedRows;
+    var dirty = data.status === '確定済' && (JSON.stringify(collectRows('shifts-table', 'plan-row')) !== state.savedRows ||
+      el('inp-workplace').value.trim() !== (data.workplace || '').trim());
     var confirmed = data.status === '確定済' && !dirty;
-    cs.textContent = confirmed ? t('label.status.confirmed') : (data.status === '学校確定' ? statusText(data.status) : t('label.notConfirmed'));
+    cs.textContent = confirmed ? t('label.status.confirmed') + (data.hasSignature ? '・' + t('label.signed') : '') : (data.status === '学校確定' ? statusText(data.status) : t('label.notConfirmed'));
     cs.className = 'confirm-state ' + (confirmed ? 'is-confirmed' : (data.status === '学校確定' ? 'is-out' : 'is-unconfirmed'));
   }
-  ['input', 'change'].forEach(function (ev) { el('shifts-table').addEventListener(ev, refreshConfirmMark); });
+  ['input', 'change'].forEach(function (ev) { el('shifts-table').addEventListener(ev, refreshConfirmMark); el('inp-workplace').addEventListener(ev, refreshConfirmMark); });
 
   // ---- 実績確認 ----
   function renderActual() {
@@ -1225,6 +1299,9 @@
     var html = '<p class="detail-sum">状態 <strong>' + esc(m.status) + '</strong>　予定の合計 <strong>' + esc(dur(m.totalMinutes || 0, true)) + '</strong>' +
       '　実績 <strong>' + esc(m.actualStatus) + '</strong>' + (hasActual ? '　実績の合計 <strong>' + esc(dur(m.actualTotalMinutes || 0, true)) + '</strong>' : '') +
       (m.unlockUntil ? '　修正許可 ' + esc(m.unlockUntil) + ' まで' + (m.unlockExpired ? '（期限切れ）' : '') : '') + '</p>';
+    // 勤務先と手書き署名（2026-11-04）
+    html += '<p class="detail-sum">勤務先 <strong>' + (m.workplace ? esc(m.workplace).replace(/\n/g, ' ／ ') : '（未入力）') + '</strong>　署名 ' +
+      (m.signature ? '<img class="detail-sign" alt="署名" src="' + esc(m.signature) + '">' + (m.signedAt ? '<span class="detail-empty">（' + esc(m.signedAt) + '）</span>' : '') : '<strong>なし</strong>') + '</p>';
     // 保存されているコードは文字列（'OVER_28H'）。日付は無いので、どの日かは下の表で見る
     var codes = (m.codes || []).concat(m.actualCodes || []).map(function (c) { return typeof c === 'string' ? { code: c } : c; })
       .filter(function (c) { return c.code !== 'PREV_MONTH_DRAFT'; });
