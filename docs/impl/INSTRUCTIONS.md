@@ -179,8 +179,8 @@ src/
 | 関数 | 引数 | 成功時の data |
 | --- | --- | --- |
 | `api_getMonth` | `token, yearMonth` | 下記 |
-| `api_saveDraft` | `token, yearMonth, shifts, expectedVersion` | `{ version, status: '下書き', evaluation }` |
-| `api_confirm` | `token, yearMonth, shifts, expectedVersion` | `{ version, status: '確定済', evaluation }` |
+| `api_saveDraft` | `token, yearMonth, shifts, expectedVersion, meta?` | `{ version, status: '下書き', evaluation }`（2026-11-04: `meta.workplace` があれば勤務先を書き換える。下書きに戻すと署名 `signature_png`・`signed_at` は消す） |
+| `api_confirm` | `token, yearMonth, shifts, expectedVersion, meta?` | `{ version, status: '確定済', evaluation }`（2026-11-04: `meta = { workplace, signature }`。勤務先は前後の空白を除いて200文字まで、署名は `data:image/png;base64,…` で45,000文字まで（形が違えば `NO_SIGNATURE`）。設定 `requireSignature` が true（既定）のとき、勤務先が空なら `NO_WORKPLACE`、署名が無ければ `NO_SIGNATURE`。保存する列は `workplace`・`signature_png`・`signed_at`） |
 | `api_saveActual` | `token, yearMonth, shifts, expectedVersion` | `{ version, actualStatus: '未確認', evaluation }`（evaluation は実績モード） |
 | `api_confirmActual` | `token, yearMonth, expectedVersion` | `{ version, actualStatus: '予定どおり'\|'修正あり' }` |
 | `api_getHistory` | `token` | `[{ yearMonth, status, actualStatus }]`（自分の月だけ、新しい順） |
@@ -249,7 +249,8 @@ src/
   - 2026-10-07 追加: `birthDate` は空・null でよい。氏名の見えない文字（ゼロ幅の空白など）は取り除き、取り除いて空なら誤り。氏名は100文字まで。学籍番号の中の空白は誤り。次も `BAD_REQUEST`（`details.field` はその項目）: 日付の年が1900〜2100年の外、生年月日が今日より後・入学日より後、卒業日・退学日が入学日より前、「退学」で退学日が無い、「卒業」で卒業日が無い、「在籍」で退学日がある（`field: 'status'`）。
   - 学生詳細の `student` に `version`（その行の版。更新日時は分までなので中身から作る）・`loginCode`（短い番号。在籍中の学生の中で1人に決まるときだけ。無ければ null）・`loginCodeConflict`（在籍中のほかの学生と重なって使えないとき true）を付ける。短い番号で数えるのは、在籍・休学で、卒業日・退学日を過ぎていない学生だけ（ログインも同じ）。
 - 学校確定: 学生の在籍状態が 退学・休学・卒業 のどれかで、その月が未入力（行が無い、または状態が未入力）で、入学より前の月（月の末日が入学日より前）でないときだけ。それ以外は `FORBIDDEN` で、`details.reason` に理由（`'STUDENT_ENROLLED'` 在籍中・`'ALREADY_ENTERED'` 入力済み・`'ALREADY_SCHOOL_CONFIRMED'` すでに学校確定・`'BEFORE_ENROLLMENT'` 入学前。2026-10-07）。状態を `学校確定` にし、version を1増やす。
-- 設定の既定値: `retentionMonths` 24、`sessionTtlMinutes` 120、`allowLeaveOfAbsence` false、`actualConfirmDefaultDay` 10、`timezone` 'Asia/Tokyo'、`schoolName` ''。
+- 設定の既定値: `retentionMonths` 24、`sessionTtlMinutes` 120、`allowLeaveOfAbsence` false、`actualConfirmDefaultDay` 10、`timezone` 'Asia/Tokyo'、`schoolName` ''、`requireSignature` true（2026-11-04。確定に勤務先と手書き署名を求める）。
+- `api_getMonth` の data には、2026-11-04 から `workplace`（その月の勤務先）・`workplaceSuggest`（前の月までのいちばん新しい勤務先）・`hasSignature`・`signedAt`・`requireSignature` も入る（署名の画像は返さない）。`api_adminStudentDetail` の各月には `workplace`・`signature`（data URL または null）・`signedAt` が入る。
 
 `api_adminBoard` の data:
 

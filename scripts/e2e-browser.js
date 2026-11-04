@@ -60,7 +60,7 @@ html = html.replace('<head>', '<head><script>' + shim + '</script>');
   // 確定: 勤務先が空なら入れ、開いた署名の画面に線を引いて「決定」（2026-11-04）
   const confirmShift = async () => {
     if (!(await page.inputValue('#inp-workplace')).trim()) await page.fill('#inp-workplace', 'コンビニA');
-    await confirmShift();
+    await page.click('#btn-confirm-shift');
     if (await page.isHidden('#sign-overlay')) return;
     if (!(await page.isDisabled('#btn-sign-ok'))) throw new Error('何も書かないうちに署名の決定が押せる');
     const b = await page.locator('#sign-canvas').boundingBox();
@@ -300,7 +300,7 @@ html = html.replace('<head>', '<head><script>' + shim + '</script>');
   // 言語切替で表が描き直され、保存していない入力は消えているので、入れ直す
   await setRow(row(3), '21:00', '06:00'); await setRow(row(1), '22:00', '02:00'); await setRow(row(2), '09:00', '18:00');
   await confirmShift(); await wait(); await wait();
-  if ((await page.textContent('#st-confirm-state')) !== '確定済') throw new Error('確定後に「確定済」が出ない: ' + (await page.textContent('#st-confirm-state')) + ' / ' + (await page.textContent('#shift-error')));
+  if ((await page.textContent('#st-confirm-state')) !== '確定済・署名済') throw new Error('確定後に「確定済・署名済」が出ない: ' + (await page.textContent('#st-confirm-state')) + ' / ' + (await page.textContent('#shift-error')));
   await page.click('#btn-prev-month'); await wait(); await page.click('#btn-next-month'); await wait();
   const v = await row(2).locator('.sh-end').inputValue();
   if (v !== '18:00') throw new Error('保存したシフトが表示されない: ' + v);
@@ -327,10 +327,10 @@ html = html.replace('<head>', '<head><script>' + shim + '</script>');
   if (!(await row(2).getAttribute('class')).includes('row-error')) throw new Error('8時間超の日が赤くならない');
   if ((await page.textContent('#st-confirm-state')) !== '未確定') throw new Error('断られたあとも「未確定」のまま');
   await row(2).locator('.sh-end').fill('18:00');
-  if ((await page.textContent('#st-confirm-state')) !== '確定済') throw new Error('保存済みの内容に戻したら「確定済」に戻る');
+  if ((await page.textContent('#st-confirm-state')) !== '確定済・署名済') throw new Error('保存済みの内容に戻したら「確定済」に戻る');
   await confirmShift(); await wait(); await wait();
   if ((await page.textContent('#shift-error')) !== '確定済み') throw new Error('確定の知らせ: ' + (await page.textContent('#shift-error')));
-  if ((await page.textContent('#st-confirm-state')) !== '確定済') throw new Error('確定後に「確定済」が出ない: ' + (await page.textContent('#st-confirm-state')));
+  if ((await page.textContent('#st-confirm-state')) !== '確定済・署名済') throw new Error('確定後に「確定済・署名済」が出ない: ' + (await page.textContent('#st-confirm-state')));
 
   // 時計を進めるとセッション（120分）が切れる。画面がログインに戻ることも確かめ、入り直す。
   const relogin = async () => {
@@ -393,7 +393,8 @@ html = html.replace('<head>', '<head><script>' + shim + '</script>');
   const printed = await popup.textContent('body');
   if (!printed.includes('勤務予定時間合計') || !printed.includes('実働(合計)時間')) throw new Error('印刷に紙の予定表の欄が無い');
   if (printed.includes('実績')) throw new Error('印刷に実績が残っている');
-  if (/勤務先|時給|給与|¥/.test(printed)) throw new Error('印刷に勤務先・お金の欄が残っている');
+  if (/時給|給与|¥/.test(printed)) throw new Error('印刷にお金の欄が残っている');
+  if (!printed.includes('勤務先')) throw new Error('印刷に勤務先の欄が無い（2026-11-04。中身と署名の画像は test/api/signature-workplace.test.js で確かめる）');
   await popup.close();
 
   step('管理画面: 行を押すと詳細が開く・四半期確認と試用データのボタンは無い');
