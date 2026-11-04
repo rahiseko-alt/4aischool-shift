@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>アルバイト申告</title>
+<meta name="apple-mobile-web-app-title" content="アルバイト申告">
+<meta name="theme-color" content="#1e3a5f">
+<link rel="icon" href="icon-32.png" sizes="32x32">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="manifest" href="manifest.webmanifest">
+<style>
+  body { margin: 0; font-family: system-ui, sans-serif; background: #ffffff; color: #1f2937; }
+  main { max-width: 480px; margin: 0 auto; padding: 32px 16px; text-align: center; }
+  img { width: 96px; height: 96px; }
+  h1 { font-size: 20px; margin: 16px 0 24px; }
+  a.open { display: block; padding: 14px; background: #1e3a5f; color: #ffffff; border-radius: 8px; text-decoration: none; font-size: 18px; }
+  .how { text-align: left; margin-top: 28px; font-size: 15px; line-height: 1.7; }
+  .how h2 { font-size: 16px; margin: 16px 0 4px; }
+  .how ol { margin: 0; padding-left: 1.4em; }
+</style>
+</head>
+<body>
+<main>
+  <img src="icon-180.png" alt="">
+  <h1>外国人留学生アルバイト申告</h1>
+  <a class="open" id="open" href="https://script.google.com/macros/s/AKfycbzloK9Wgxf_aQnaXZ2k_MOz-VbQK7HFhUXQVTS0VH2Ug6T2wd5-Eoq0fgebtq0nQ-HR/exec">アプリを開く / Open the app</a>
+  <div class="how" id="how" hidden>
+    <h2>ホーム画面に追加する / Add to Home Screen</h2>
+    <p><b>iPhone</b></p>
+    <ol><li>Safari の共有ボタン（□↑）を押す / Tap Share (□↑) in Safari</li><li>「ホーム画面に追加」を押す / Tap "Add to Home Screen"</li></ol>
+    <p><b>Android</b></p>
+    <ol><li>Chrome の右上の「︙」を押す / Tap "︙" in Chrome</li><li>「ホーム画面に追加」を押す / Tap "Add to Home screen"</li></ol>
+  </div>
+</main>
+<script>
+  // 配る URL の末尾は #add。そのときは追加の手順を見せ、URL から #add を外す（ホーム画面には #add 無しで登録される）。
+  // #add が無いとき（ホーム画面のアイコンから開いたとき）は、すぐアプリへ移る。
+  if (location.hash === '#add') {
+    document.getElementById('how').hidden = false;
+    history.replaceState(null, '', location.pathname + location.search);
+  } else {
+    location.replace(document.getElementById('open').href);
+  }
+</script>
+</body>
+</html>
