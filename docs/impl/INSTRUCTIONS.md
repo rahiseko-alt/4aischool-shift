@@ -179,8 +179,8 @@ src/
 | 関数 | 引数 | 成功時の data |
 | --- | --- | --- |
 | `api_getMonth` | `token, yearMonth` | 下記 |
-| `api_saveDraft` | `token, yearMonth, shifts, expectedVersion` | `{ version, status: '下書き', evaluation }` |
-| `api_confirm` | `token, yearMonth, shifts, expectedVersion` | `{ version, status: '確定済', evaluation }` |
+| `api_saveDraft` | `token, yearMonth, shifts, expectedVersion, meta?` | `{ version, status: '下書き', evaluation }`（2026-11-04: `meta.workplace` があれば勤務先を書き換える。下書きに戻すと署名 `signature_png`・`signed_at` は消す） |
+| `api_confirm` | `token, yearMonth, shifts, expectedVersion, meta?` | `{ version, status: '確定済', evaluation }`（2026-11-04: `meta = { workplace, signature }`。勤務先は前後の空白を除いて200文字まで、署名は `data:image/png;base64,…` で45,000文字まで（形が違えば `NO_SIGNATURE`）。設定 `requireSignature` が true（既定）のとき、勤務先が空なら `NO_WORKPLACE`、署名が無ければ `NO_SIGNATURE`。保存する列は `workplace`・`signature_png`・`signed_at`） |
 | `api_saveActual` | `token, yearMonth, shifts, expectedVersion` | `{ version, actualStatus: '未確認', evaluation }`（evaluation は実績モード） |
 | `api_confirmActual` | `token, yearMonth, expectedVersion` | `{ version, actualStatus: '予定どおり'\|'修正あり' }` |
 | `api_getHistory` | `token` | `[{ yearMonth, status, actualStatus }]`（自分の月だけ、新しい順） |
@@ -234,6 +234,7 @@ src/
 | `api_adminSchoolConfirm` | `token, studentId, yearMonth` | `null`（年月の形が違えば BAD_REQUEST。断る理由は下記） |
 | `api_adminChangeCredentials` | `token, { currentPassword, newLoginId\|null, newPassword\|null }` | `{ loginId }`（自分のIDとパスワードを変える。空欄はそのまま。今のパスワード違いは LOGIN_FAILED。IDは英数字と `._-` の4〜32文字で、他の利用者のIDや学籍番号と大文字小文字を問わず重ならないこと（重なれば BAD_REQUEST、`details.reason: 'ID_TAKEN'`）。パスワードは10文字以上。今のログインは切らない。2026-10-06 追加。2026-10-07: 新しいパスワードが今と同じなら `details.reason: 'SAME_PASSWORD'`、空白だけなら `'PASSWORD_BLANK'`。今のパスワード違いは回数に数え、5回で LOGIN_LOCKED） |
 | `api_adminUndoSchoolConfirm` | `token, studentId, yearMonth` | `null`（学校確定の月を未入力に戻す。学校確定でなければ FORBIDDEN `details.reason: 'NOT_SCHOOL_CONFIRMED'`、行が無ければ NOT_FOUND、年月の形が違えば BAD_REQUEST。2026-10-03 追加） |
+| `api_adminCloseMonths` / `api_adminReopenMonths` | `token, yearMonth, studentIds`（300人まで） | `{ done: [学籍番号], skipped: [{ studentId, reason }], until }`（2026-11-04 追加。締める: 今の内容のまま確定済にし、修正許可を消す。行が無ければ空のまま確定済（本人未入力）。すでに確定済・学校確定・いない学生は飛ばす。再開: 確定済なら下書きに戻して署名を消し、`unlock_until` を3日後の 23:59（`until`）にする。行が無ければ未入力の行を作る。学校確定は飛ばす） |
 | `api_adminBoard` | `token, yearMonth, { className?, status?, query? }` | 下記 |
 | `api_adminSetDeadline` | `token, { yearMonth, className, deadlineAt, actualDeadlineAt\|null }` | `null`（年月＋クラスで上書き。`actualDeadlineAt` が null・省略なら登録済みの実績確認の期限を残し、空文字 `''` なら消して既定に戻す。実績確認の期限は対象月の末日 23:59 より後（でなければ BAD_REQUEST `details.reason: 'ACTUAL_BEFORE_MONTH_END'`）、かつ予定の期限より後（`'ACTUAL_BEFORE_PLAN'`）。クラスが1つでも登録されている学校では、クラスの表にも学生にも無いクラス名は BAD_REQUEST `'UNKNOWN_CLASS'`。2026-10-07） |
 | `api_adminListDeadlines` | `token` | `[{ yearMonth, className, deadlineAt, actualDeadlineAt\|null }]`（登録済みの入力期限。新しい月が先、同じ月はクラス名の順。2026-10-07 追加） |
@@ -249,7 +250,8 @@ src/
   - 2026-10-07 追加: `birthDate` は空・null でよい。氏名の見えない文字（ゼロ幅の空白など）は取り除き、取り除いて空なら誤り。氏名は100文字まで。学籍番号の中の空白は誤り。次も `BAD_REQUEST`（`details.field` はその項目）: 日付の年が1900〜2100年の外、生年月日が今日より後・入学日より後、卒業日・退学日が入学日より前、「退学」で退学日が無い、「卒業」で卒業日が無い、「在籍」で退学日がある（`field: 'status'`）。
   - 学生詳細の `student` に `version`（その行の版。更新日時は分までなので中身から作る）・`loginCode`（短い番号。在籍中の学生の中で1人に決まるときだけ。無ければ null）・`loginCodeConflict`（在籍中のほかの学生と重なって使えないとき true）を付ける。短い番号で数えるのは、在籍・休学で、卒業日・退学日を過ぎていない学生だけ（ログインも同じ）。
 - 学校確定: 学生の在籍状態が 退学・休学・卒業 のどれかで、その月が未入力（行が無い、または状態が未入力）で、入学より前の月（月の末日が入学日より前）でないときだけ。それ以外は `FORBIDDEN` で、`details.reason` に理由（`'STUDENT_ENROLLED'` 在籍中・`'ALREADY_ENTERED'` 入力済み・`'ALREADY_SCHOOL_CONFIRMED'` すでに学校確定・`'BEFORE_ENROLLMENT'` 入学前。2026-10-07）。状態を `学校確定` にし、version を1増やす。
-- 設定の既定値: `retentionMonths` 24、`sessionTtlMinutes` 120、`allowLeaveOfAbsence` false、`actualConfirmDefaultDay` 10、`timezone` 'Asia/Tokyo'、`schoolName` ''。
+- 設定の既定値: `retentionMonths` 24、`sessionTtlMinutes` 120、`allowLeaveOfAbsence` false、`actualConfirmDefaultDay` 10、`timezone` 'Asia/Tokyo'、`schoolName` ''、`requireSignature` true（2026-11-04。確定に勤務先と手書き署名を求める）。
+- `api_getMonth` の data には、2026-11-04 から `workplace`（その月の勤務先）・`workplaceSuggest`（前の月までのいちばん新しい勤務先）・`hasSignature`・`signedAt`・`requireSignature` も入る（署名の画像は返さない）。`api_adminStudentDetail` の各月には `workplace`・`signature`（data URL または null）・`signedAt` が入る。
 
 `api_adminBoard` の data:
 
@@ -272,6 +274,7 @@ src/
 - `actualOver`: 保存されている実績を、表示のたびに今の学生情報・長期休業・前後の月で計算し直し（`mode: 'actual'`、翌月はそのまま数える＝実績の保存と同じ）、`ACTUAL_OVER` があれば true（2026-10-07 変更。これまでは保存したときのコード）。予定と同じく、前後の月は1回だけ読む。
 - `actualUnconfirmed`: 現在が対象月の翌月1日 00:00 以後のときだけ、**ボードの対象の学生（クラスの絞り込み後）**のうち、表示状態が対象外でなく、実績が未確認（スプレッドシートに行が無い学生も未確認）の人数。それより前は 0。
 - 締切を過ぎても、下書きの月の表示状態は `下書き` のまま（未提出にしない）。
+- 2026-11-04 から `rows` の各行に `totalMinutes`（その月の予定の合計。行が無ければ null）・`prevTotalMinutes`（先月の予定の合計。先月の行が無ければ null）・`reopenUntil`（修正許可・再開の期限が今より後ならその時刻、無ければ null）が入る。画面は先月の半分より大きく減った行に「大きく減った」と出す。
 - `backup`: 保存先（`BACKUP_FOLDER_ID`）が未設定（`reason: 'NO_FOLDER'`）、最後のバックアップ（`LAST_BACKUP_AT`）が無い（`'NEVER'`）、日付として読めない・今日より後（`'BAD_DATE'`）、40日以上前（`'OLD'`）なら `warn: true`。問題なければ `reason: null`。画面は理由ごとに文を分け、マニュアルの「バックアップの赤い注意が出たとき」に直し方を書く（2026-10-07）。
 - 一覧を返す前に、保存先フォルダ（「ShiftDB バックアップ」）・毎月の自動実行・最初のバックアップが無ければ用意する（`backup_ensureSetup_`。失敗しても一覧は返す）。最初のバックアップが取れなかったときのやり直しは1日1回まで（Script Properties の `LAST_BACKUP_ATTEMPT_AT` の日付で判定。2026-10-07）。
 - `errorCodes` の計算では、確定済の月に翌月の下書きの時間を数えない（月をまたぐ28時間超は翌月の側に出る）。学生の `api_getMonth` の表示も同じ。

@@ -18,7 +18,8 @@ var DB_TABLES_ = {
     'actual_json', 'actual_status', 'total_minutes', 'max_rolling7_minutes',
     'validation_codes', 'actual_total_minutes',
     'actual_max_rolling7_minutes', 'actual_codes', 'version',
-    'confirmed_at', 'updated_at', 'unlock_until'
+    'confirmed_at', 'updated_at', 'unlock_until',
+    'workplace', 'signature_png', 'signed_at' // 2026-11-04 勤務先・手書き署名
   ],
   SCHOOL_HOLIDAYS: [
     'holiday_id', 'name', 'start_date', 'end_date', 'school_year'

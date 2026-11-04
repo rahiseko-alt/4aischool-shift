@@ -515,6 +515,9 @@
     el('st-closed-notice').hidden = !closed;
     el('st-closed-notice').textContent = closed ? notice : '';
     el('btn-confirm-shift').disabled = closed;
+    // 勤務先: この月の値。無ければ前の月の勤務先を下書きとして入れる（2026-11-04）
+    el('inp-workplace').value = data.workplace || data.workplaceSuggest || '';
+    el('inp-workplace').disabled = closed;
     // 月全体のコード（日付の無いもの）は表の上、日付のあるものはその日の行の下に出す。
     // 「確定済み」の札と「前月未確定」の注意は出さない（利用者の判断。確定済みかどうかは提出履歴で分かる）
     var visible = (ev.codes || []).filter(function (c) { return c.severity !== 'admin' && c.code !== 'PREV_MONTH_DRAFT'; });
@@ -586,12 +589,82 @@
     return true;
   }
 
+  // 確定: 勤務先を確かめ、手書き署名の画面を開いて、署名と一緒に送る（2026-11-04。設定で署名を求めないときはそのまま送る）
   el('btn-confirm-shift').addEventListener('click', function () {
     hideError('shift-error');
     if (!state.monthData) return;
-    call('api_confirm', [state.token, state.monthData.yearMonth, collectRows('shifts-table', 'plan-row'), state.monthData.version]).then(function (res) {
-      if (handleSaveResult(res, 'shift-error', 'label.confirmedDone', 'shifts-table', true)) reloadKeepMessage();
+    var data = state.monthData;
+    var workplace = el('inp-workplace').value.trim();
+    var send = function (signature) {
+      call('api_confirm', [state.token, data.yearMonth, collectRows('shifts-table', 'plan-row'), data.version, { workplace: workplace, signature: signature || null }]).then(function (res) {
+        if (handleSaveResult(res, 'shift-error', 'label.confirmedDone', 'shifts-table', true)) reloadKeepMessage();
+      });
+    };
+    if (data.requireSignature === false) { send(null); return; }
+    if (!workplace) { showMsg('shift-error', t('label.cannotConfirm') + ' ' + tErr('NO_WORKPLACE'), true); el('inp-workplace').focus(); return; }
+    openSignPad(send);
+  });
+
+  // ---- 手書き署名の画面 ----
+  var signPad = { onOk: null, drawn: false, drawing: false };
+  function signCanvasSetup() {
+    var cv = el('sign-canvas'), dpr = window.devicePixelRatio || 1;
+    var rect = cv.getBoundingClientRect();
+    cv.width = Math.max(1, Math.round(rect.width * dpr));
+    cv.height = Math.max(1, Math.round(rect.height * dpr));
+    var ctx = cv.getContext('2d');
+    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, cv.width, cv.height);
+    ctx.lineWidth = 3 * dpr; ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.strokeStyle = '#111';
+    signPad.drawn = false;
+    el('btn-sign-ok').disabled = true;
+  }
+  function openSignPad(onOk) {
+    signPad.onOk = onOk;
+    el('sign-overlay').hidden = false;
+    signCanvasSetup();
+  }
+  function closeSignPad() { el('sign-overlay').hidden = true; signPad.onOk = null; signPad.drawing = false; }
+  (function () {
+    var cv = el('sign-canvas');
+    var pos = function (e) { var r = cv.getBoundingClientRect(), k = cv.width / r.width; return { x: (e.clientX - r.left) * k, y: (e.clientY - r.top) * k }; };
+    cv.addEventListener('pointerdown', function (e) {
+      e.preventDefault();
+      if (cv.setPointerCapture) cv.setPointerCapture(e.pointerId);
+      var p = pos(e), ctx = cv.getContext('2d');
+      signPad.drawing = true;
+      ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(p.x + 0.1, p.y + 0.1); ctx.stroke();
     });
+    cv.addEventListener('pointermove', function (e) {
+      if (!signPad.drawing) return;
+      e.preventDefault();
+      var p = pos(e), ctx = cv.getContext('2d');
+      ctx.lineTo(p.x, p.y); ctx.stroke();
+      signPad.drawn = true;
+      el('btn-sign-ok').disabled = false;
+    });
+    ['pointerup', 'pointercancel', 'pointerleave'].forEach(function (n) { cv.addEventListener(n, function () { signPad.drawing = false; }); });
+  })();
+  // 画面の向きや大きさが変わったら、書いた線がずれるので白紙に戻す
+  window.addEventListener('resize', function () { if (!el('sign-overlay').hidden) signCanvasSetup(); });
+  el('btn-sign-clear').addEventListener('click', signCanvasSetup);
+  el('btn-sign-cancel').addEventListener('click', closeSignPad);
+  el('btn-sign-ok').addEventListener('click', function () {
+    if (!signPad.drawn || !signPad.onOk) return;
+    // 白地に黒の線のまま、横 600px（大きすぎれば 400px）に縮めて PNG にする（1マス5万字に収める）
+    var src = el('sign-canvas'), url = '';
+    [600, 400, 300].some(function (w) {
+      var c = document.createElement('canvas');
+      c.width = w; c.height = Math.max(1, Math.round(w * src.height / src.width));
+      var ctx = c.getContext('2d');
+      ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
+      ctx.drawImage(src, 0, 0, c.width, c.height);
+      url = c.toDataURL('image/png');
+      return url.length <= 44000;
+    });
+    var cb = signPad.onOk;
+    closeSignPad();
+    if (url.length > 44000) { showMsg('shift-error', t('label.cannotConfirm') + ' ' + tErr('NO_SIGNATURE'), true); return; }
+    cb(url);
   });
 
   // 保存後に読み直して、エラー表示と version を最新にする（メッセージは残す）
@@ -611,12 +684,13 @@
     var data = state.monthData;
     if (!data) return;
     var cs = el('st-confirm-state');
-    var dirty = data.status === '確定済' && JSON.stringify(collectRows('shifts-table', 'plan-row')) !== state.savedRows;
+    var dirty = data.status === '確定済' && (JSON.stringify(collectRows('shifts-table', 'plan-row')) !== state.savedRows ||
+      el('inp-workplace').value.trim() !== (data.workplace || '').trim());
     var confirmed = data.status === '確定済' && !dirty;
-    cs.textContent = confirmed ? t('label.status.confirmed') : (data.status === '学校確定' ? statusText(data.status) : t('label.notConfirmed'));
+    cs.textContent = confirmed ? t('label.status.confirmed') + (data.hasSignature ? '・' + t('label.signed') : '') : (data.status === '学校確定' ? statusText(data.status) : t('label.notConfirmed'));
     cs.className = 'confirm-state ' + (confirmed ? 'is-confirmed' : (data.status === '学校確定' ? 'is-out' : 'is-unconfirmed'));
   }
-  ['input', 'change'].forEach(function (ev) { el('shifts-table').addEventListener(ev, refreshConfirmMark); });
+  ['input', 'change'].forEach(function (ev) { el('shifts-table').addEventListener(ev, refreshConfirmMark); el('inp-workplace').addEventListener(ev, refreshConfirmMark); });
 
   // ---- 実績確認 ----
   function renderActual() {
@@ -785,7 +859,19 @@
   }
 
   // 管理者の一覧に「下書き」は出さない。学生が途中保存だけした月は確定済として見せ、違反はエラーの欄に出る
-  function boardStatus(row) { return row.displayStatus === '下書き' ? '確定済' : row.displayStatus; }
+  function boardStatus(row) {
+    // 管理者が再開した（修正を許した）月は、期限まで「再開中」と出す（2026-11-04）
+    if (row.reopenUntil) return '再開中（〜' + row.reopenUntil.slice(5, 7) + '/' + row.reopenUntil.slice(8) + '）';
+    return row.displayStatus === '下書き' ? '確定済' : row.displayStatus;
+  }
+  // 先月と今月の予定の合計。先月の半分より大きく減ったら目印（入力途中で確定していないかの目安。2026-11-04）
+  function boardDiffHtml(row) {
+    if (row.totalMinutes === null && row.prevTotalMinutes === null) return '—';
+    var prev = row.prevTotalMinutes, cur = row.totalMinutes || 0;
+    var text = (prev === null ? '—' : dur(prev, true)) + ' → ' + dur(cur, true);
+    var drop = prev !== null && prev >= 480 && cur < prev / 2;
+    return esc(text) + (drop ? ' <span class="badge badge-draft" title="先月の半分より少ない。入力の途中で確定していないか確かめてください">大きく減った</span>' : '');
+  }
 
   // 集計は1行の小さな札。状態の札を押すとその状態で絞り込む（もう一度押すと解除）。
   function chip(label, value, status, cls, title) {
@@ -805,15 +891,19 @@
       chip('未提出', c.notSubmitted, '未提出') + chip('エラー', c.error, 'エラー', c.error ? 'stat-error' : '') +
       chip('対象外', c.outOfScope, '対象外') + chip('実績未確認', data.actualUnconfirmed, null, data.actualUnconfirmed ? 'stat-warn' : '', '月が終わったあと、実際に働いた時間（実績）をまだ確認していない学生の数');
 
-    var html = '<table class="admin-table"><thead><tr><th>学籍番号</th><th>氏名</th><th class="col-wide">クラス</th><th>状態</th><th>エラー</th>' +
-      '<th class="col-wide">実績</th><th class="col-wide">更新</th><th></th></tr></thead><tbody>';
-    if (!data.rows.length) html += '<tr><td colspan="8">該当する学生はいません</td></tr>';
+    state.admin.selected = {};
+    refreshBulk();
+    var html = '<table class="admin-table"><thead><tr><th><input type="checkbox" id="board-select-all" title="表示中をすべて選ぶ"></th><th>学籍番号</th><th>氏名</th><th class="col-wide">クラス</th><th>状態</th><th>エラー</th>' +
+      '<th>予定（先月→今月）</th><th class="col-wide">実績</th><th class="col-wide">更新</th><th></th></tr></thead><tbody>';
+    if (!data.rows.length) html += '<tr><td colspan="10">該当する学生はいません</td></tr>';
     data.rows.forEach(function (row) {
       var errs = (row.errorCodes || []).map(function (code) { return '<span class="badge badge-error">' + esc(tErr(code)) + '</span>'; }).join(' ');
       html += '<tr class="board-row' + (row.actualOver ? ' actual-over' : '') + '" data-sid="' + esc(row.studentId) + '">' +
+        '<td><input type="checkbox" class="board-select" data-sid="' + esc(row.studentId) + '"></td>' +
         '<td class="nowrap"><strong>' + esc(row.studentId) + '</strong></td><td class="nowrap">' + esc(row.name) + '</td>' +
         '<td class="col-wide nowrap">' + esc(row.className) + '</td>' +
         '<td class="nowrap">' + esc(boardStatus(row)) + '</td><td>' + (errs || '—') + '</td>' +
+        '<td class="nowrap">' + boardDiffHtml(row) + '</td>' +
         '<td class="col-wide nowrap">' + esc(row.actualStatus) + (row.actualOver ? ' <span class="badge badge-error">実績超過</span>' : '') + '</td>' +
         '<td class="col-wide nowrap">' + esc(row.updatedAt || '—') + '</td>' +
         '<td class="nowrap adm-row-acts"><button type="button" class="adm-link btn-admin-detail" data-sid="' + esc(row.studentId) + '">詳細</button>' +
@@ -831,8 +921,49 @@
     loadAdminBoard();
   });
 
+  // ---- 選んでまとめて締める・再開する（2026-11-04） ----
+  function refreshBulk() {
+    var ids = Object.keys(state.admin.selected || {});
+    el('admin-bulk').hidden = !ids.length;
+    el('admin-bulk-count').textContent = '選んだ学生 ' + ids.length + '人を:';
+  }
+  el('admin-board').addEventListener('change', function (ev) {
+    var t = ev.target;
+    if (t.id === 'board-select-all') {
+      el('admin-board').querySelectorAll('.board-select').forEach(function (c) {
+        c.checked = t.checked;
+        if (t.checked) state.admin.selected[c.getAttribute('data-sid')] = true; else delete state.admin.selected[c.getAttribute('data-sid')];
+      });
+    } else if (t.classList.contains('board-select')) {
+      if (t.checked) state.admin.selected[t.getAttribute('data-sid')] = true; else delete state.admin.selected[t.getAttribute('data-sid')];
+    }
+    refreshBulk();
+  });
+  function bulkMonths(fn, verb) {
+    var ids = Object.keys(state.admin.selected || {});
+    if (!ids.length) return;
+    var ym = state.yearMonth;
+    var extra = fn === 'api_adminReopenMonths' ? '\n学生は3日後の23:59まで、締切を過ぎても直せます。確定済の月は未確定に戻り、署名もやり直しになります。' : '\n今の内容のまま確定済にします（入力の無い学生は「確定済（本人未入力）」）。';
+    if (!confirm(ym + ' の ' + ids.length + '人を' + verb + '。' + extra)) return;
+    call(fn, [state.token, ym, ids]).then(function (r) {
+      if (!adminAlert(r)) return;
+      var msg = verb + 'しました: ' + r.data.done.length + '人' + (r.data.until ? '（' + r.data.until + ' まで直せます）' : '');
+      if (r.data.skipped.length) msg += '\n飛ばした学生: ' + r.data.skipped.map(function (x) { return x.studentId + '（' + x.reason + '）'; }).join('、');
+      alert(msg);
+      loadAdminBoard();
+    });
+  }
+  el('btn-bulk-close').addEventListener('click', function () { bulkMonths('api_adminCloseMonths', '締め'); });
+  el('btn-bulk-reopen').addEventListener('click', function () { bulkMonths('api_adminReopenMonths', '再開'); });
+  el('btn-bulk-clear').addEventListener('click', function () {
+    state.admin.selected = {};
+    el('admin-board').querySelectorAll('.board-select, #board-select-all').forEach(function (c) { c.checked = false; });
+    refreshBulk();
+  });
+
   // 行のどこを押しても詳細を開く（「印刷」ボタンだけは印刷）
   el('admin-board').addEventListener('click', function (ev) {
+    if (ev.target.closest('input[type="checkbox"]')) return; // 選ぶ欄は詳細を開かない
     var p = ev.target.closest('.btn-admin-print');
     if (p) { printPages([p.getAttribute('data-sid')], [state.yearMonth]); return; }
     var r = ev.target.closest('tr[data-sid]');
@@ -1225,6 +1356,9 @@
     var html = '<p class="detail-sum">状態 <strong>' + esc(m.status) + '</strong>　予定の合計 <strong>' + esc(dur(m.totalMinutes || 0, true)) + '</strong>' +
       '　実績 <strong>' + esc(m.actualStatus) + '</strong>' + (hasActual ? '　実績の合計 <strong>' + esc(dur(m.actualTotalMinutes || 0, true)) + '</strong>' : '') +
       (m.unlockUntil ? '　修正許可 ' + esc(m.unlockUntil) + ' まで' + (m.unlockExpired ? '（期限切れ）' : '') : '') + '</p>';
+    // 勤務先と手書き署名（2026-11-04）
+    html += '<p class="detail-sum">勤務先 <strong>' + (m.workplace ? esc(m.workplace).replace(/\n/g, ' ／ ') : '（未入力）') + '</strong>　署名 ' +
+      (m.signature ? '<img class="detail-sign" alt="署名" src="' + esc(m.signature) + '">' + (m.signedAt ? '<span class="detail-empty">（' + esc(m.signedAt) + '）</span>' : '') : '<strong>なし</strong>') + '</p>';
     // 保存されているコードは文字列（'OVER_28H'）。日付は無いので、どの日かは下の表で見る
     var codes = (m.codes || []).concat(m.actualCodes || []).map(function (c) { return typeof c === 'string' ? { code: c } : c; })
       .filter(function (c) { return c.code !== 'PREV_MONTH_DRAFT'; });
@@ -1310,6 +1444,8 @@
         '<div class="dt-actions">' +
         '<button type="button" class="btn-outline btn-sm adm-btn" data-act="printMonth">この月を印刷</button>' +
         '<button type="button" class="btn-outline btn-sm adm-btn" data-act="print2y">2年分を印刷（この月まで）</button>' +
+        '<button type="button" class="btn-outline btn-sm adm-btn" data-act="closeMonth">この月を締める</button>' +
+        '<button type="button" class="btn-outline btn-sm adm-btn" data-act="reopenMonth">この月を再開（3日後の23:59まで）</button>' +
         '<button type="button" class="btn-outline btn-sm adm-btn" data-act="unlock">締切後の修正を許可</button>' +
         // 学校確定は退学・休学・卒業の学生だけ（在籍中の学生にはボタンを出さない）
         (s.status === '在籍' ? '' : '<button type="button" class="btn-outline btn-sm adm-btn" data-act="schoolConfirm" id="btn-school-confirm">学校確定（対象外にする）</button>') +
@@ -1362,6 +1498,22 @@
           var cur = ym();
           if (!confirm(cur + ' の学校確定を取り消し、未入力に戻します。学生がまた入力できるようになります。')) return;
           call('api_adminUndoSchoolConfirm', [state.token, studentId, cur]).then(function (r) { afterAction(r, '学校確定を取り消しました。', cur); });
+        },
+        closeMonth: function () {
+          if (!confirm(ym() + ' を今の内容のまま確定済にします。')) return;
+          call('api_adminCloseMonths', [state.token, ym(), [studentId]]).then(function (r) {
+            if (!adminAlert(r)) return;
+            alert(r.data.done.length ? '締めました。' : '締めませんでした: ' + r.data.skipped.map(function (x) { return x.reason; }).join('、'));
+            openStudentDetail(studentId, ym()); loadAdminBoard();
+          });
+        },
+        reopenMonth: function () {
+          if (!confirm(ym() + ' を再開します。学生は3日後の23:59まで直せます（確定済なら未確定に戻り、署名もやり直し）。')) return;
+          call('api_adminReopenMonths', [state.token, ym(), [studentId]]).then(function (r) {
+            if (!adminAlert(r)) return;
+            alert(r.data.done.length ? '再開しました（' + r.data.until + ' まで直せます）。' : '再開しませんでした: ' + r.data.skipped.map(function (x) { return x.reason; }).join('、'));
+            openStudentDetail(studentId, ym()); loadAdminBoard();
+          });
         },
         unlock: function () {
           var cur = ym();

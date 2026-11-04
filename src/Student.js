@@ -6,11 +6,12 @@ var SETTINGS_RULES_ = {
   retentionMonths: { type: 'int', min: 24, max: 120 },
   sessionTtlMinutes: { type: 'int', min: 5, max: 720 },
   allowLeaveOfAbsence: { type: 'bool' },
-  actualConfirmDefaultDay: { type: 'int', min: 1, max: 28 }
+  actualConfirmDefaultDay: { type: 'int', min: 1, max: 28 },
+  requireSignature: { type: 'bool' } // 確定に勤務先と手書き署名を求める（2026-11-04）
 };
 var SETTINGS_DEFAULTS_ = {
   schoolName: '', retentionMonths: 24, sessionTtlMinutes: 120,
-  allowLeaveOfAbsence: false, actualConfirmDefaultDay: 10
+  allowLeaveOfAbsence: false, actualConfirmDefaultDay: 10, requireSignature: true
 };
 
 function settings_isValid_(key, value) {
@@ -306,6 +307,12 @@ function api_getMonth(token, yearMonth) {
         unlockUntil: unlockUntil,
         unlockActive: unlockActive,
         version: version,
+        // 勤務先（無ければ前の月の勤務先を下書きとして出す）・署名の有無（画像は返さない）。2026-11-04
+        workplace: sub && sub.workplace ? sub.workplace : '',
+        workplaceSuggest: student_prevWorkplace_(submissions, student.student_id, yearMonth),
+        hasSignature: !!(sub && sub.signature_png),
+        signedAt: sub && sub.signed_at ? sub.signed_at : null,
+        requireSignature: settings.requireSignature,
         shifts: shifts,
         evaluation: evaluation,
         holidays: monthHolidays,
@@ -325,15 +332,48 @@ function api_getMonth(token, yearMonth) {
   }
 }
 
-function api_saveDraft(token, yearMonth, shifts, expectedVersion) {
-  return student_saveSubmission_(token, yearMonth, shifts, expectedVersion, 'draft');
+// meta: { workplace, signature }（2026-11-04）。勤務先は月に1つ（改行で複数可）、署名は手書きの PNG（data URL）
+function api_saveDraft(token, yearMonth, shifts, expectedVersion, meta) {
+  return student_saveSubmission_(token, yearMonth, shifts, expectedVersion, 'draft', meta);
 }
 
-function api_confirm(token, yearMonth, shifts, expectedVersion) {
-  return student_saveSubmission_(token, yearMonth, shifts, expectedVersion, 'confirm');
+function api_confirm(token, yearMonth, shifts, expectedVersion, meta) {
+  return student_saveSubmission_(token, yearMonth, shifts, expectedVersion, 'confirm', meta);
 }
 
-function student_saveSubmission_(token, yearMonth, shifts, expectedVersion, actionType) {
+// その月より前で、いちばん新しい勤務先（入力の手間を減らすため）
+function student_prevWorkplace_(submissions, studentId, yearMonth) {
+  var best = null;
+  submissions.forEach(function (r) {
+    if (r.student_id === studentId && r.year_month < yearMonth && r.workplace && (!best || r.year_month > best.year_month)) best = r;
+  });
+  return best ? best.workplace : '';
+}
+
+var STUDENT_SIGNATURE_MAX_ = 45000; // スプレッドシートの1マスは5万字まで
+
+// 勤務先と署名を読む。形が違えば error を返す。required のとき空なら NO_WORKPLACE / NO_SIGNATURE
+function student_readMeta_(meta, actionType, required) {
+  var m = meta && typeof meta === 'object' ? meta : {};
+  if (m.workplace !== undefined && m.workplace !== null && typeof m.workplace !== 'string') return { error: 'BAD_REQUEST' };
+  var workplace = typeof m.workplace === 'string' ? m.workplace.replace(/\r\n?/g, '\n').trim() : '';
+  if (workplace.length > 200) return { error: 'BAD_REQUEST', details: { field: 'workplace' } };
+  var signature = '';
+  if (actionType === 'confirm' && m.signature !== undefined && m.signature !== null && m.signature !== '') {
+    if (typeof m.signature !== 'string' || m.signature.length > STUDENT_SIGNATURE_MAX_ ||
+        !/^data:image\/png;base64,[A-Za-z0-9+\/]+=*$/.test(m.signature)) {
+      return { error: 'NO_SIGNATURE', details: { reason: 'SIGNATURE_FORMAT' } };
+    }
+    signature = m.signature;
+  }
+  if (actionType === 'confirm' && required) {
+    if (!workplace) return { error: 'NO_WORKPLACE' };
+    if (!signature) return { error: 'NO_SIGNATURE' };
+  }
+  return { workplace: workplace, signature: signature, hasWorkplace: m.workplace !== undefined && m.workplace !== null };
+}
+
+function student_saveSubmission_(token, yearMonth, shifts, expectedVersion, actionType, meta) {
   try {
     // 1. トークン
     var auth = auth_verifySession_(token, 'student');
@@ -349,6 +389,8 @@ function student_saveSubmission_(token, yearMonth, shifts, expectedVersion, acti
     if (!student_validateShiftsFormat_(shifts, yearMonth)) {
       return { ok: false, error: 'BAD_REQUEST' };
     }
+    var metaRead = student_readMeta_(meta, actionType, student_getSettings_().requireSignature);
+    if (metaRead.error) return { ok: false, error: metaRead.error, details: metaRead.details };
 
     var studentId = auth.user.student_id;
     var students = db_readAllRows_('STUDENTS');
@@ -482,6 +524,10 @@ function student_saveSubmission_(token, yearMonth, shifts, expectedVersion, acti
         freshSub.version = String(newVersion);
         freshSub.updated_at = now;
         if (actionType === 'confirm') freshSub.confirmed_at = now;
+        // 勤務先は送られたときだけ書き換える。署名は確定のときに入れ、下書きに戻したら消す（中身と署名を合わせる）
+        if (metaRead.hasWorkplace) freshSub.workplace = metaRead.workplace;
+        freshSub.signature_png = actionType === 'confirm' ? metaRead.signature : '';
+        freshSub.signed_at = actionType === 'confirm' && metaRead.signature ? now : '';
         db_updateRow_('MONTHLY_SUBMISSIONS', freshSub._rowNum, freshSub);
       } else {
         var newSub = {
@@ -501,7 +547,10 @@ function student_saveSubmission_(token, yearMonth, shifts, expectedVersion, acti
           version: String(newVersion),
           confirmed_at: (actionType === 'confirm') ? now : '',
           updated_at: now,
-          unlock_until: ''
+          unlock_until: '',
+          workplace: metaRead.workplace,
+          signature_png: actionType === 'confirm' ? metaRead.signature : '',
+          signed_at: actionType === 'confirm' && metaRead.signature ? now : ''
         };
         db_insertRow_('MONTHLY_SUBMISSIONS', newSub);
       }

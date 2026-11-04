@@ -489,6 +489,82 @@ function api_adminUndoSchoolConfirm(token, studentId, yearMonth) {
   }
 }
 
+// ---- 管理者がまとめて締める・再開する（2026-11-04） ----
+// 締める: その月を今の内容のまま確定済にし、修正許可を消す。行が無い学生は空のまま確定済（本人未入力）にする。
+// 再開: 確定済なら下書きに戻し（署名は消す）、3日後の 23:59 まで締切を過ぎても直せるようにする。
+// どちらも学校確定の月・対象の月に在籍していない学生は飛ばす。studentIds は300人まで。
+var ADMIN_REOPEN_DAYS_ = 3;
+function admin_bulkMonths_(token, yearMonth, studentIds, mode) {
+  try {
+    var auth = auth_verifySession_(token, 'admin');
+    if (!auth.ok) return auth;
+    if (!util_isYearMonth_(yearMonth) || !Array.isArray(studentIds) || !studentIds.length || studentIds.length > 300 ||
+        studentIds.some(function (x) { return typeof x !== 'string' || !x; })) return { ok: false, error: 'BAD_REQUEST' };
+
+    var lock = LockService.getScriptLock();
+    if (!lock.tryLock(10000)) return { ok: false, error: 'BUSY' };
+    try {
+      var now = util_nowJst_();
+      var until = core_addDays_(util_todayJst_(), ADMIN_REOPEN_DAYS_) + ' 23:59';
+      var students = {};
+      db_readAllRows_('STUDENTS').forEach(function (st) { students[st.student_id] = st; });
+      var subs = {};
+      db_readAllRows_('MONTHLY_SUBMISSIONS').forEach(function (r) { if (r.year_month === yearMonth) subs[r.student_id] = r; });
+      var done = [], skipped = [];
+      studentIds.forEach(function (sid) {
+        var st = students[sid];
+        if (!st) { skipped.push({ studentId: sid, reason: '学生がいません' }); return; }
+        var sub = subs[sid];
+        if (sub && sub.status === '学校確定') { skipped.push({ studentId: sid, reason: '学校確定の月です' }); return; }
+        if (mode === 'close') {
+          if (sub && sub.status === '確定済' && !sub.unlock_until) { skipped.push({ studentId: sid, reason: 'すでに確定済です' }); return; }
+          if (sub) {
+            sub.status = '確定済';
+            if (!sub.confirmed_at && sub.shift_json && sub.shift_json !== '{}') sub.confirmed_at = now;
+            sub.unlock_until = '';
+            sub.version = String((Number(sub.version) || 0) + 1);
+            sub.updated_at = now;
+            db_updateRow_('MONTHLY_SUBMISSIONS', sub._rowNum, sub);
+          } else {
+            db_insertRow_('MONTHLY_SUBMISSIONS', {
+              submission_id: util_uuid_(), student_id: sid, year_month: yearMonth, status: '確定済', shift_json: '{}',
+              actual_json: '', actual_status: '未確認', total_minutes: '0', max_rolling7_minutes: '0', validation_codes: '[]',
+              actual_total_minutes: '0', actual_max_rolling7_minutes: '0', actual_codes: '[]', version: '1',
+              confirmed_at: '', updated_at: now, unlock_until: ''
+            });
+          }
+        } else {
+          if (sub) {
+            if (sub.status === '確定済') { sub.status = '下書き'; sub.signature_png = ''; sub.signed_at = ''; }
+            sub.unlock_until = until;
+            sub.version = String((Number(sub.version) || 0) + 1);
+            sub.updated_at = now;
+            db_updateRow_('MONTHLY_SUBMISSIONS', sub._rowNum, sub);
+          } else {
+            db_insertRow_('MONTHLY_SUBMISSIONS', {
+              submission_id: util_uuid_(), student_id: sid, year_month: yearMonth, status: '未入力', shift_json: '{}',
+              actual_json: '', actual_status: '未確認', total_minutes: '0', max_rolling7_minutes: '0', validation_codes: '[]',
+              actual_total_minutes: '0', actual_max_rolling7_minutes: '0', actual_codes: '[]', version: '0',
+              confirmed_at: '', updated_at: now, unlock_until: until
+            });
+          }
+        }
+        done.push(sid);
+      });
+      db_logAudit_(mode === 'close' ? 'ADMIN_CLOSE_MONTH' : 'ADMIN_REOPEN_MONTH', auth.user.login_id, 'admin', '', yearMonth, null,
+        { students: done, skipped: skipped.length, until: mode === 'close' ? null : until });
+      return { ok: true, data: { done: done, skipped: skipped, until: mode === 'close' ? null : until } };
+    } finally {
+      lock.releaseLock();
+    }
+  } catch (err) {
+    util_logError_(err);
+    return { ok: false, error: 'INTERNAL' };
+  }
+}
+function api_adminCloseMonths(token, yearMonth, studentIds) { return admin_bulkMonths_(token, yearMonth, studentIds, 'close'); }
+function api_adminReopenMonths(token, yearMonth, studentIds) { return admin_bulkMonths_(token, yearMonth, studentIds, 'reopen'); }
+
 function api_adminSetDeadline(token, params) {
   try {
     var auth = auth_verifySession_(token, 'admin');
@@ -782,7 +858,10 @@ function api_adminStudentDetail(token, studentId) {
         publicHolidays: util_jpHolidaysOfMonth_(s.year_month),
         unlockUntil: s.unlock_until || null,
         // 期限の過ぎた修正許可を、いま有効なものとして見せない（2026-10-07）
-        unlockExpired: !!s.unlock_until && detailNow > s.unlock_until
+        unlockExpired: !!s.unlock_until && detailNow > s.unlock_until,
+        workplace: s.workplace || '',
+        signature: /^data:image\/png;base64,/.test(s.signature_png || '') ? s.signature_png : null, // 手書き署名（2026-11-04）
+        signedAt: s.signed_at || null
       };
     });
 
@@ -901,6 +980,9 @@ function api_adminBoard(token, yearMonth, filters) {
     var nextMonthFirstDay = core_addDays_(lastDayStr, 1) + ' 00:00';
     var isActualPeriod = (now >= nextMonthFirstDay);
     var actualUnconfirmedCount = 0;
+    // 先月の予定の合計（入力途中で間違えて確定していないかの目安。2026-11-04）
+    var prevYmBoard = admin_addMonths_(yearMonth, -1), prevTotals = {};
+    allSubs.forEach(function (ps) { if (ps.year_month === prevYmBoard && ps.status !== '学校確定') prevTotals[ps.student_id] = Number(ps.total_minutes) || 0; });
 
     for (var k = 0; k < classTargetStudents.length; k++) {
       var cSt = classTargetStudents[k];
@@ -962,7 +1044,11 @@ function api_adminBoard(token, yearMonth, filters) {
         errorCodes: errorCodes,
         actualStatus: actualStatus,
         actualOver: actualOver,
-        updatedAt: updatedAt
+        updatedAt: updatedAt,
+        totalMinutes: cSub && cSub.status !== '学校確定' ? (Number(cSub.total_minutes) || 0) : null,
+        prevTotalMinutes: prevTotals.hasOwnProperty(cSt.student_id) ? prevTotals[cSt.student_id] : null,
+        // 管理者が再開した（または修正を許した）月は、その期限まで学生が直せる
+        reopenUntil: cSub && cSub.unlock_until && cSub.unlock_until > now ? cSub.unlock_until : null
       });
     }
 

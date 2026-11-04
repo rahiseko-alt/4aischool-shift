@@ -21,6 +21,9 @@ function boot(options) {
   const ch = api('api_changePassword', first.data.token, m[2], adminPassword);
   assert.equal(ch.ok, true, JSON.stringify(ch));
   const ctx = { app, env: app.env, api, admin: first.data.token, adminLoginId: m[1], adminPassword, students: [] };
+  // 確定に勤務先と手書き署名を求める設定（2026-11-04 既定 true）。既存のテストは署名なしで確定するので切っておく。
+  // 署名・勤務先のテスト（test/api/signature-workplace.test.js）では入れ直す
+  assert.equal(api('api_adminSetSettings', ctx.admin, { requireSignature: false }).ok, true, 'requireSignature を切れない');
   // 時計を進めるとセッション（120分）が切れるので、管理者と作った学生を全員ログインし直す。
   ctx.at = (time) => {
     ctx.env.clock.set(time);

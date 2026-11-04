@@ -132,6 +132,12 @@
             <span id="st-confirm-state" class="confirm-state"></span>
           </div>
           <div id="st-codes"></div>
+          <!-- 勤務先（月に1つ。店が複数なら改行して書く。2026-11-04） -->
+          <div class="workplace-field">
+            <label for="inp-workplace" data-i18n="label.workplace">勤務先</label>
+            <textarea id="inp-workplace" rows="2" maxlength="200" autocomplete="off"></textarea>
+            <p class="workplace-hint" data-i18n="label.workplaceHint">店が2つ以上あるときは、改行して書いてください</p>
+          </div>
           <div id="shifts-table" class="shift-table-wrap"></div>
           <p id="shift-error" class="error-msg" hidden></p>
         </div>
@@ -196,6 +202,13 @@
         <button id="btn-admin-search" class="btn-primary btn-sm adm-btn">検索</button>
         <button id="btn-print-board" class="btn-outline btn-sm adm-btn">表示中を印刷</button>
       </div>
+      <!-- 選んだ学生の月をまとめて締める・再開する（2026-11-04） -->
+      <div id="admin-bulk" class="adm-bulk" hidden>
+        <span id="admin-bulk-count"></span>
+        <button id="btn-bulk-close" class="btn-outline btn-sm adm-btn">締める（確定済にする）</button>
+        <button id="btn-bulk-reopen" class="btn-outline btn-sm adm-btn">再開（3日後の23:59まで直せる）</button>
+        <button id="btn-bulk-clear" class="adm-link">選ぶのをやめる</button>
+      </div>
 
       <!-- 学生一覧（行を押すと詳細） -->
       <div class="adm-table-wrap">
@@ -244,6 +257,19 @@
   </div>
 </div>
 
+  <!-- 手書き署名の画面（確定の前に大きく開く。2026-11-04） -->
+  <div id="sign-overlay" class="sign-overlay" hidden>
+    <div class="sign-box">
+      <p class="sign-title" data-i18n="label.signTitle">署名してください</p>
+      <p class="sign-hint" data-i18n="label.signHint">枠の中に、指で自分の名前を書いてください</p>
+      <canvas id="sign-canvas" class="sign-canvas"></canvas>
+      <div class="sign-buttons">
+        <button type="button" id="btn-sign-clear" class="btn-secondary" data-i18n="button.signClear">書き直す</button>
+        <button type="button" id="btn-sign-cancel" class="btn-secondary" data-i18n="button.signCancel">やめる</button>
+        <button type="button" id="btn-sign-ok" class="btn-gold" data-i18n="button.signOk" disabled>決定</button>
+      </div>
+    </div>
+  </div>
 <?!= include_('client_js') ?>
 </body>
 </html>
