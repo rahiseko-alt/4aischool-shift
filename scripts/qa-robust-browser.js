@@ -111,7 +111,7 @@ async function loginStudent(page, sid) {
   await page.waitForSelector('#student-screen:not([hidden])'); await idle(page);
 }
 const boardIds = (page) => page.$$eval('#admin-board tr.board-row', (xs) => xs.map((x) => x.getAttribute('data-sid')));
-const boardStatuses = (page) => page.$$eval('#admin-board tr.board-row td:nth-child(4)', (xs) => xs.map((x) => x.textContent));
+const boardStatuses = (page) => page.$$eval('#admin-board tr.board-row td:nth-child(5)', (xs) => xs.map((x) => x.textContent));
 
 (async () => {
   const browser = await chromium.launch({ args: ['--lang=ja-JP'], env: { ...process.env, LANG: 'ja_JP.UTF-8', LANGUAGE: 'ja' } });

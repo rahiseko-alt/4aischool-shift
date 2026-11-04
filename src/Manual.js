@@ -3,7 +3,7 @@
 // 中身を変えたら MANUAL_VERSION_ を上げること。1行が1セル（A列）になる。
 // 行頭の = + - @ は表計算の式として読まれるので使わない（箇条書きは「・」）。
 
-var MANUAL_VERSION_ = '2026-11-04';
+var MANUAL_VERSION_ = '2026-11-04b';
 var MANUAL_APP_URL_ = 'https://script.google.com/macros/s/AKfycbzloK9Wgxf_aQnaXZ2k_MOz-VbQK7HFhUXQVTS0VH2Ug6T2wd5-Eoq0fgebtq0nQ-HR/exec';
 var MANUAL_SCRIPT_URL_ = 'https://script.google.com/d/1DilT1riEfEt9GmY2eiO425EOrC3OTdyx6DLxlAEip9V0sROG556dyshN/edit';
 var MANUAL_REPO_URL_ = 'https://github.com/rahiseko-alt/4aischool-shift';
@@ -35,6 +35,8 @@ function manual_lines_() {
     '・上の「< 2026-10 >」で月を切り替える。',
     '・1行の集計（確定済・未提出など）を押すと、その状態の学生だけに絞り込める。',
     '・学生の行を押すと「学生詳細」が開く。学生情報の編集、その月の入力内容の確認、印刷、締切後の修正許可、学校確定（退学・休学などで対象外にする）ができる。',
+    '・一覧の左の四角で学生を選ぶと「締める（確定済にする）」「再開（3日後の23:59まで直せる）」をまとめて押せる。学生詳細でも1人ずつできる。再開した月は一覧に「再開中（〜日付）」と出る。',
+    '・一覧の「予定（先月→今月）」で、先月より大きく減った学生に「大きく減った」と出る。入力の途中で間違えて確定していないか、声をかける目安にする。',
     '・「表示中を印刷」: いま一覧に出ている学生の予定表を、1人1枚（A4縦）で印刷する。',
     '・一番下の「生徒モード」: 試用の生徒Aの画面に入って、学生の操作を試せる。「管理者に戻る」で戻る。',
     '',

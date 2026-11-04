@@ -202,6 +202,13 @@
         <button id="btn-admin-search" class="btn-primary btn-sm adm-btn">検索</button>
         <button id="btn-print-board" class="btn-outline btn-sm adm-btn">表示中を印刷</button>
       </div>
+      <!-- 選んだ学生の月をまとめて締める・再開する（2026-11-04） -->
+      <div id="admin-bulk" class="adm-bulk" hidden>
+        <span id="admin-bulk-count"></span>
+        <button id="btn-bulk-close" class="btn-outline btn-sm adm-btn">締める（確定済にする）</button>
+        <button id="btn-bulk-reopen" class="btn-outline btn-sm adm-btn">再開（3日後の23:59まで直せる）</button>
+        <button id="btn-bulk-clear" class="adm-link">選ぶのをやめる</button>
+      </div>
 
       <!-- 学生一覧（行を押すと詳細） -->
       <div class="adm-table-wrap">

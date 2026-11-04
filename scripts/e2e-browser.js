@@ -478,6 +478,21 @@ html = html.replace('<head>', '<head><script>' + shim + '</script>');
   await page.fill('#inp-loginId', 'sensei01'); await page.fill('#inp-password', 'new-admin-pass-01'); await page.press('#inp-password', 'Enter'); await wait();
   await page.waitForSelector('#admin-screen:not([hidden])');
 
+  step('一覧で選んでまとめて再開・締める。先月→今月の予定の合計が出る（2026-11-04）');
+  if (!(await page.textContent('#admin-board thead')).includes('予定（先月→今月）')) throw new Error('先月→今月の列が無い');
+  if (!(await page.isHidden('#admin-bulk'))) throw new Error('何も選んでいないのにまとめての操作が出ている');
+  const firstBox = page.locator('#admin-board .board-select').first();
+  const firstSid = await firstBox.getAttribute('data-sid');
+  await firstBox.check();
+  if (await page.isHidden('#admin-bulk')) throw new Error('選んでもまとめての操作が出ない');
+  if (await page.isVisible('#admin-dialog-overlay')) throw new Error('選ぶ欄を押したら詳細が開いた');
+  await page.click('#btn-bulk-reopen'); await wait();
+  if (!dialogs.some((m) => m.includes('再開しました'))) throw new Error('再開の知らせが出ない');
+  if (!(await page.textContent('#admin-board tr[data-sid="' + firstSid + '"]')).includes('再開中')) throw new Error('一覧に再開中が出ない');
+  await page.locator('#admin-board .board-select[data-sid="' + firstSid + '"]').check();
+  await page.click('#btn-bulk-close'); await wait();
+  if ((await page.textContent('#admin-board tr[data-sid="' + firstSid + '"]')).includes('再開中')) throw new Error('締めたのに再開中のまま');
+
   await browser.close();
   if (errors.length) { console.log(errors.join('\n')); process.exit(1); }
   console.log('✅ 画面の通し確認: すべて成功（ブラウザのエラー 0件）');

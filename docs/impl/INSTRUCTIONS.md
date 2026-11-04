@@ -234,6 +234,7 @@ src/
 | `api_adminSchoolConfirm` | `token, studentId, yearMonth` | `null`（年月の形が違えば BAD_REQUEST。断る理由は下記） |
 | `api_adminChangeCredentials` | `token, { currentPassword, newLoginId\|null, newPassword\|null }` | `{ loginId }`（自分のIDとパスワードを変える。空欄はそのまま。今のパスワード違いは LOGIN_FAILED。IDは英数字と `._-` の4〜32文字で、他の利用者のIDや学籍番号と大文字小文字を問わず重ならないこと（重なれば BAD_REQUEST、`details.reason: 'ID_TAKEN'`）。パスワードは10文字以上。今のログインは切らない。2026-10-06 追加。2026-10-07: 新しいパスワードが今と同じなら `details.reason: 'SAME_PASSWORD'`、空白だけなら `'PASSWORD_BLANK'`。今のパスワード違いは回数に数え、5回で LOGIN_LOCKED） |
 | `api_adminUndoSchoolConfirm` | `token, studentId, yearMonth` | `null`（学校確定の月を未入力に戻す。学校確定でなければ FORBIDDEN `details.reason: 'NOT_SCHOOL_CONFIRMED'`、行が無ければ NOT_FOUND、年月の形が違えば BAD_REQUEST。2026-10-03 追加） |
+| `api_adminCloseMonths` / `api_adminReopenMonths` | `token, yearMonth, studentIds`（300人まで） | `{ done: [学籍番号], skipped: [{ studentId, reason }], until }`（2026-11-04 追加。締める: 今の内容のまま確定済にし、修正許可を消す。行が無ければ空のまま確定済（本人未入力）。すでに確定済・学校確定・いない学生は飛ばす。再開: 確定済なら下書きに戻して署名を消し、`unlock_until` を3日後の 23:59（`until`）にする。行が無ければ未入力の行を作る。学校確定は飛ばす） |
 | `api_adminBoard` | `token, yearMonth, { className?, status?, query? }` | 下記 |
 | `api_adminSetDeadline` | `token, { yearMonth, className, deadlineAt, actualDeadlineAt\|null }` | `null`（年月＋クラスで上書き。`actualDeadlineAt` が null・省略なら登録済みの実績確認の期限を残し、空文字 `''` なら消して既定に戻す。実績確認の期限は対象月の末日 23:59 より後（でなければ BAD_REQUEST `details.reason: 'ACTUAL_BEFORE_MONTH_END'`）、かつ予定の期限より後（`'ACTUAL_BEFORE_PLAN'`）。クラスが1つでも登録されている学校では、クラスの表にも学生にも無いクラス名は BAD_REQUEST `'UNKNOWN_CLASS'`。2026-10-07） |
 | `api_adminListDeadlines` | `token` | `[{ yearMonth, className, deadlineAt, actualDeadlineAt\|null }]`（登録済みの入力期限。新しい月が先、同じ月はクラス名の順。2026-10-07 追加） |
@@ -273,6 +274,7 @@ src/
 - `actualOver`: 保存されている実績を、表示のたびに今の学生情報・長期休業・前後の月で計算し直し（`mode: 'actual'`、翌月はそのまま数える＝実績の保存と同じ）、`ACTUAL_OVER` があれば true（2026-10-07 変更。これまでは保存したときのコード）。予定と同じく、前後の月は1回だけ読む。
 - `actualUnconfirmed`: 現在が対象月の翌月1日 00:00 以後のときだけ、**ボードの対象の学生（クラスの絞り込み後）**のうち、表示状態が対象外でなく、実績が未確認（スプレッドシートに行が無い学生も未確認）の人数。それより前は 0。
 - 締切を過ぎても、下書きの月の表示状態は `下書き` のまま（未提出にしない）。
+- 2026-11-04 から `rows` の各行に `totalMinutes`（その月の予定の合計。行が無ければ null）・`prevTotalMinutes`（先月の予定の合計。先月の行が無ければ null）・`reopenUntil`（修正許可・再開の期限が今より後ならその時刻、無ければ null）が入る。画面は先月の半分より大きく減った行に「大きく減った」と出す。
 - `backup`: 保存先（`BACKUP_FOLDER_ID`）が未設定（`reason: 'NO_FOLDER'`）、最後のバックアップ（`LAST_BACKUP_AT`）が無い（`'NEVER'`）、日付として読めない・今日より後（`'BAD_DATE'`）、40日以上前（`'OLD'`）なら `warn: true`。問題なければ `reason: null`。画面は理由ごとに文を分け、マニュアルの「バックアップの赤い注意が出たとき」に直し方を書く（2026-10-07）。
 - 一覧を返す前に、保存先フォルダ（「ShiftDB バックアップ」）・毎月の自動実行・最初のバックアップが無ければ用意する（`backup_ensureSetup_`。失敗しても一覧は返す）。最初のバックアップが取れなかったときのやり直しは1日1回まで（Script Properties の `LAST_BACKUP_ATTEMPT_AT` の日付で判定。2026-10-07）。
 - `errorCodes` の計算では、確定済の月に翌月の下書きの時間を数えない（月をまたぐ28時間超は翌月の側に出る）。学生の `api_getMonth` の表示も同じ。
