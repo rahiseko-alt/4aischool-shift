@@ -8,21 +8,21 @@
 
 ---
 
-## 2026-11-04 スマホのホーム画面用の入口ページ
+## 2026-11-04 スマホのホーム画面用の入口ページ（使わないことにした）
 
 **決めたこと**
 
-- アプリ本体はホーム画面のアイコンを指定できないため、アイコン付きの入口ページ（launcher/）を GitHub Pages で公開し、開くとすぐアプリへ移す
-- 学生に配るのは https://rahiseko-alt.github.io/4aischool-shift/#add 。#add 付きのときだけ追加の手順を出し、ホーム画面には #add 無しで登録される
+- アイコン付きの入口ページ（launcher/）を GitHub Pages で公開した（https://rahiseko-alt.github.io/4aischool-shift/）
+- ただし利用者の判断で、学生にはこれまでのアプリの URL をそのまま配る。入口ページは配らない
 
 **次にやること**
 
-- 利用者が GitHub の Settings → Pages → Source を「GitHub Actions」にする（済んでいなければ公開されない）
-- 公開後、Actions の pages を手で一度動かし、上の URL が開くか確かめる
+- なし（入口ページを消したいと言われたら、launcher/ と .github/workflows/pages.yml を消し、Settings → Pages を止めてもらう）
 
 **未解決の問題**
 
-- 実機（iPhone・Android）でのホーム画面のアイコンは未確認
+- なし
+
 ## 2026-11-04 勤務先と手書き署名・管理者のまとめて締める／再開・先月との差
 
 **決めたこと**
